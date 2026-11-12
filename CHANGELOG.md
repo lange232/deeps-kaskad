@@ -5,6 +5,25 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.4] - 2026-11-12
+
+### Fixed
+
+- `routing.py` now checks every `ip rule` and `ip route` command, reports
+  failures in the journal and exits non-zero, instead of silently continuing.
+- The failover daemon reports the exit it read back from the routing table,
+  never the one it merely tried to install; failed changes are logged.
+- Pages with forms no longer auto-refresh while a field is focused or has
+  unsaved input.
+- The README describes manual exit selection as the `manual_exit` setting,
+  not the removed `/run/kaskad/requested-exit` file.
+
+### Changed
+
+- Routing table numbers are allocated in the database and stored on the
+  exit/client row. The old `1000 + id` and `3000 + id` ranges could collide
+  after enough create/delete cycles.
+
 ## [0.3.3] - 2026-11-12
 
 ### Fixed

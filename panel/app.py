@@ -39,6 +39,7 @@ from fastapi.templating import Jinja2Templates
 
 import auth
 import awgconf
+import routing
 
 BASE = Path(__file__).resolve().parent
 CONFIG_PATH = Path(os.environ.get("KASKAD_CONFIG", "/etc/kaskad/panel.json"))
@@ -92,7 +93,8 @@ def init_db() -> None:
                 preshared_key TEXT NOT NULL,
                 enabled INTEGER NOT NULL DEFAULT 1,
                 created_at TEXT NOT NULL,
-                internet INTEGER NOT NULL DEFAULT 1
+                internet INTEGER NOT NULL DEFAULT 1,
+                table_num INTEGER NOT NULL DEFAULT 0
             );
             CREATE TABLE IF NOT EXISTS client_exits (
                 client_id INTEGER NOT NULL,
@@ -120,7 +122,8 @@ def init_db() -> None:
                 mode TEXT NOT NULL DEFAULT 'internet',
                 routes TEXT NOT NULL DEFAULT '',
                 dns TEXT NOT NULL DEFAULT '',
-                comment TEXT NOT NULL DEFAULT ''
+                comment TEXT NOT NULL DEFAULT '',
+                table_num INTEGER NOT NULL DEFAULT 0
             );
             CREATE TABLE IF NOT EXISTS audit (
                 id INTEGER PRIMARY KEY,
@@ -151,12 +154,31 @@ def migrate(conn: sqlite3.Connection) -> None:
         ("routes", "ALTER TABLE exits ADD COLUMN routes TEXT NOT NULL DEFAULT ''"),
         ("dns", "ALTER TABLE exits ADD COLUMN dns TEXT NOT NULL DEFAULT ''"),
         ("comment", "ALTER TABLE exits ADD COLUMN comment TEXT NOT NULL DEFAULT ''"),
+        ("table_num", "ALTER TABLE exits ADD COLUMN table_num INTEGER NOT NULL DEFAULT 0"),
     ):
         if name not in cols:
             conn.execute(ddl)
     cols = {r[1] for r in conn.execute("PRAGMA table_info(clients)")}
     if "internet" not in cols:
         conn.execute("ALTER TABLE clients ADD COLUMN internet INTEGER NOT NULL DEFAULT 1")
+    if "table_num" not in cols:
+        conn.execute("ALTER TABLE clients ADD COLUMN table_num INTEGER NOT NULL DEFAULT 0")
+
+    # Table numbers are allocated once and stored: ids are reused after a
+    # delete, and computing 1000 + id would eventually collide with the
+    # client tables.
+    for row in conn.execute(
+        "SELECT id FROM exits WHERE table_num = 0 AND mode = 'routes'"
+    ).fetchall():
+        conn.execute(
+            "UPDATE exits SET table_num = ? WHERE id = ?",
+            (routing.allocate_table(conn), row["id"]),
+        )
+    for row in conn.execute("SELECT id FROM clients WHERE table_num = 0").fetchall():
+        conn.execute(
+            "UPDATE clients SET table_num = ? WHERE id = ?",
+            (routing.allocate_table(conn), row["id"]),
+        )
     # SQLite reuses the freed id of a deleted row, so links pointing at a
     # deleted client or exit would grant access to the next object created.
     for table in ("client_exits", "client_internet_exits"):
@@ -294,8 +316,9 @@ def iface_dump(name: str) -> dict:
 
 def apply_routing() -> None:
     try:
-        import routing
-        routing.apply()
+        result = routing.apply()
+        for error in result.get("errors", []):
+            print(f"routing: {error}", flush=True)
     except Exception as exc:
         print(f"routing: {exc}", flush=True)
 
@@ -927,11 +950,12 @@ def create_exit(
         if conn.execute("SELECT 1 FROM exits WHERE name = ?", (name,)).fetchone():
             return fail("an exit with this name already exists")
         iface = free_iface(conn)
+        table_num = routing.allocate_table(conn) if mode == "routes" else 0
         conn.execute(
-            "INSERT INTO exits (name, iface, priority, enabled, conf, created_at, mode, routes, dns, comment) "
-            "VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO exits (name, iface, priority, enabled, conf, created_at, mode, routes, dns, comment, table_num) "
+            "VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?)",
             (name, iface, prio, conf, datetime.now(timezone.utc).isoformat(timespec="seconds"),
-             mode, ", ".join(nets), dns.strip(), comment),
+             mode, ", ".join(nets), dns.strip(), comment, table_num),
         )
         row = conn.execute("SELECT * FROM exits WHERE name = ?", (name,)).fetchone()
 
@@ -1142,10 +1166,11 @@ def create_client(
     private = genkey()
     now = datetime.now(timezone.utc).isoformat(timespec="seconds")
     with db() as conn:
+        table_num = routing.allocate_table(conn)
         cur = conn.execute(
-            "INSERT INTO clients (name, ip, public_key, private_key, preshared_key, enabled, created_at, internet) "
-            "VALUES (?, ?, ?, ?, ?, 1, ?, ?)",
-            (name, ip, pubkey(private), private, genpsk(), now, 1 if internet else 0),
+            "INSERT INTO clients (name, ip, public_key, private_key, preshared_key, enabled, created_at, internet, table_num) "
+            "VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?)",
+            (name, ip, pubkey(private), private, genpsk(), now, 1 if internet else 0, table_num),
         )
         cid = cur.lastrowid
         for eid in exits:

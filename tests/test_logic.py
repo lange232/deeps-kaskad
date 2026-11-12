@@ -2,9 +2,12 @@
 
 Run with: python3 -m unittest discover -s tests
 """
+import sqlite3
+import subprocess
 import sys
 import unittest
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "panel"))
 
@@ -80,16 +83,53 @@ class ClientExitTests(unittest.TestCase):
 
 
 class ClientTableTests(unittest.TestCase):
-    def test_table_range_is_above_routed(self):
-        self.assertEqual(routing.client_table(7), 3007)
-        self.assertGreater(routing.CLIENT_TABLE_BASE, routing.ROUTED_TABLE_BASE)
+    def setUp(self):
+        self.conn = sqlite3.connect(":memory:")
+        self.conn.execute(
+            "CREATE TABLE exits (id INTEGER PRIMARY KEY, "
+            "table_num INTEGER NOT NULL DEFAULT 0, mode TEXT)"
+        )
+        self.conn.execute(
+            "CREATE TABLE clients (id INTEGER PRIMARY KEY, "
+            "table_num INTEGER NOT NULL DEFAULT 0)"
+        )
 
-    def test_client_tables_are_cleaned(self):
-        self.assertIn(3004, routing.tables_to_flush({3004}, set()))
-        self.assertEqual(routing.tables_to_flush({3004}, set()), [3004])
+    def test_pool_starts_above_the_system_tables(self):
+        self.assertGreaterEqual(routing.allocate_table(self.conn),
+                                routing.TABLE_POOL_BASE)
 
-    def test_client_tables_never_reserved(self):
-        self.assertEqual(routing.tables_to_flush({254, 255, 3001}, {3001}), [3001])
+    def test_skips_numbers_used_by_exits_and_clients(self):
+        self.conn.execute("INSERT INTO exits (table_num, mode) VALUES (1001, 'routes')")
+        self.conn.execute("INSERT INTO clients (table_num) VALUES (1002)")
+        self.assertEqual(routing.allocate_table(self.conn), 1003)
+
+    def test_reuses_freed_numbers(self):
+        self.assertEqual(routing.allocate_table(self.conn), 1001)
+        self.assertEqual(routing.allocate_table(self.conn), 1001)
+
+    def test_never_returns_a_reserved_table(self):
+        number = routing.allocate_table(self.conn)
+        self.assertNotIn(number, routing.RESERVED_TABLES)
+
+
+class FailoverStatusTests(unittest.TestCase):
+    def test_failed_replace_is_not_reported(self):
+        failed = subprocess.CompletedProcess(args=[], returncode=2, stdout="", stderr="boom")
+        with mock.patch.object(failover, "run", return_value=failed), \
+             mock.patch.object(failover, "current_default", return_value=None):
+            used = failover.apply_client_routes({(1001, "10.80.0.2"): ["awg1"]}, {"awg1"})
+        self.assertEqual(used, {})
+
+    def test_confirmed_route_is_reported(self):
+        ok = subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr="")
+        with mock.patch.object(failover, "run", return_value=ok), \
+             mock.patch.object(failover, "current_default", return_value="awg1"):
+            used = failover.apply_client_routes({(1001, "10.80.0.2"): ["awg1"]}, {"awg1"})
+        self.assertEqual(used, {"10.80.0.2": "awg1"})
+
+    def test_no_table_is_skipped(self):
+        used = failover.apply_client_routes({(0, "10.80.0.2"): ["awg1"]}, {"awg1"})
+        self.assertEqual(used, {})
 
 
 class TablesTests(unittest.TestCase):

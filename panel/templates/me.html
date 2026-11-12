@@ -188,6 +188,6 @@ if (qrDetails && qrBox) {
     qrBox.style.display = qrDetails.open ? 'inline-block' : 'none';
   });
 }
-setTimeout(() => location.reload(), 15000);
+kaskadAutoRefresh(15);
 </script>
 {% endblock %}

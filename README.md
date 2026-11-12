@@ -103,8 +103,10 @@ after 3 failed probes and alive after 2 successful ones. Client conntrack
 entries are flushed on switch, otherwise the old NAT would send packets to the
 wrong address.
 
-Manual switching is a button in the panel (`/run/kaskad/requested-exit`).
-State lives in `/run/kaskad/status.json` and `/run/kaskad/active-exit`.
+Manual switching is a button in the panel: the chosen interface is stored in
+the `manual_exit` setting and stays pinned while that exit is alive; "return
+to auto" clears it. State lives in `/run/kaskad/status.json` and
+`/run/kaskad/active-exit`.
 
 Routed exits are not part of the selection: a subnet has a single owner.
 
