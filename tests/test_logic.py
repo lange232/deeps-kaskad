@@ -93,6 +93,10 @@ class ClientTableTests(unittest.TestCase):
             "CREATE TABLE clients (id INTEGER PRIMARY KEY, "
             "table_num INTEGER NOT NULL DEFAULT 0)"
         )
+        self.conn.execute(
+            "CREATE TABLE table_numbers (table_num INTEGER PRIMARY KEY, "
+            "kind TEXT NOT NULL, owner_id INTEGER NOT NULL)"
+        )
 
     def test_pool_starts_above_the_system_tables(self):
         self.assertGreaterEqual(routing.allocate_table(self.conn),
@@ -110,6 +114,39 @@ class ClientTableTests(unittest.TestCase):
     def test_never_returns_a_reserved_table(self):
         number = routing.allocate_table(self.conn)
         self.assertNotIn(number, routing.RESERVED_TABLES)
+
+    def test_claim_reserves_the_number_for_both_kinds(self):
+        client = routing.claim_table(self.conn, "client", 1)
+        exit_table = routing.claim_table(self.conn, "exit", 1)
+        self.assertNotEqual(client, exit_table)
+        self.assertEqual(routing.allocate_table(self.conn), exit_table + 1)
+
+    def test_release_frees_the_number(self):
+        number = routing.claim_table(self.conn, "client", 7)
+        routing.release_table(self.conn, "client", 7)
+        self.assertEqual(routing.claim_table(self.conn, "client", 8), number)
+
+    def test_registry_repairs_a_cross_type_duplicate(self):
+        self.conn.execute("INSERT INTO exits (id, table_num, mode) VALUES (1, 1001, 'routes')")
+        self.conn.execute("INSERT INTO clients (id, table_num) VALUES (1, 1001)")
+        routing.sync_registry(self.conn)
+        exit_table = self.conn.execute(
+            "SELECT table_num FROM exits WHERE id = 1").fetchone()[0]
+        client_table = self.conn.execute(
+            "SELECT table_num FROM clients WHERE id = 1").fetchone()[0]
+        self.assertNotEqual(exit_table, client_table)
+        claims = self.conn.execute(
+            "SELECT count(*) FROM table_numbers").fetchone()[0]
+        self.assertEqual(claims, 2)
+
+    def test_registry_rebuild_drops_stale_claims(self):
+        self.conn.execute(
+            "INSERT INTO table_numbers (table_num, kind, owner_id) VALUES (1001, 'client', 9)"
+        )
+        routing.sync_registry(self.conn)
+        self.assertEqual(
+            self.conn.execute("SELECT count(*) FROM table_numbers").fetchone()[0], 0
+        )
 
 
 class ParseTests(unittest.TestCase):

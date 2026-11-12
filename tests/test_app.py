@@ -100,18 +100,83 @@ class RenderTests(unittest.TestCase):
 
     @unittest.skipUnless(app, "fastapi is not installed")
     def test_failed_apply_restores_the_previous_file(self):
-        c = {
-            "address": "10.80.0.1", "net": "10.80.0.0/24", "port": 51820,
-            "mtu": 1280, "params": {}, "awg_dir": self.tmp.name, "iface": "awg0",
-        }
+        c = self.config()
         path = Path(self.tmp.name) / "awg0.conf"
         path.write_text("previous\n")
         failed = subprocess.CompletedProcess(args=[], returncode=1,
                                              stdout="", stderr="boom")
-        with mock.patch.object(app, "run", return_value=failed):
+        with mock.patch.object(app, "iface_up", return_value=True), \
+             mock.patch.object(app, "run", return_value=failed):
             with self.assertRaises(RuntimeError):
                 app.apply_conf(c)
         self.assertEqual(path.read_text(), "previous\n")
+
+    @unittest.skipUnless(app, "fastapi is not installed")
+    def test_verify_failure_rolls_the_device_back(self):
+        c = self.config()
+        previous = "[Interface]\nPrivateKey = k\n\n[Peer]\nPublicKey = oldkey\n"
+        path = Path(self.tmp.name) / "awg0.conf"
+        path.write_text(previous)
+        ok = subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr="")
+        # First read is the post-apply verification (new state), the second
+        # one checks the rollback (back to the previous file).
+        peers = mock.Mock(side_effect=[{"newkey"}, {"oldkey"}])
+        with mock.patch.object(app, "iface_up", return_value=True), \
+             mock.patch.object(app, "run", return_value=ok) as run, \
+             mock.patch.object(app, "applied_peers", peers):
+            with self.assertRaises(RuntimeError) as ctx:
+                app.apply_conf(c)
+        self.assertIn("peers after apply", str(ctx.exception))
+        self.assertEqual(path.read_text(), previous)
+        syncconf_calls = [call for call in run.call_args_list
+                          if call.args and call.args[0][:2] == ["bash", "-c"]]
+        self.assertEqual(len(syncconf_calls), 2)
+
+    @unittest.skipUnless(app, "fastapi is not installed")
+    def test_failed_rollback_is_reported(self):
+        c = self.config()
+        path = Path(self.tmp.name) / "awg0.conf"
+        path.write_text("[Peer]\nPublicKey = oldkey\n")
+        ok = subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr="")
+        peers = mock.Mock(side_effect=[{"newkey"}, {"otherkey"}])
+        with mock.patch.object(app, "iface_up", return_value=True), \
+             mock.patch.object(app, "run", return_value=ok), \
+             mock.patch.object(app, "applied_peers", peers):
+            with self.assertRaises(RuntimeError) as ctx:
+                app.apply_conf(c)
+        self.assertIn("rollback failed", str(ctx.exception))
+
+    @unittest.skipUnless(app, "fastapi is not installed")
+    def test_interface_that_came_up_is_stopped_again(self):
+        c = self.config()
+        path = Path(self.tmp.name) / "awg0.conf"
+        path.write_text("[Peer]\nPublicKey = oldkey\n")
+        state = {"up": False}
+
+        def fake_run(cmd, **kw):
+            if cmd[:2] == ["systemctl", "start"]:
+                state["up"] = True
+            elif cmd[:2] == ["systemctl", "stop"]:
+                state["up"] = False
+            return subprocess.CompletedProcess(args=cmd, returncode=0,
+                                               stdout="", stderr="")
+
+        peers = mock.Mock(side_effect=[{"newkey"}, {"oldkey"}])
+        with mock.patch.object(app, "iface_up", side_effect=lambda c: state["up"]), \
+             mock.patch.object(app, "run", side_effect=fake_run) as run, \
+             mock.patch.object(app, "applied_peers", peers):
+            with self.assertRaises(RuntimeError):
+                app.apply_conf(c)
+        stops = [call for call in run.call_args_list
+                 if call.args and call.args[0][:2] == ["systemctl", "stop"]]
+        self.assertEqual(len(stops), 1)
+        self.assertFalse(state["up"])
+
+    def config(self):
+        return {
+            "address": "10.80.0.1", "net": "10.80.0.0/24", "port": 51820,
+            "mtu": 1280, "params": {}, "awg_dir": self.tmp.name, "iface": "awg0",
+        }
 
     @unittest.skipUnless(app, "fastapi is not installed")
     def test_renderer_does_not_filter_enabled(self):

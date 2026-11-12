@@ -155,6 +155,11 @@ def init_db() -> None:
                 expires_at INTEGER NOT NULL,
                 revoked INTEGER NOT NULL DEFAULT 0
             );
+            CREATE TABLE IF NOT EXISTS table_numbers (
+                table_num INTEGER PRIMARY KEY,
+                kind TEXT NOT NULL,
+                owner_id INTEGER NOT NULL
+            );
             """
         )
         migrate(conn)
@@ -201,20 +206,11 @@ def migrate(conn: sqlite3.Connection) -> None:
             "OR exit_id NOT IN (SELECT id FROM exits)"
         )
 
-    # One table per object: duplicates would make two clients fight over the
-    # same default route. Repair leftovers of a concurrent create first.
+    # One table per object across both kinds: duplicates would make a client
+    # and a routed exit fight over the same routes. The registry is rebuilt
+    # from the live rows and repairs leftovers of an older database.
+    routing.sync_registry(conn)
     for table in ("exits", "clients"):
-        seen: set[int] = set()
-        for row in conn.execute(
-            f"SELECT id, table_num FROM {table} WHERE table_num > 0 ORDER BY id"
-        ).fetchall():
-            if row["table_num"] in seen:
-                conn.execute(
-                    f"UPDATE {table} SET table_num = ? WHERE id = ?",
-                    (routing.allocate_table(conn), row["id"]),
-                )
-            else:
-                seen.add(row["table_num"])
         conn.execute(
             f"CREATE UNIQUE INDEX IF NOT EXISTS {table}_table_num "
             f"ON {table}(table_num) WHERE table_num > 0"
@@ -366,43 +362,98 @@ def verify_conf(c: dict, conn: sqlite3.Connection | None = None) -> None:
         )
 
 
+def iface_up(c: dict) -> bool:
+    return Path(f"/sys/class/net/{c['iface']}").exists()
+
+
+def conf_peers(text: str) -> set[str]:
+    """Public keys of the peers in a rendered config."""
+    return {
+        line.split("=", 1)[1].strip()
+        for line in text.splitlines()
+        if line.strip().startswith("PublicKey = ")
+    }
+
+
+def syncconf(c: dict) -> None:
+    res = run(
+        ["bash", "-c", f"awg syncconf {c['iface']} <(awg-quick strip {c['iface']})"]
+    )
+    if res.returncode != 0:
+        raise RuntimeError(f"syncconf: {res.stderr.strip()}")
+
+
+def rollback_conf(c: dict, previous: bytes | None, had_iface: bool) -> None:
+    """Puts the interface back to the configuration of the restored file.
+
+    Called after a failed apply. Raises when the live state cannot be
+    restored, so the caller can report that instead of pretending the change
+    did not happen.
+    """
+    if had_iface:
+        if previous is None:
+            # The old config is unknown; touching the device could be worse
+            # than leaving it, and the caller reports the original failure.
+            print(f"{c['iface']}: rollback without a previous config file",
+                  flush=True)
+            return
+        syncconf(c)
+        expected = conf_peers(previous.decode())
+        actual = applied_peers(c["iface"])
+        if actual != expected:
+            raise RuntimeError(
+                f"device still has {len(actual - expected)} unexpected peers"
+            )
+        return
+    if iface_up(c):
+        run(["systemctl", "stop", f"awg-quick@{c['iface']}"])
+        for _ in range(10):
+            if not iface_up(c):
+                break
+            time.sleep(0.3)
+        if iface_up(c):
+            raise RuntimeError(f"awg-quick@{c['iface']} is still running")
+
+
 def apply_conf(c: dict, conn: sqlite3.Connection | None = None) -> None:
     path = Path(c["awg_dir"]) / "awg0.conf"
     path.parent.mkdir(parents=True, exist_ok=True)
     previous = path.read_bytes() if path.exists() else None
+    had_iface = iface_up(c)
     tmp = path.with_suffix(".tmp")
     tmp.write_text(render_conf(c, conn))
     os.chmod(tmp, 0o600)
     tmp.replace(path)
 
     try:
-        if not Path(f"/sys/class/net/{c['iface']}").exists():
+        if not had_iface:
             res = run(["systemctl", "start", f"awg-quick@{c['iface']}"])
             for _ in range(10):
-                if Path(f"/sys/class/net/{c['iface']}").exists():
+                if iface_up(c):
                     break
                 time.sleep(0.3)
-            if not Path(f"/sys/class/net/{c['iface']}").exists():
+            if not iface_up(c):
                 raise RuntimeError(
                     f"awg-quick@{c['iface']}: interface did not come up"
                     + (f": {res.stderr.strip()}" if res.stderr.strip() else "")
                 )
         else:
-            res = run(
-                ["bash", "-c",
-                 f"awg syncconf {c['iface']} <(awg-quick strip {c['iface']})"]
-            )
-            if res.returncode != 0:
-                raise RuntimeError(f"syncconf: {res.stderr.strip()}")
+            syncconf(c)
         verify_conf(c, conn)
-    except Exception:
-        # The database transaction is rolled back by the caller; the file
-        # must not keep the config of a change that never happened.
+    except Exception as exc:
+        # The database transaction is rolled back by the caller; the file and
+        # the device must not keep a change that never happened.
         if previous is None:
             path.unlink(missing_ok=True)
         else:
             path.write_bytes(previous)
             os.chmod(path, 0o600)
+        try:
+            rollback_conf(c, previous, had_iface)
+        except Exception as rollback_exc:
+            raise RuntimeError(
+                f"{exc}; rollback failed: {rollback_exc}"
+            ) from exc
         raise
 
 
@@ -1223,14 +1274,19 @@ def create_exit(
         if conn.execute("SELECT 1 FROM exits WHERE name = ?", (name,)).fetchone():
             return fail("an exit with this name already exists")
         iface = free_iface(conn)
-        table_num = routing.allocate_table(conn) if mode == "routes" else 0
-        conn.execute(
+        cur = conn.execute(
             "INSERT INTO exits (name, iface, priority, enabled, conf, created_at, mode, routes, dns, comment, table_num) "
-            "VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?)",
+            "VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?, ?, 0)",
             (name, iface, prio, conf, datetime.now(timezone.utc).isoformat(timespec="seconds"),
-             mode, ", ".join(nets), dns.strip(), comment, table_num),
+             mode, ", ".join(nets), dns.strip(), comment),
         )
-        row = conn.execute("SELECT * FROM exits WHERE name = ?", (name,)).fetchone()
+        eid = cur.lastrowid
+        if mode == "routes":
+            conn.execute(
+                "UPDATE exits SET table_num = ? WHERE id = ?",
+                (routing.claim_table(conn, "exit", eid), eid),
+            )
+        row = conn.execute("SELECT * FROM exits WHERE id = ?", (eid,)).fetchone()
 
     error = apply_exit(c, row)
     apply_routing()
@@ -1292,6 +1348,7 @@ def delete_exit(request: Request, eid: int, csrf_token: str = Form(...)):
         conn.execute("DELETE FROM exits WHERE id = ?", (eid,))
         conn.execute("DELETE FROM client_exits WHERE exit_id = ?", (eid,))
         conn.execute("DELETE FROM client_internet_exits WHERE exit_id = ?", (eid,))
+        routing.release_table(conn, "exit", eid)
     remove_exit(row)
     apply_routing()
     audit("exit_deleted", row["name"])
@@ -1440,21 +1497,16 @@ def create_client(
     now = datetime.now(timezone.utc).isoformat(timespec="seconds")
     try:
         with db() as conn:
-            for attempt in range(3):
-                table_num = routing.allocate_table(conn)
-                try:
-                    cur = conn.execute(
-                        "INSERT INTO clients (name, ip, public_key, private_key, preshared_key, enabled, created_at, internet, table_num) "
-                        "VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?)",
-                        (name, ip, pubkey(private), private, genpsk(), now, 1 if internet else 0, table_num),
-                    )
-                    break
-                except sqlite3.IntegrityError:
-                    # Two admins can allocate the same number at once; the
-                    # unique index rejects one, which just picks the next.
-                    if attempt == 2:
-                        raise
+            cur = conn.execute(
+                "INSERT INTO clients (name, ip, public_key, private_key, preshared_key, enabled, created_at, internet, table_num) "
+                "VALUES (?, ?, ?, ?, ?, 1, ?, ?, 0)",
+                (name, ip, pubkey(private), private, genpsk(), now, 1 if internet else 0),
+            )
             cid = cur.lastrowid
+            table_num = routing.claim_table(conn, "client", cid)
+            conn.execute(
+                "UPDATE clients SET table_num = ? WHERE id = ?", (table_num, cid)
+            )
             for eid in exits:
                 conn.execute("INSERT OR IGNORE INTO client_exits (client_id, exit_id) VALUES (?, ?)", (cid, eid))
             conn.execute(
@@ -1586,6 +1638,7 @@ def delete_client(request: Request, cid: int, csrf_token: str = Form(...)):
                 "UPDATE sessions SET revoked = 1 WHERE uid IN "
                 "(SELECT id FROM users WHERE client_id = ?)", (cid,)
             )
+            routing.release_table(conn, "client", cid)
             conn.execute("DELETE FROM users WHERE client_id = ?", (cid,))
             conn.execute("DELETE FROM clients WHERE id = ?", (cid,))
             conn.execute("DELETE FROM client_exits WHERE client_id = ?", (cid,))

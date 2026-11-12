@@ -55,11 +55,12 @@ def run(cmd: list[str]) -> subprocess.CompletedProcess:
 
 
 def used_tables(conn: sqlite3.Connection) -> set[int]:
-    """Table numbers already owned by exits or clients."""
+    """Table numbers already owned by exits, clients or claimed allocations."""
     used: set[int] = set()
     for sql in (
         "SELECT table_num FROM exits WHERE table_num > 0",
         "SELECT table_num FROM clients WHERE table_num > 0",
+        "SELECT table_num FROM table_numbers",
     ):
         used |= {r[0] for r in conn.execute(sql)}
     return used
@@ -72,6 +73,64 @@ def allocate_table(conn: sqlite3.Connection) -> int:
     while number in used or number in RESERVED_TABLES:
         number += 1
     return number
+
+
+def claim_table(conn: sqlite3.Connection, kind: str, owner_id: int) -> int:
+    """Reserves a number for one object in the same transaction.
+
+    The registry has a PRIMARY KEY, so two concurrent creates cannot end up
+    with the same number even when one is a client and the other an exit.
+    """
+    for _ in range(20):
+        number = allocate_table(conn)
+        try:
+            conn.execute(
+                "INSERT INTO table_numbers (table_num, kind, owner_id) "
+                "VALUES (?, ?, ?)",
+                (number, kind, owner_id),
+            )
+        except sqlite3.IntegrityError:
+            continue
+        return number
+    raise RuntimeError("no free routing table number")
+
+
+def release_table(conn: sqlite3.Connection, kind: str, owner_id: int) -> None:
+    conn.execute(
+        "DELETE FROM table_numbers WHERE kind = ? AND owner_id = ?",
+        (kind, owner_id),
+    )
+
+
+def sync_registry(conn: sqlite3.Connection) -> None:
+    """Rebuilds the registry and repairs duplicates across both object types."""
+    conn.execute("DELETE FROM table_numbers")
+    seen: set[int] = set()
+    for table, kind in (("exits", "exit"), ("clients", "client")):
+        for row in conn.execute(
+            f"SELECT id, table_num FROM {table} WHERE table_num > 0 ORDER BY id"
+        ).fetchall():
+            owner_id, number = row[0], row[1]
+            if number in seen:
+                # A legacy client and exit can share a number; one of them
+                # has to move before the registry can hold a single claim.
+                old = number
+                number = allocate_table(conn)
+                conn.execute(
+                    f"UPDATE {table} SET table_num = ? WHERE id = ?",
+                    (number, owner_id),
+                )
+                print(
+                    f"routing: {kind} {owner_id} moved from table {old} "
+                    f"to {number}",
+                    flush=True,
+                )
+            seen.add(number)
+            conn.execute(
+                "INSERT INTO table_numbers (table_num, kind, owner_id) "
+                "VALUES (?, ?, ?)",
+                (number, kind, owner_id),
+            )
 
 
 def get_setting(key: str) -> str:

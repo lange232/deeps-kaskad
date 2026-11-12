@@ -42,6 +42,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A failed post-apply verification now rolls the **device** back as well:
+  the previous `awg0.conf` is restored, `syncconf` is applied again and the
+  peer set is compared with the old file; an interface that was started for
+  the change is stopped. If the live state cannot be restored the error says
+  `rollback failed` instead of looking like a normal apply failure.
+- Routing table numbers are reserved in a `table_numbers` registry inside the
+  same transaction as the client or exit, so a client and a routed exit can
+  no longer receive the same number concurrently. The registry is rebuilt
+  from live rows on startup and repairs cross-type duplicates left by older
+  databases (the moved object is logged).
 - Expired entries are pruned from the login limiter and from the one-time
   password stash instead of growing forever.
 - The panel reports the commit from `git describe --always --dirty`, so a

@@ -336,6 +336,10 @@ class ClientTests(PanelTestCase):
         app.apply_conf.assert_called()
         # The tunnel must be configured from the uncommitted transaction.
         self.assertIsNotNone(app.apply_conf.call_args.args[1])
+        with app.db() as conn:
+            claims = [tuple(r) for r in conn.execute(
+                "SELECT table_num, kind, owner_id FROM table_numbers")]
+        self.assertEqual(claims, [(client["table_num"], "client", client["id"])])
 
     def test_duplicate_email_creates_nothing(self):
         self.seed_client(email="taken@example.com")
@@ -380,6 +384,8 @@ class ClientTests(PanelTestCase):
             self.assertEqual(conn.execute("SELECT count(*) FROM users").fetchone()[0], 0)
             self.assertEqual(conn.execute(
                 "SELECT count(*) FROM client_internet_exits").fetchone()[0], 0)
+            self.assertEqual(conn.execute(
+                "SELECT count(*) FROM table_numbers").fetchone()[0], 0)
 
     def test_failed_apply_keeps_the_client(self):
         cid = self.seed_client()
