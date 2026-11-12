@@ -157,10 +157,10 @@ without access to Launchpad.
 
 ## Versioning
 
-`VERSION`, the git tag and the `CHANGELOG.md` release heading change when a
-release is prepared; work in progress is listed under `Unreleased` and tags
-are created only on `main`. A patch release is for an urgent fix, not for
-every commit.
+`VERSION` in `develop` announces the upcoming release; its notes live under
+`Unreleased`. The heading gets the number and the date, and the tag is
+created, when the branch is merged into `main`. A patch release is for an
+urgent fix, not for every commit.
 
 The panel shows the version and the commit it runs; the commit comes from
 `git rev-parse --short` with a `-dirty` suffix when the tree has uncommitted

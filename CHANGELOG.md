@@ -80,11 +80,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   created without a restart. A failed apply is retried on the next tick.
 - `check.yml` verifies that the subnets of routed exits are present in their
   routing tables.
-
-## [0.3.6] - 2026-11-12
-
-### Fixed
-
 - Database changes and the WireGuard config are applied in one transaction:
   the config is rendered from the uncommitted rows and `syncconf` runs before
   the commit. A failed apply rolls the client, its account, its keys and its
