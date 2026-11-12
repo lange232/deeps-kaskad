@@ -720,6 +720,8 @@ def login(request: Request, email: str = Form(""), password: str = Form(...)):
         note_failure(ip)
         if email:
             note_failure(limit_key)
+        # Read by fail2ban through journald; never log the password.
+        print(f"KASKAD_AUTH_FAIL ip={ip} email={email or '-'}", flush=True)
         audit("login_failed", f"{ip} {email or '-'}")
         return fail("wrong email or password")
 

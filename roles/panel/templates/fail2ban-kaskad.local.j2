@@ -1,0 +1,25 @@
+# Managed by Ansible.
+#
+# Bans go through iptables: the hosts do not use nftables, and Docker manages
+# its own chains, so a separate nftables table would not be consulted.
+
+[DEFAULT]
+bantime = 1h
+findtime = 10m
+backend = systemd
+banaction = iptables-multiport
+# Never ban the host itself or the VPN clients: they reach the panel from the
+# tunnel address, and a locked-out client cannot be fixed remotely.
+ignoreip = 127.0.0.1/8 ::1 {{ kaskad_clients_net }}
+
+[kaskad-panel]
+enabled = true
+maxretry = 5
+port = {{ kaskad_panel_port }}
+journalmatch = _SYSTEMD_UNIT=kaskad-panel.service
+filter = kaskad-panel
+action = iptables-multiport[name=kaskad-panel, port="{{ kaskad_panel_port }}", protocol=tcp]
+
+[sshd]
+enabled = true
+maxretry = 10

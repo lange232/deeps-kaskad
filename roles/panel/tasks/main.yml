@@ -14,6 +14,37 @@
       - openssl
       - conntrack
 
+- name: Fail2ban
+  ansible.builtin.apt:
+    name:
+      - fail2ban
+      - python3-systemd
+    state: present
+
+- name: Fail2ban filter for the panel
+  ansible.builtin.template:
+    src: fail2ban-panel-filter.conf.j2
+    dest: /etc/fail2ban/filter.d/kaskad-panel.conf
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart fail2ban
+
+- name: Fail2ban jails
+  ansible.builtin.template:
+    src: fail2ban-kaskad.local.j2
+    dest: /etc/fail2ban/jail.d/kaskad.local
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart fail2ban
+
+- name: Fail2ban service
+  ansible.builtin.service:
+    name: fail2ban
+    enabled: true
+    state: started
+
 - name: Directories
   ansible.builtin.file:
     path: "{{ item.path }}"
