@@ -5,6 +5,23 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.6] - 2026-11-12
+
+### Fixed
+
+- Database changes and the WireGuard config are applied in one transaction:
+  the config is rendered from the uncommitted rows and `syncconf` runs before
+  the commit. A failed apply rolls the client, its account, its keys and its
+  grants back and shows an error instead of a 500.
+- The result of an apply is verified against `awg show <iface> dump`, so a
+  `syncconf` that reports success without changing the device is treated as a
+  failure.
+- The device line of `awg show dump` is no longer parsed as a peer:
+  AmneziaWG prints extra device fields, and the phantom peer inflated peer
+  counts and made the verification fail.
+- Changing a client's subnet access no longer rewrites and re-applies
+  `awg0.conf`, because it does not change the tunnel.
+
 ## [0.3.5] - 2026-11-12
 
 ### Fixed
