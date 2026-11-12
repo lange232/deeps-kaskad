@@ -5,6 +5,16 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.3] - 2026-11-12
+
+### Fixed
+
+- Deleting a client or an exit now removes its `client_internet_exits`
+  rows. SQLite reuses freed ids, so a new client or exit could otherwise
+  inherit the granted internet exits of the deleted one.
+- On startup the panel also drops links that point at a missing client or
+  exit, repairing databases created before this fix.
+
 ## [0.3.2] - 2026-11-12
 
 ### Added

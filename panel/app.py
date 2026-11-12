@@ -157,6 +157,13 @@ def migrate(conn: sqlite3.Connection) -> None:
     cols = {r[1] for r in conn.execute("PRAGMA table_info(clients)")}
     if "internet" not in cols:
         conn.execute("ALTER TABLE clients ADD COLUMN internet INTEGER NOT NULL DEFAULT 1")
+    # SQLite reuses the freed id of a deleted row, so links pointing at a
+    # deleted client or exit would grant access to the next object created.
+    for table in ("client_exits", "client_internet_exits"):
+        conn.execute(
+            f"DELETE FROM {table} WHERE client_id NOT IN (SELECT id FROM clients) "
+            "OR exit_id NOT IN (SELECT id FROM exits)"
+        )
 
 
 def audit(action: str, detail: str = "") -> None:
@@ -987,6 +994,7 @@ def delete_exit(request: Request, eid: int, csrf_token: str = Form(...)):
             raise HTTPException(status_code=404)
         conn.execute("DELETE FROM exits WHERE id = ?", (eid,))
         conn.execute("DELETE FROM client_exits WHERE exit_id = ?", (eid,))
+        conn.execute("DELETE FROM client_internet_exits WHERE exit_id = ?", (eid,))
     remove_exit(row)
     apply_routing()
     audit("exit_deleted", row["name"])
@@ -1258,6 +1266,7 @@ def delete_client(request: Request, cid: int, csrf_token: str = Form(...)):
         conn.execute("DELETE FROM users WHERE client_id = ?", (cid,))
         conn.execute("DELETE FROM clients WHERE id = ?", (cid,))
         conn.execute("DELETE FROM client_exits WHERE client_id = ?", (cid,))
+        conn.execute("DELETE FROM client_internet_exits WHERE client_id = ?", (cid,))
     audit("client_deleted", row["name"])
     apply_conf(cfg())
     apply_routing()
