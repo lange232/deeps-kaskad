@@ -44,6 +44,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Expired entries are pruned from the login limiter and from the one-time
   password stash instead of growing forever.
+- The panel reports the commit from `git describe --always --dirty`, so a
+  deploy from an unclean tree no longer claims to run the previous commit.
+- When no internet exit is alive, `/run/kaskad/active-exit` is set to `none`
+  instead of keeping the last dead interface; `check.yml` accepts that value,
+  so the panel and the checks no longer show a dead exit as active.
+- `check.yml` also verifies the certificate has at least two weeks left, that
+  both fail2ban jails are active, and that table numbers are unique with no
+  orphan client links.
 - Routing is re-applied when an `awg*` interface appears or disappears, so
   subnet routes of exits that came up after `kaskad-routing.service` are
   created without a restart. A failed apply is retried on the next tick.

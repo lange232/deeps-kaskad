@@ -234,8 +234,9 @@
     - name: Active exit recorded
       ansible.builtin.shell: |
         set -o pipefail
-        [ -s /run/kaskad/active-exit ]
-        [ -e "/sys/class/net/$(tr -d '[:space:]' < /run/kaskad/active-exit)" ]
+        iface=$(tr -d '[:space:]' < /run/kaskad/active-exit)
+        [ "$iface" = "none" ] && exit 0
+        [ -n "$iface" ] && [ -e "/sys/class/net/$iface" ]
       args:
         executable: /bin/bash
       changed_when: false

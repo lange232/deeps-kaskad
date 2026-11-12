@@ -155,6 +155,16 @@ without access to Launchpad.
 
 `state/` is gitignored: provider configs, client keys and migration seeds.
 
+## Versioning
+
+`VERSION`, the git tag and the `CHANGELOG.md` release heading change only when
+`develop` is merged into `main`. Work in progress is listed under `Unreleased`.
+A patch release is for an urgent fix, not for every commit.
+
+The panel shows the version and the commit it runs; the commit comes from
+`git describe --always --dirty`, so a deploy from an unclean tree is visible
+as `-dirty` instead of silently reporting the last commit.
+
 ## Panel
 
 `https://<host>:8080`, FastAPI + SQLite. The certificate is self-signed by

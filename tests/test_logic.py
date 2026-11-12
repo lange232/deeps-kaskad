@@ -270,6 +270,29 @@ class SyncRoutingTests(unittest.TestCase):
         self.assertFalse(failover.routing_pending)
 
 
+class ActiveMarkerTests(unittest.TestCase):
+    def test_stale_active_is_cleared(self):
+        self.assertTrue(failover.should_clear_active(None, "awg1"))
+        self.assertFalse(failover.should_clear_active(None, None))
+        self.assertFalse(failover.should_clear_active(None, "none"))
+        self.assertFalse(failover.should_clear_active("awg1", "awg1"))
+
+    def test_none_marker_reads_as_no_active_exit(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "active-exit"
+            old = failover.ACTIVE_FILE
+            failover.ACTIVE_FILE = path
+            try:
+                self.assertIsNone(failover.read_active())
+                path.write_text("none\n")
+                self.assertIsNone(failover.read_active())
+                path.write_text("awg2\n")
+                self.assertEqual(failover.read_active(), "awg2")
+            finally:
+                failover.ACTIVE_FILE = old
+
+
 class PasswordTests(unittest.TestCase):
     def test_round_trip(self):
         stored = auth.hash_password("correct horse battery")

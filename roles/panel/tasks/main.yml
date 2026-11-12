@@ -2,7 +2,7 @@
 - name: Product version
   ansible.builtin.set_fact:
     kaskad_version: "{{ lookup('file', kaskad_repo_dir ~ '/VERSION') | trim }}"
-    kaskad_commit: "{{ lookup('pipe', 'git -C ' ~ kaskad_repo_dir ~ ' rev-parse --short HEAD 2>/dev/null || true') | trim }}"
+    kaskad_commit: "{{ lookup('pipe', 'git -C ' ~ kaskad_repo_dir ~ ' describe --always --dirty 2>/dev/null || true') | trim }}"
 
 - name: Panel packages
   ansible.builtin.apt:

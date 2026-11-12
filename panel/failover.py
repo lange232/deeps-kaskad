@@ -244,9 +244,16 @@ def probe(exit: dict) -> bool:
 
 def read_active() -> str | None:
     try:
-        return ACTIVE_FILE.read_text().strip() or None
+        value = ACTIVE_FILE.read_text().strip()
     except OSError:
         return None
+    # "none" is an explicit "no exit is alive" marker, not an interface.
+    return value if value and value != "none" else None
+
+
+def should_clear_active(desired, active) -> bool:
+    """The file is stale when nothing is alive but it still names an exit."""
+    return desired is None and bool(active) and active != "none"
 
 
 def write_atomic(path: Path, text: str) -> None:
@@ -372,6 +379,10 @@ def tick(c: dict) -> None:
     if desired and (desired != active or current_default(c["route_table"]) != desired):
         log(f"switching to {desired}")
         switch(desired, c)
+    elif should_clear_active(desired, active):
+        # The panel must not show a dead exit as active.
+        write_atomic(ACTIVE_FILE, "none\n")
+        log(f"no alive internet exit: {active} is no longer active")
 
     choices: dict[tuple[int, str], list[str]] = {}
     for grant in client_grants():
