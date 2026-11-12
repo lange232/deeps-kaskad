@@ -221,6 +221,55 @@ class FailoverStatusTests(unittest.TestCase):
         self.assertEqual(used, {})
 
 
+class SyncRoutingTests(unittest.TestCase):
+    def setUp(self):
+        failover.known_ifaces = None
+        failover.routing_pending = False
+
+    def tearDown(self):
+        failover.known_ifaces = None
+        failover.routing_pending = False
+
+    def sync(self, ifaces, apply=None):
+        apply = apply or mock.Mock(return_value={"errors": [], "tables": []})
+        with mock.patch.object(failover, "awg_ifaces", return_value=set(ifaces)), \
+             mock.patch.object(failover.routing, "apply", apply), \
+             mock.patch.object(failover.time, "sleep"):
+            failover.sync_routing({"route_table": 100})
+        return apply
+
+    def test_first_sync_applies_routing(self):
+        apply = self.sync({"awg0", "awg1"})
+        apply.assert_called_once()
+        self.assertFalse(failover.routing_pending)
+        self.assertEqual(failover.known_ifaces, {"awg0", "awg1"})
+
+    def test_unchanged_interfaces_do_not_apply(self):
+        self.sync({"awg0"})
+        apply = self.sync({"awg0"})
+        apply.assert_not_called()
+
+    def test_appeared_exit_triggers_apply(self):
+        self.sync({"awg0"})
+        apply = self.sync({"awg0", "awg2"})
+        apply.assert_called_once()
+
+    def test_vanished_exit_triggers_apply(self):
+        self.sync({"awg0", "awg2"})
+        apply = self.sync({"awg0"})
+        apply.assert_called_once()
+
+    def test_failed_apply_is_retried_until_clean(self):
+        self.sync({"awg0"})
+        failing = mock.Mock(return_value={"errors": ["boom"], "tables": []})
+        self.sync({"awg0", "awg2"}, failing)
+        self.assertTrue(failover.routing_pending)
+        # Same interfaces, but the pending flag keeps retrying.
+        apply = self.sync({"awg0", "awg2"})
+        apply.assert_called_once()
+        self.assertFalse(failover.routing_pending)
+
+
 class PasswordTests(unittest.TestCase):
     def test_round_trip(self):
         stored = auth.hash_password("correct horse battery")

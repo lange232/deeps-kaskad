@@ -110,6 +110,11 @@ to auto" clears it. State lives in `/run/kaskad/status.json` and
 
 Routed exits are not part of the selection: a subnet has a single owner.
 
+The daemon also watches the set of `awg*` interfaces. Tunnels can come up
+after `kaskad-routing.service` has already run (or be restarted by hand), so
+when one appears or disappears the daemon re-applies the routing — with a
+retry on the next tick if the apply reported errors.
+
 ## Firewall
 
 `kaskad-firewall.service` installs iptables rules rather than a separate nft

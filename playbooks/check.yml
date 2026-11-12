@@ -109,6 +109,47 @@
         executable: /bin/bash
       changed_when: false
 
+    - name: Routed exit subnets are installed
+      ansible.builtin.shell: |
+        set -o pipefail
+        python3 - <<'PY'
+        import os, sqlite3, subprocess, sys
+
+        missing = []
+        conn = sqlite3.connect("/var/lib/kaskad/panel.db")
+        conn.row_factory = sqlite3.Row
+        for row in conn.execute(
+            "SELECT iface, routes, table_num FROM exits "
+            "WHERE enabled = 1 AND mode = 'routes' AND table_num > 0"
+        ):
+            # An exit that is not up yet has no routes; the failover daemon
+            # adds them as soon as the interface appears.
+            if not os.path.exists(f"/sys/class/net/{row['iface']}"):
+                continue
+            res = subprocess.run(
+                ["ip", "route", "show", "table", str(row["table_num"])],
+                capture_output=True, text=True,
+            )
+            if res.returncode != 0:
+                missing.append(f"table {row['table_num']} for {row['iface']}")
+                continue
+            shown_routes = [line.split() for line in res.stdout.splitlines() if line.split()]
+            for cidr in [x.strip() for x in (row["routes"] or "").split(",") if x.strip()]:
+                prefix = cidr[:-3] if cidr.endswith("/32") else cidr
+                if not any(
+                    parts[0] == prefix and f"dev {row['iface']}" in " ".join(parts)
+                    for parts in shown_routes
+                ):
+                    missing.append(f"{cidr} via {row['iface']} in table {row['table_num']}")
+
+        if missing:
+            print("missing subnet routes: " + "; ".join(missing))
+            sys.exit(1)
+        PY
+      args:
+        executable: /bin/bash
+      changed_when: false
+
     - name: Active internet route present when exits exist
       ansible.builtin.shell: |
         set -o pipefail

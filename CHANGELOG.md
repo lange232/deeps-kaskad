@@ -5,6 +5,16 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- Routing is re-applied when an `awg*` interface appears or disappears, so
+  subnet routes of exits that came up after `kaskad-routing.service` are
+  created without a restart. A failed apply is retried on the next tick.
+- `check.yml` verifies that the subnets of routed exits are present in their
+  routing tables.
+
 ## [0.3.6] - 2026-11-12
 
 ### Fixed

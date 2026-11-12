@@ -28,6 +28,8 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
+import routing
+
 
 CONFIG_PATH = Path(os.environ.get("KASKAD_CONFIG", "/etc/kaskad/panel.json"))
 DB_PATH = Path(os.environ.get("KASKAD_DB", "/var/lib/kaskad/panel.db"))
@@ -43,6 +45,12 @@ FAILBACK_STABLE = 60
 PROBE_TARGET = "1.1.1.1"
 
 state: dict[str, dict] = {}
+# Tunnels that were present on the previous tick. A change means old routes
+# may be stale and new ones were never created: routing is re-applied then,
+# because kaskad-routing.service only runs once at boot and cannot know that
+# an exit came up later.
+known_ifaces: set[str] | None = None
+routing_pending = False
 
 
 def log(msg: str) -> None:
@@ -171,6 +179,46 @@ def iface_exists(iface: str) -> bool:
     return Path(f"/sys/class/net/{iface}").exists()
 
 
+def awg_ifaces() -> set[str]:
+    try:
+        return {p.name for p in Path("/sys/class/net").glob("awg*") if p.is_dir()}
+    except OSError:
+        return set()
+
+
+def pending_after_apply(errors: list[str]) -> bool:
+    """Keep retrying while the last apply reported failures."""
+    return bool(errors)
+
+
+def sync_routing(c: dict) -> None:
+    """Re-applies routing when tunnels appeared or disappeared."""
+    global known_ifaces, routing_pending
+    current = awg_ifaces()
+    if known_ifaces is None:
+        # The routing unit runs once at boot and may have failed or raced
+        # with the exits; a first sync costs one diff and fixes that.
+        log(f"initial routing sync: {sorted(current)}")
+        routing_pending = True
+    elif known_ifaces != current:
+        appeared = sorted(current - known_ifaces)
+        vanished = sorted(known_ifaces - current)
+        log(f"interfaces changed: +{appeared or '-'} -{vanished or '-'}")
+        routing_pending = True
+    known_ifaces = current
+    if not routing_pending:
+        return
+    # awg-quick creates the interface before it finishes configuring it, so
+    # give it a moment; a failure stays pending and is retried next tick.
+    time.sleep(1)
+    result = routing.apply()
+    for error in result.get("errors", []):
+        log(f"routing: {error}")
+    routing_pending = pending_after_apply(result.get("errors", []))
+    if not routing_pending:
+        log(f"routing re-applied: tables {result.get('tables')}")
+
+
 def probe(exit: dict) -> bool:
     iface = exit["iface"]
     if not iface_exists(iface):
@@ -295,6 +343,10 @@ def tick(c: dict) -> None:
     for e in rows:
         if e["enabled"]:
             update_state(e, probe(e))
+
+    # Exits can come up after kaskad-routing.service already ran; only this
+    # loop notices, so it re-applies the tables and rules.
+    sync_routing(c)
 
     alive_rows = [
         e for e in rows
