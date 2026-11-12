@@ -99,6 +99,12 @@ def init_db() -> None:
                 exit_id INTEGER NOT NULL,
                 PRIMARY KEY (client_id, exit_id)
             );
+            CREATE TABLE IF NOT EXISTS client_internet_exits (
+                client_id INTEGER NOT NULL,
+                exit_id INTEGER NOT NULL,
+                priority INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY (client_id, exit_id)
+            );
             CREATE TABLE IF NOT EXISTS settings (
                 key TEXT PRIMARY KEY,
                 value TEXT NOT NULL
@@ -508,6 +514,26 @@ def client_exits(cl) -> list:
             "WHERE ce.client_id = ? AND e.enabled = 1 AND e.mode = 'routes' "
             "ORDER BY e.priority, e.id",
             (cl["id"],),
+        ).fetchall()
+
+
+def client_internet_exits(cl) -> list:
+    """Internet exits granted to the client, in the order the user chose."""
+    with db() as conn:
+        return conn.execute(
+            "SELECT e.*, ce.priority AS choice "
+            "FROM client_internet_exits ce "
+            "JOIN exits e ON e.id = ce.exit_id "
+            "WHERE ce.client_id = ? AND e.enabled = 1 AND e.mode = 'internet' "
+            "ORDER BY ce.priority, e.priority, e.id",
+            (cl["id"],),
+        ).fetchall()
+
+
+def internet_exits_rows() -> list:
+    with db() as conn:
+        return conn.execute(
+            "SELECT * FROM exits WHERE enabled = 1 AND mode = 'internet' ORDER BY priority, id"
         ).fetchall()
 
 
@@ -1017,6 +1043,7 @@ def client_page(
         raise HTTPException(status_code=404)
     assigned = {e["id"]: e for e in client_exits(cl)}
     routed = [e for e in exits_rows() if e["mode"] == "routes" and e["enabled"]]
+    granted = {e["id"] for e in client_internet_exits(cl)}
     live = iface_dump(c["iface"])["peers"]
     view = client_view(cl, live, list(assigned.values()))
     try:
@@ -1027,6 +1054,7 @@ def client_page(
         request, "client_detail.html", "clients",
         csrf=csrf(token), err=err, ok=ok, cl=view, raw=cl,
         routed=routed, assigned=set(assigned.keys()), conf=conf,
+        internet_exits=internet_exits_rows(), granted=granted,
         account=client_account(cid), newpw=pop_secret(newpw),
     )
 
@@ -1122,6 +1150,52 @@ def client_access_update(
     apply_conf(cfg())
     apply_routing()
     return RedirectResponse(f"/clients/{cid}?ok=access+updated", status_code=303)
+
+
+@app.post("/clients/{cid}/internet")
+def client_internet_update(
+    request: Request,
+    cid: int,
+    exits: list[int] = Form([]),
+    csrf_token: str = Form(...),
+):
+    token = require_admin(request)
+    if not hmac.compare_digest(csrf_token, csrf(token)):
+        raise HTTPException(status_code=400, detail="csrf")
+    with db() as conn:
+        row = conn.execute("SELECT * FROM clients WHERE id = ?", (cid,)).fetchone()
+        if not row:
+            raise HTTPException(status_code=404)
+        allowed = {
+            r["id"] for r in conn.execute(
+                "SELECT id FROM exits WHERE enabled = 1 AND mode = 'internet'"
+            )
+        }
+        wanted = {int(e) for e in exits if int(e) in allowed}
+        current = {
+            r["exit_id"]: r["priority"] for r in conn.execute(
+                "SELECT exit_id, priority FROM client_internet_exits WHERE client_id = ?",
+                (cid,),
+            )
+        }
+        for exit_id in list(current):
+            if exit_id not in wanted:
+                conn.execute(
+                    "DELETE FROM client_internet_exits WHERE client_id = ? AND exit_id = ?",
+                    (cid, exit_id),
+                )
+        next_priority = max(current.values(), default=0) + 10
+        for exit_id in sorted(wanted):
+            if exit_id in current:
+                continue
+            conn.execute(
+                "INSERT INTO client_internet_exits (client_id, exit_id, priority) VALUES (?, ?, ?)",
+                (cid, exit_id, next_priority),
+            )
+            next_priority += 10
+    audit("client_internet_access", f"{row['name']} exits={sorted(wanted)}")
+    apply_routing()
+    return RedirectResponse(f"/clients/{cid}?ok=internet+exits+updated", status_code=303)
 
 
 @app.post("/clients/{cid}/toggle")
@@ -1336,10 +1410,19 @@ def me_page(request: Request, err: str | None = None, ok: str | None = None):
         conf = mask_conf(client_conf(c, cl))
     except ValueError:
         conf = None
+    status = read_status()
+    granted = client_internet_exits(cl)
+    current_iface = (status.get("clients") or {}).get(cl["ip"]) or ""
+    current = next((e for e in granted if e["iface"] == current_iface), None)
+    alive = {
+        iface: bool(info.get("alive"))
+        for iface, info in (status.get("exits") or {}).items()
+    }
     return render_page(
         request, "me.html", "me", role="user",
         csrf=csrf(token), err=err, ok=ok, cl=client_view(cl, live),
         email=row["email"], last_login=human_ts(row["last_login"]), conf=conf,
+        internet_exits=granted, current_exit=current, alive=alive,
     )
 
 
@@ -1355,6 +1438,42 @@ def me_conf(request: Request):
 def me_qr(request: Request):
     _, row = require_user(request)
     return qr_response(user_client(row))
+
+
+@app.post("/me/exits/move")
+def me_exit_move(
+    request: Request,
+    exit_id: int = Form(...),
+    direction: str = Form(...),
+    csrf_token: str = Form(...),
+):
+    token, row = require_user(request)
+    if not hmac.compare_digest(csrf_token, csrf(token)):
+        raise HTTPException(status_code=400, detail="csrf")
+    if direction not in ("up", "down"):
+        raise HTTPException(status_code=400, detail="direction")
+    with db() as conn:
+        order = [
+            r["exit_id"] for r in conn.execute(
+                "SELECT exit_id FROM client_internet_exits "
+                "WHERE client_id = ? ORDER BY priority, exit_id",
+                (row["client_id"],),
+            )
+        ]
+        if exit_id not in order:
+            raise HTTPException(status_code=404)
+        index = order.index(exit_id)
+        target = index - 1 if direction == "up" else index + 1
+        if 0 <= target < len(order):
+            order[index], order[target] = order[target], order[index]
+            for position, eid in enumerate(order):
+                conn.execute(
+                    "UPDATE client_internet_exits SET priority = ? "
+                    "WHERE client_id = ? AND exit_id = ?",
+                    ((position + 1) * 10, row["client_id"], eid),
+                )
+    audit("user_exit_order", f"{row['email']} {' '.join(str(e) for e in order)}")
+    return RedirectResponse("/me?ok=exit+order+updated", status_code=303)
 
 
 @app.post("/me/password")

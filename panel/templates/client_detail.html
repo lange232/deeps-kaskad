@@ -68,6 +68,40 @@
   </section>
 
   <section>
+    <h2 class="oc-section__title">internet exits</h2>
+    <div class="oc-panel" style="padding:16px">
+      {% if internet_exits %}
+      <form method="post" action="/clients/{{ cl.id }}/internet">
+        <input type="hidden" name="csrf_token" value="{{ csrf }}">
+        <p class="oc-muted" style="margin:0 0 12px">
+          grant the exits this client may use; the client sets their priority in the panel
+        </p>
+        <div class="actions" style="flex-direction:column; align-items:flex-start; gap:10px">
+          {% for e in internet_exits %}
+          <label class="oc-check">
+            <input type="checkbox" name="exits" value="{{ e.id }}" {% if e.id in granted %}checked{% endif %}>
+            <span class="oc-check__box"></span>
+            {{ e.name }}
+            <span class="oc-mono oc-muted" style="margin-left:8px">{{ e.iface }}</span>
+          </label>
+          {% endfor %}
+        </div>
+        <div class="actions" style="margin-top:16px">
+          <button class="oc-btn oc-btn--contrast oc-btn--sm">save internet exits</button>
+        </div>
+        {% if not cl.internet %}
+        <p class="oc-hint" style="margin-top:10px">
+          internet access is off for this client, the granted exits are not used yet
+        </p>
+        {% endif %}
+      </form>
+      {% else %}
+      <p class="oc-muted" style="margin:0">no internet exits are configured yet</p>
+      {% endif %}
+    </div>
+  </section>
+
+  <section>
     <h2 class="oc-section__title">configuration</h2>
     <div class="oc-panel" style="padding:16px">
       <div class="actions">

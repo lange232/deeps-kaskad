@@ -5,6 +5,24 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] - 2026-11-12
+
+### Added
+
+- Internet exits are granted per client by the administrator and ordered by
+  the client in the panel; traffic uses the first granted exit that is alive.
+- Each client with granted exits gets its own routing table, so the choice is
+  independent of the shared automatic exit.
+- `/me` shows the granted exits with their state, the exit in use and
+  up/down controls for the order.
+- The client page has an internet exits section for the administrator.
+
+### Fixed
+
+- The failover daemon repairs a missing default route even when the
+  active-exit file already names the right interface, which could happen
+  after a service restart.
+
 ## [0.2.2] - 2026-11-12
 
 ### Added
