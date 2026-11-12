@@ -5,6 +5,19 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.5] - 2026-11-12
+
+### Fixed
+
+- Applying the routing no longer tears down and recreates every rule and
+  table: the desired state is diffed against the kernel and only the
+  difference runs. A panel change used to briefly drop every client's
+  traffic; now untouched clients see no interruption.
+- Prefixes from the database are normalized to the kernel form
+  (`10.90.0.2/32` vs `10.90.0.2`), so the diff does not churn.
+- A client table keeps the exit the failover daemon chose instead of being
+  reset to the first choice on every apply.
+
 ## [0.3.4] - 2026-11-12
 
 ### Fixed
