@@ -169,6 +169,19 @@ active exit selected by the failover daemon.
 Access mode is controlled by `kaskad_panel_expose`: `lan` keeps the port open,
 `clients` exposes it only through the tunnel at `https://10.80.0.1:8080`.
 
+## Fail2ban
+
+`fail2ban` is installed by the panel role. A rejected sign-in writes
+`KASKAD_AUTH_FAIL ip=<address>` to the journal; five failures within ten
+minutes ban the address for an hour on the panel port. The VPN subnet and
+localhost are whitelisted, and the sshd jail allows ten attempts. Bans use
+iptables, not nftables, and do not touch Docker chains.
+
+```bash
+fail2ban-client status kaskad-panel
+fail2ban-client set kaskad-panel unbanip 203.0.113.9
+```
+
 ## TLS
 
 By default the panel generates a self-signed certificate valid for the host

@@ -5,6 +5,17 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.2] - 2026-11-12
+
+### Added
+
+- Fail2ban with a panel jail: rejected sign-ins are logged as
+  `KASKAD_AUTH_FAIL ip=...` in the journal, and an address is banned for an
+  hour after five failures. The VPN subnet and localhost are never banned.
+- The sshd jail is enabled with a ten-attempt threshold.
+- Bans use iptables and only the panel port, so Docker chains and SSH from
+  other networks are not affected.
+
 ## [0.3.1] - 2026-11-12
 
 ### Added
