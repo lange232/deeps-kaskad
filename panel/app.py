@@ -434,6 +434,7 @@ def rollback_conf(c: dict, previous: bytes | None, snapshot: bytes | None,
                 raise RuntimeError(f"awg-quick@{c['iface']} is still running")
         return
 
+    temp: Path | None = None
     if previous is not None:
         path.write_bytes(previous)
         os.chmod(path, 0o600)
@@ -443,22 +444,28 @@ def rollback_conf(c: dict, previous: bytes | None, snapshot: bytes | None,
         if snapshot is None:
             raise RuntimeError("no configuration to roll back to")
         # The device dump lacks Address/MTU/Table, so it must not replace
-        # awg0.conf; apply it from a temporary file and leave no file behind.
+        # awg0.conf; apply it from a temporary file. The file is kept when
+        # the restore fails: without it there is nothing to recover from.
         path.unlink(missing_ok=True)
         temp = path.with_name(f"{c['iface']}-rollback.conf")
         temp.write_bytes(snapshot)
         os.chmod(temp, 0o600)
         try:
             syncconf_file(c, temp)
-        finally:
-            temp.unlink(missing_ok=True)
+        except Exception as exc:
+            raise RuntimeError(
+                f"{exc}; snapshot kept at {temp}"
+            ) from exc
         expected = conf_peers(snapshot.decode())
 
     actual = applied_peers(c["iface"])
     if actual != expected:
+        kept = f"; snapshot kept at {temp}" if temp is not None else ""
         raise RuntimeError(
-            f"device still has {len(actual - expected)} unexpected peers"
+            f"device still has {len(actual - expected)} unexpected peers{kept}"
         )
+    if temp is not None:
+        temp.unlink(missing_ok=True)
 
 
 def apply_error_message(exc: Exception, action: str) -> str:

@@ -42,6 +42,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The snapshot used to restore a running device that had no config file is
+  kept (`0600`, path in the error message) when the restore or the peer check
+  fails, so a manual recovery is possible; it is removed only after the
+  device has been restored and verified.
 - When `awg0.conf` is missing but the interface is running, the live device
   configuration is snapshotted with `awg showconf` before anything changes. A
   failed apply restores the device from that snapshot through a temporary

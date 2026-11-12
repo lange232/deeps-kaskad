@@ -220,6 +220,55 @@ class RenderTests(unittest.TestCase):
                  if call.args[0][:2] == ["bash", "-c"]]
         self.assertEqual(syncs, [])
 
+    @unittest.skipUnless(app, "fastapi is not installed")
+    def test_failed_snapshot_restore_keeps_the_snapshot(self):
+        c = self.config()
+        path = Path(self.tmp.name) / "awg0.conf"
+        temp = Path(self.tmp.name) / "awg0-rollback.conf"
+        snapshot = "[Peer]\nPublicKey = oldkey\n"
+
+        def fake_run(cmd, **kw):
+            if cmd[:2] == ["awg", "showconf"]:
+                return subprocess.CompletedProcess(cmd, 0, snapshot, "")
+            if cmd[:2] == ["bash", "-c"] and "rollback.conf" in cmd[2]:
+                return subprocess.CompletedProcess(cmd, 1, "", "restore failed")
+            return subprocess.CompletedProcess(cmd, 0, "", "")
+
+        peers = mock.Mock(side_effect=[{"newkey"}])
+        with mock.patch.object(app, "iface_up", return_value=True), \
+             mock.patch.object(app, "run", side_effect=fake_run), \
+             mock.patch.object(app, "applied_peers", peers):
+            with self.assertRaises(app.RollbackFailed) as ctx:
+                app.apply_conf(c)
+        self.assertIn("snapshot kept at", str(ctx.exception))
+        self.assertTrue(temp.exists())
+        self.assertEqual(temp.read_text(), snapshot)
+        self.assertEqual(temp.stat().st_mode & 0o777, 0o600)
+        self.assertFalse(path.exists())
+
+    @unittest.skipUnless(app, "fastapi is not installed")
+    def test_snapshot_mismatch_keeps_the_snapshot(self):
+        c = self.config()
+        path = Path(self.tmp.name) / "awg0.conf"
+        temp = Path(self.tmp.name) / "awg0-rollback.conf"
+        snapshot = "[Peer]\nPublicKey = oldkey\n"
+
+        def fake_run(cmd, **kw):
+            if cmd[:2] == ["awg", "showconf"]:
+                return subprocess.CompletedProcess(cmd, 0, snapshot, "")
+            return subprocess.CompletedProcess(cmd, 0, "", "")
+
+        peers = mock.Mock(side_effect=[{"newkey"}, {"otherkey"}])
+        with mock.patch.object(app, "iface_up", return_value=True), \
+             mock.patch.object(app, "run", side_effect=fake_run), \
+             mock.patch.object(app, "applied_peers", peers):
+            with self.assertRaises(app.RollbackFailed) as ctx:
+                app.apply_conf(c)
+        self.assertIn("snapshot kept at", str(ctx.exception))
+        self.assertIn("unexpected peers", str(ctx.exception))
+        self.assertTrue(temp.exists())
+        self.assertFalse(path.exists())
+
     def config(self):
         return {
             "address": "10.80.0.1", "net": "10.80.0.0/24", "port": 51820,
