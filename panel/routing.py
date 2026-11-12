@@ -10,9 +10,14 @@ specific subnets always win over the default route.
 
 Table numbers are allocated in the database and never computed from row ids:
 ids are reused after a delete, and arithmetic ranges eventually collide.
+
+The apply is a diff: the desired state is compared with the kernel, and only
+the difference is executed. Tables and rules that stay in use are never
+recreated, so a panel change does not interrupt unrelated clients.
 """
 from __future__ import annotations
 
+import ipaddress
 import json
 import os
 import sqlite3
@@ -32,6 +37,9 @@ CLIENT_PRIORITY = 19000
 TABLE_POOL_BASE = 1001
 # These tables must never be flushed or allocated.
 RESERVED_TABLES = {0, 100, 253, 254, 255}
+
+Rule = tuple[int, tuple[str, ...]]  # (priority, spec tokens)
+Route = tuple[str, str]  # (prefix, dev)
 
 
 def cfg() -> dict:
@@ -66,14 +74,6 @@ def allocate_table(conn: sqlite3.Connection) -> int:
     return number
 
 
-def tables_to_flush(current: set[int], previous: set[int]) -> list[int]:
-    """Tables to flush: everything we used now or before, never reserved ones."""
-    return sorted(
-        t for t in (current | previous)
-        if t >= TABLE_POOL_BASE and t not in RESERVED_TABLES
-    )
-
-
 def get_setting(key: str) -> str:
     conn = sqlite3.connect(DB_PATH, timeout=5)
     try:
@@ -106,42 +106,150 @@ def _is_missing(error: str) -> bool:
     )
 
 
-def cleanup_rules(internet_table: int, errors: list[str]) -> None:
-    """Removes all rules of ours, no matter who installed them.
+def _owned_table(value: int, internet_table: int) -> bool:
+    if value in RESERVED_TABLES:
+        return value == internet_table
+    return value == internet_table or value >= TABLE_POOL_BASE
 
-    This cleans up leftovers from older versions (the rule for the whole
-    client subnet) and does not care whether the panel or the unit applied
-    the routing.
+
+def _norm_prefix(value: str) -> str:
+    """How the kernel prints a prefix: no host bits, no /32 on addresses."""
+    if value == "default":
+        return value
+    try:
+        net = ipaddress.ip_network(value, strict=False)
+    except ValueError:
+        return value
+    if net.prefixlen == net.max_prefixlen:
+        return str(net.network_address)
+    return str(net)
+
+
+def parse_rules(output: str, internet_table: int) -> set[Rule]:
+    """Rules of ours from `ip rule show`, as (priority, spec tokens).
+
+    A rule is ours when it has `iif awg0` and looks up the shared internet
+    table or a pool table; the system tables are never touched.
     """
-    res = run(["ip", "rule", "show"])
-    if res.returncode != 0:
-        errors.append(f"ip rule show: {res.stderr.strip()}")
-        return
-    for line in (res.stdout or "").splitlines():
-        if ":" not in line:
+    rules: set[Rule] = set()
+    for line in output.splitlines():
+        head, sep, rest = line.partition(":")
+        if not sep or not head.strip().isdigit():
             continue
-        spec = line.split(":", 1)[1].strip().split()
+        spec = tuple(rest.strip().split())
         if "iif" not in spec or "awg0" not in spec or "lookup" not in spec:
             continue
+        if "to" in spec:
+            at = spec.index("to") + 1
+            spec = spec[:at] + (_norm_prefix(spec[at]),) + spec[at + 1:]
         idx = spec.index("lookup")
-        if idx + 1 >= len(spec):
+        if idx + 1 >= len(spec) or not spec[idx + 1].isdigit():
             continue
-        table = spec[idx + 1]
-        if not table.isdigit():
-            continue
-        value = int(table)
-        if value in RESERVED_TABLES and value != internet_table:
-            continue
-        if value == internet_table or value >= TABLE_POOL_BASE:
-            result = run(["ip", "rule", "del"] + spec)
-            if result.returncode != 0:
-                errors.append(f"ip rule del {' '.join(spec)}: {result.stderr.strip()}")
+        if _owned_table(int(spec[idx + 1]), internet_table):
+            rules.add((int(head.strip()), spec))
+    return rules
 
 
-def apply() -> dict:
+def parse_routes(output: str) -> set[Route]:
+    """Routes from `ip route show table N`, as (prefix, dev)."""
+    routes: set[Route] = set()
+    for line in output.splitlines():
+        tokens = line.split()
+        if len(tokens) >= 3 and tokens[1] == "dev":
+            routes.add((_norm_prefix(tokens[0]), tokens[2]))
+    return routes
+
+
+def plan_changes(
+    existing_rules: set[Rule],
+    desired_rules: set[Rule],
+    existing_routes: dict[int, set[Route]],
+    desired_routes: dict[int, set[Route]],
+    flush_candidates: set[int],
+) -> dict:
+    """Pure diff between the kernel state and the desired state.
+
+    A table that stays in use is never flushed: its extra routes are removed
+    one by one and the missing ones are replaced. Only tables nobody needs
+    any more are flushed whole.
+    """
+    plan = {
+        "rules_del": sorted(existing_rules - desired_rules),
+        "rules_add": sorted(desired_rules - existing_rules),
+        "tables_flush": [],
+        "routes_del": [],
+        "routes_add": [],
+    }
+    orphan = set(existing_routes) | flush_candidates
+    plan["tables_flush"] = sorted(
+        t for t in orphan - set(desired_routes)
+        if t >= TABLE_POOL_BASE and t not in RESERVED_TABLES
+    )
+    for table in sorted(desired_routes):
+        wanted = desired_routes[table]
+        have = existing_routes.get(table, set())
+        for route in sorted(have - wanted):
+            plan["routes_del"].append((table,) + route)
+        for route in sorted(wanted - have):
+            plan["routes_add"].append((table,) + route)
+    return plan
+
+
+def execute_plan(plan: dict, errors: list[str]) -> int:
+    """Runs the diff and returns the number of applied changes.
+
+    Rules go first: a stale rule must stop matching before its table is
+    flushed, otherwise traffic briefly falls through to the main table.
+    """
+    changes = 0
+    for prio, spec in plan["rules_del"]:
+        result = run(["ip", "rule", "del"] + list(spec) + ["priority", str(prio)])
+        if result.returncode != 0 and not _is_missing(result.stderr):
+            errors.append(f"ip rule del {' '.join(spec)}: {result.stderr.strip()}")
+        else:
+            changes += 1
+    for table in plan["tables_flush"]:
+        result = run(["ip", "route", "flush", "table", str(table)])
+        if result.returncode != 0 and not _is_missing(result.stderr):
+            errors.append(f"ip route flush table {table}: {result.stderr.strip()}")
+        else:
+            changes += 1
+    for table, prefix, dev in plan["routes_del"]:
+        result = run(["ip", "route", "del", prefix, "dev", dev, "table", str(table)])
+        if result.returncode != 0 and not _is_missing(result.stderr):
+            errors.append(
+                f"ip route del {prefix} dev {dev} table {table}: "
+                f"{result.stderr.strip()}"
+            )
+        else:
+            changes += 1
+    for table, prefix, dev in plan["routes_add"]:
+        result = run(["ip", "route", "replace", prefix, "dev", dev, "table", str(table)])
+        if result.returncode != 0:
+            errors.append(
+                f"ip route replace {prefix} dev {dev} table {table}: "
+                f"{result.stderr.strip()}"
+            )
+        else:
+            changes += 1
+    for prio, spec in plan["rules_add"]:
+        result = run(["ip", "rule", "add"] + list(spec) + ["priority", str(prio)])
+        if result.returncode != 0:
+            errors.append(f"ip rule add {' '.join(spec)}: {result.stderr.strip()}")
+        else:
+            changes += 1
+    return changes
+
+
+def desired_state() -> tuple[set[Rule], dict[int, set[Route]], dict[int, list[str]], int]:
+    """The routing state the panel wants, from the database.
+
+    Client tables are returned separately as {table: choices}: which exit the
+    table points at is decided by apply(), because the failover daemon owns
+    that choice and a kept route must not be fought over.
+    """
     c = cfg()
     internet_table = int(c.get("route_table", 100))
-    errors: list[str] = []
     db = sqlite3.connect(DB_PATH, timeout=10)
     db.row_factory = sqlite3.Row
     try:
@@ -163,35 +271,7 @@ def apply() -> dict:
     for grant in grants:
         client_choices.setdefault(grant["client_id"], []).append(grant["iface"])
 
-    cleanup_rules(internet_table, errors)
-
-    # The set of tables we own is persisted, so tables of deleted objects are
-    # flushed even though they are no longer in the database.
-    current_tables = {
-        ex["table_num"] for ex in exits
-        if ex["mode"] == "routes" and ex["table_num"] > 0
-        and Path(f"/sys/class/net/{ex['iface']}").exists()
-    }
-    current_tables |= {
-        cl["table_num"] for cl in clients
-        if cl["internet"] and cl["table_num"] > 0 and client_choices.get(cl["id"])
-    }
-    raw_previous = get_setting("routing_tables")
-    if raw_previous:
-        try:
-            previous_tables = {int(x) for x in json.loads(raw_previous)}
-        except (ValueError, TypeError):
-            previous_tables = set()
-    else:
-        # First run on an existing database: clean the legacy ranges too.
-        previous_tables = set(range(1001, 3065))
-    for table in tables_to_flush(current_tables, previous_tables):
-        result = run(["ip", "route", "flush", "table", str(table)])
-        if result.returncode != 0 and not _is_missing(result.stderr):
-            errors.append(f"ip route flush table {table}: {result.stderr.strip()}")
-
-    tables: set[int] = set()
-    rules: list[tuple[list[str], int]] = []
+    routes: dict[int, set[Route]] = {}
 
     # routes of routed exits
     for ex in exits:
@@ -200,50 +280,31 @@ def apply() -> dict:
         if not Path(f"/sys/class/net/{ex['iface']}").exists():
             continue
         table = ex["table_num"]
-        tables.add(table)
         for cidr in [x.strip() for x in (ex["routes"] or "").split(",") if x.strip()]:
-            result = run(["ip", "route", "replace", cidr, "dev", ex["iface"],
-                          "table", str(table)])
-            if result.returncode != 0:
-                errors.append(
-                    f"ip route replace {cidr} table {table}: {result.stderr.strip()}"
-                )
+            routes.setdefault(table, set()).add((_norm_prefix(cidr), ex["iface"]))
 
     # clients with granted internet exits get their own table; the failover
     # daemon keeps its default route on the first exit that is alive
-    try:
-        active_exit = Path("/run/kaskad/active-exit").read_text().strip()
-    except OSError:
-        active_exit = ""
+    client_tables: dict[int, list[str]] = {}
     for cl in clients:
         choices = client_choices.get(cl["id"]) if cl["internet"] else None
-        if not choices or cl["table_num"] <= 0:
-            continue
-        table = cl["table_num"]
-        tables.add(table)
-        preferred = active_exit if active_exit in choices else choices[0]
-        if Path(f"/sys/class/net/{preferred}").exists():
-            result = run(["ip", "route", "replace", "default", "dev", preferred,
-                          "table", str(table)])
-            if result.returncode != 0:
-                errors.append(
-                    f"ip route replace default dev {preferred} table {table}: "
-                    f"{result.stderr.strip()}"
-                )
+        if choices and cl["table_num"] > 0:
+            client_tables[cl["table_num"]] = choices
 
     # client rules
+    rules: set[Rule] = set()
     for cl in clients:
         if not cl["internet"]:
             continue
         if client_choices.get(cl["id"]) and cl["table_num"] > 0:
-            rules.append(
-                (["from", cl["ip"], "iif", "awg0", "lookup", str(cl["table_num"])],
-                 CLIENT_PRIORITY)
+            rules.add(
+                (CLIENT_PRIORITY,
+                 ("from", cl["ip"], "iif", "awg0", "lookup", str(cl["table_num"])))
             )
         else:
-            rules.append(
-                (["from", cl["ip"], "iif", "awg0", "lookup", str(internet_table)],
-                 INTERNET_PRIORITY)
+            rules.add(
+                (INTERNET_PRIORITY,
+                 ("from", cl["ip"], "iif", "awg0", "lookup", str(internet_table)))
             )
     for link in links:
         cl = next((x for x in clients if x["id"] == link["client_id"]), None)
@@ -252,39 +313,101 @@ def apply() -> dict:
             continue
         if not Path(f"/sys/class/net/{ex['iface']}").exists():
             continue
-        table = ex["table_num"]
         for cidr in [x.strip() for x in (ex["routes"] or "").split(",") if x.strip()]:
-            rules.append(
-                (["from", cl["ip"], "to", cidr, "iif", "awg0", "lookup", str(table)],
-                 ROUTE_PRIORITY)
+            rules.add(
+                (ROUTE_PRIORITY,
+                 ("from", cl["ip"], "to", _norm_prefix(cidr), "iif", "awg0",
+                  "lookup", str(ex["table_num"])))
             )
+    return rules, routes, client_tables, internet_table
 
-    seen: set[tuple] = set()
-    unique: list[tuple[list[str], int]] = []
-    for spec, prio in rules:
-        key = tuple(spec)
-        if key in seen:
+
+def apply() -> dict:
+    errors: list[str] = []
+    desired_rules, desired_routes, client_tables, internet_table = desired_state()
+
+    res = run(["ip", "rule", "show"])
+    if res.returncode != 0:
+        errors.append(f"ip rule show: {res.stderr.strip()}")
+        existing_rules: set[Rule] = set()
+    else:
+        existing_rules = parse_rules(res.stdout or "", internet_table)
+
+    # Only desired tables need reading: anything else is flushed whole.
+    read_tables = set(desired_routes) | set(client_tables)
+    existing_routes: dict[int, set[Route]] = {}
+    for table in sorted(read_tables):
+        res = run(["ip", "route", "show", "table", str(table)])
+        if res.returncode != 0:
+            if not _is_missing(res.stderr):
+                errors.append(f"ip route show table {table}: {res.stderr.strip()}")
             continue
-        seen.add(key)
-        unique.append((spec, prio))
+        routes = parse_routes(res.stdout or "")
+        if routes:
+            existing_routes[table] = routes
 
-    applied = 0
-    for spec, prio in unique:
-        result = run(["ip", "rule", "add"] + spec + ["priority", str(prio)])
-        if result.returncode != 0:
-            errors.append(f"ip rule add {' '.join(spec)}: {result.stderr.strip()}")
+    # The failover daemon owns the exit choice of a client table: keep the
+    # route that is already there while it points at a granted exit, so an
+    # apply does not fight the daemon over a working client.
+    try:
+        active_exit = Path("/run/kaskad/active-exit").read_text().strip()
+    except OSError:
+        active_exit = ""
+    for table, choices in client_tables.items():
+        current = next(
+            (dev for prefix, dev in existing_routes.get(table, set())
+             if prefix == "default"),
+            None,
+        )
+        if current in choices:
+            preferred = current
         else:
-            applied += 1
+            preferred = active_exit if active_exit in choices else choices[0]
+        if Path(f"/sys/class/net/{preferred}").exists():
+            desired_routes.setdefault(table, set()).add(("default", preferred))
 
-    save_setting("routing_tables", json.dumps(sorted(tables)))
-    return {"rules": applied, "tables": sorted(tables), "errors": errors}
+    # The set of tables we own is persisted, so tables of deleted objects are
+    # flushed even though they are no longer in the database.
+    raw_previous = get_setting("routing_tables")
+    flush_candidates: set[int] = set()
+    if raw_previous:
+        try:
+            flush_candidates = {int(x) for x in json.loads(raw_previous)}
+        except (ValueError, TypeError):
+            flush_candidates = set()
+    else:
+        # First run on an existing database: clean the legacy ranges too.
+        flush_candidates = set(range(TABLE_POOL_BASE, 3065))
+    # Tables referenced by leftover rules are orphans as well.
+    flush_candidates |= {
+        int(spec[spec.index("lookup") + 1])
+        for _, spec in existing_rules
+        if int(spec[spec.index("lookup") + 1]) >= TABLE_POOL_BASE
+    }
+
+    plan = plan_changes(
+        existing_rules, desired_rules, existing_routes, desired_routes,
+        flush_candidates,
+    )
+    changes = execute_plan(plan, errors)
+
+    save_setting("routing_tables", json.dumps(sorted(desired_routes)))
+    return {
+        "rules": len(desired_rules),
+        "tables": sorted(desired_routes),
+        "changes": changes,
+        "errors": errors,
+    }
 
 
 def main() -> None:
     if len(sys.argv) > 1 and sys.argv[1] != "apply":
         sys.exit("usage: routing.py [apply]")
     result = apply()
-    print(f"rules: {result['rules']}, tables: {result['tables']}")
+    print(
+        f"rules: {result['rules']}, tables: {result['tables']}, "
+        f"changes: {result['changes']}"
+    )
     for error in result["errors"]:
         print(f"error: {error}", file=sys.stderr)
     if result["errors"]:

@@ -112,6 +112,95 @@ class ClientTableTests(unittest.TestCase):
         self.assertNotIn(number, routing.RESERVED_TABLES)
 
 
+class ParseTests(unittest.TestCase):
+    def test_rules_keeps_only_ours(self):
+        output = (
+            "0:\tfrom all lookup local\n"
+            "10000:\tfrom 10.80.0.3 to 10.90.0.2 iif awg0 lookup 1001\n"
+            "19000:\tfrom 10.80.0.2 iif awg0 lookup 1002\n"
+            "20000:\tfrom 10.80.0.2 iif awg0 lookup 100\n"
+            "32766:\tfrom all lookup main\n"
+            "5000:\tfrom 10.80.0.9 iif eth0 lookup 1001\n"
+        )
+        rules = routing.parse_rules(output, 100)
+        self.assertEqual(rules, {
+            (10000, ("from", "10.80.0.3", "to", "10.90.0.2", "iif", "awg0", "lookup", "1001")),
+            (19000, ("from", "10.80.0.2", "iif", "awg0", "lookup", "1002")),
+            (20000, ("from", "10.80.0.2", "iif", "awg0", "lookup", "100")),
+        })
+
+    def test_rules_never_match_reserved_tables(self):
+        output = "30000:\tfrom 10.80.0.2 iif awg0 lookup 254\n"
+        self.assertEqual(routing.parse_rules(output, 100), set())
+
+    def test_routes_parses_prefix_and_dev(self):
+        output = "default dev awg3 scope link\n10.90.0.2 dev awg2 scope link\n"
+        self.assertEqual(
+            routing.parse_routes(output),
+            {("default", "awg3"), ("10.90.0.2", "awg2")},
+        )
+
+    def test_host_prefixes_match_the_kernel_form(self):
+        # The database stores 10.90.0.2/32, the kernel prints 10.90.0.2.
+        self.assertEqual(routing._norm_prefix("10.90.0.2/32"), "10.90.0.2")
+        self.assertEqual(routing._norm_prefix("10.90.0.2"), "10.90.0.2")
+        self.assertEqual(routing._norm_prefix("10.90.0.5/30"), "10.90.0.4/30")
+        self.assertEqual(routing._norm_prefix("default"), "default")
+
+    def test_rules_normalize_the_to_prefix(self):
+        output = "10000:\tfrom 10.80.0.3 to 10.90.0.2 iif awg0 lookup 1001\n"
+        rules = routing.parse_rules(output, 100)
+        desired = {(10000, ("from", "10.80.0.3", "to", routing._norm_prefix("10.90.0.2/32"),
+                            "iif", "awg0", "lookup", "1001"))}
+        self.assertEqual(rules, desired)
+
+
+class PlanChangesTests(unittest.TestCase):
+    def rule(self, prio, *spec):
+        return (prio, tuple(spec))
+
+    def test_empty_to_full_is_all_adds(self):
+        desired = {self.rule(19000, "from", "10.80.0.2", "iif", "awg0", "lookup", "1002")}
+        plan = routing.plan_changes(set(), desired, {}, {1002: {("default", "awg3")}}, set())
+        self.assertEqual(plan["rules_del"], [])
+        self.assertEqual(plan["rules_add"], sorted(desired))
+        self.assertEqual(plan["routes_add"], [(1002, "default", "awg3")])
+        self.assertEqual(plan["tables_flush"], [])
+
+    def test_identical_state_is_a_noop(self):
+        rules = {self.rule(19000, "from", "10.80.0.2", "iif", "awg0", "lookup", "1002")}
+        routes = {1002: {("default", "awg3")}}
+        plan = routing.plan_changes(rules, rules, routes, routes, {1002})
+        self.assertEqual(plan["rules_del"], [])
+        self.assertEqual(plan["rules_add"], [])
+        self.assertEqual(plan["routes_del"], [])
+        self.assertEqual(plan["routes_add"], [])
+        self.assertEqual(plan["tables_flush"], [])
+
+    def test_priority_change_is_del_plus_add(self):
+        old = {self.rule(19000, "from", "10.80.0.2", "iif", "awg0", "lookup", "1002")}
+        new = {self.rule(20000, "from", "10.80.0.2", "iif", "awg0", "lookup", "100")}
+        plan = routing.plan_changes(old, new, {}, {}, set())
+        self.assertEqual(plan["rules_del"], sorted(old))
+        self.assertEqual(plan["rules_add"], sorted(new))
+
+    def test_used_table_is_not_flushed_but_pruned(self):
+        existing = {1002: {("default", "awg3"), ("10.9.9.0/24", "awg3")}}
+        desired = {1002: {("default", "awg3")}}
+        plan = routing.plan_changes(set(), set(), existing, desired, {1002})
+        self.assertEqual(plan["tables_flush"], [])
+        self.assertEqual(plan["routes_del"], [(1002, "10.9.9.0/24", "awg3")])
+        self.assertEqual(plan["routes_add"], [])
+
+    def test_orphan_table_is_flushed(self):
+        plan = routing.plan_changes(set(), set(), {}, {1002: {("default", "awg3")}}, {1001, 1002})
+        self.assertEqual(plan["tables_flush"], [1001])
+
+    def test_reserved_and_low_tables_are_never_flushed(self):
+        plan = routing.plan_changes(set(), set(), {}, {}, {254, 255, 1000, 100})
+        self.assertEqual(plan["tables_flush"], [])
+
+
 class FailoverStatusTests(unittest.TestCase):
     def test_failed_replace_is_not_reported(self):
         failed = subprocess.CompletedProcess(args=[], returncode=2, stdout="", stderr="boom")
@@ -130,17 +219,6 @@ class FailoverStatusTests(unittest.TestCase):
     def test_no_table_is_skipped(self):
         used = failover.apply_client_routes({(0, "10.80.0.2"): ["awg1"]}, {"awg1"})
         self.assertEqual(used, {})
-
-
-class TablesTests(unittest.TestCase):
-    def test_unions_current_and_previous(self):
-        self.assertEqual(routing.tables_to_flush({1005}, {1001, 1065}), [1001, 1005, 1065])
-
-    def test_never_touches_reserved_or_low_tables(self):
-        self.assertEqual(routing.tables_to_flush({254, 1001}, {255, 1000}), [1001])
-
-    def test_high_ids_are_cleaned(self):
-        self.assertEqual(routing.tables_to_flush({1200}, set()), [1200])
 
 
 class PasswordTests(unittest.TestCase):
