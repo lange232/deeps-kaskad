@@ -34,6 +34,11 @@ kaskad_panel_san_list: "{{ kaskad_panel_san | regex_replace('(IP Address:|IP:|DN
 kaskad_awg_dir: /etc/amnezia/amneziawg
 kaskad_repo_dir: "{{ playbook_dir | dirname }}"
 
+# Backups: database, panel secrets, tunnel configs and TLS certificates.
+kaskad_backup_dir: /var/backups/kaskad
+kaskad_backup_keep_days: 14
+kaskad_backup_oncalendar: "*-*-* 03:30:00"
+
 # Where amneziawg comes from: ppa (ppa:amnezia/ppa) or local
 # (files/awg/*.deb for hosts without access to Launchpad).
 kaskad_awg_packages_mode: ppa

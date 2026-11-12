@@ -1,0 +1,16 @@
+# {{ ansible_managed }}
+[Unit]
+Description=kaskad backup (database, configs, certificates)
+After=kaskad-panel.service
+Wants=kaskad-panel.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/kaskad-backup
+Nice=10
+IOSchedulingClass=idle
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths={{ kaskad_backup_dir }} /var/lib/kaskad

@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Daily backups: `kaskad-backup.timer` writes one root-only archive with a
+  consistent copy of `panel.db`, `/etc/kaskad`, the tunnel configs and the TLS
+  certificates to `/var/backups/kaskad`, keeping 14 days by default. The
+  database copy is verified with `PRAGMA integrity_check` before packing, and
+  the README documents the restore steps.
+- `check.yml` warns when the newest backup is older than two days.
+
 ### Fixed
 
 - Routing is re-applied when an `awg*` interface appears or disappears, so

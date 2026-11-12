@@ -178,6 +178,26 @@
       changed_when: false
       when: kaskad_has_internet.rc == 0
 
+    - name: Recent backup
+      ansible.builtin.shell: |
+        set -o pipefail
+        dir={{ kaskad_backup_dir }}
+        newest=$(find "$dir" -maxdepth 1 -type f -name 'kaskad-*.tar.gz' \
+            -printf '%T@\n' 2>/dev/null | sort -n | tail -1)
+        if [ -z "$newest" ]; then
+            echo "no backups yet"
+            exit 0
+        fi
+        age=$(( $(date +%s) - ${newest%.*} ))
+        echo "newest backup is $((age / 3600))h old"
+        if [ "$age" -gt $(( 2 * 86400 )) ]; then
+            echo "backup is stale: the timer is not working"
+            exit 1
+        fi
+      args:
+        executable: /bin/bash
+      changed_when: false
+
     - name: NAT towards the upstream
       ansible.builtin.shell: |
         set -o pipefail

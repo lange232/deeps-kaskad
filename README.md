@@ -225,6 +225,39 @@ IP will still see the self-signed warning; use the domain name.
   `ProtectSystem=strict` and `ReadWritePaths` limited to two directories.
 - `/run/kaskad` is created by `tmpfiles.d`; the units do not remove it.
 
+## Backups
+
+`kaskad-backup.timer` runs `/usr/local/sbin/kaskad-backup` daily at 03:30
+(configurable with `kaskad_backup_oncalendar`) and keeps
+`kaskad_backup_keep_days` days. Each run writes one root-only archive to
+`/var/backups/kaskad`:
+
+- `panel.db` — a consistent copy made with the SQLite backup API and verified
+  with `PRAGMA integrity_check` (the panel keeps running);
+- `/etc/kaskad` — panel config, admin password hash, session secret, TLS keys;
+- `/etc/amnezia/amneziawg` — tunnel configs and server keys;
+- `/etc/letsencrypt` — public certificates and their private keys.
+
+```bash
+/usr/local/sbin/kaskad-backup          # run now
+systemctl list-timers kaskad-backup.timer
+tar -tzf /var/backups/kaskad/kaskad-*.tar.gz | head
+```
+
+Restore:
+
+```bash
+systemctl stop kaskad-panel kaskad-failover
+mkdir -p /root/kaskad-restore
+tar -xzf /var/backups/kaskad/kaskad-<stamp>.tar.gz -C /root/kaskad-restore panel.db
+install -o root -m 0600 /root/kaskad-restore/panel.db /var/lib/kaskad/panel.db
+tar -xzf /var/backups/kaskad/kaskad-<stamp>.tar.gz -C / --exclude panel.db
+systemctl start kaskad-panel kaskad-failover
+```
+
+The archive lives on the same host, so it survives a bad deploy or a deleted
+row, but not the loss of the machine. Copy it off-site if that matters.
+
 ## Diagnostics
 
 ```bash
