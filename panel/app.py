@@ -201,6 +201,25 @@ def migrate(conn: sqlite3.Connection) -> None:
             "OR exit_id NOT IN (SELECT id FROM exits)"
         )
 
+    # One table per object: duplicates would make two clients fight over the
+    # same default route. Repair leftovers of a concurrent create first.
+    for table in ("exits", "clients"):
+        seen: set[int] = set()
+        for row in conn.execute(
+            f"SELECT id, table_num FROM {table} WHERE table_num > 0 ORDER BY id"
+        ).fetchall():
+            if row["table_num"] in seen:
+                conn.execute(
+                    f"UPDATE {table} SET table_num = ? WHERE id = ?",
+                    (routing.allocate_table(conn), row["id"]),
+                )
+            else:
+                seen.add(row["table_num"])
+        conn.execute(
+            f"CREATE UNIQUE INDEX IF NOT EXISTS {table}_table_num "
+            f"ON {table}(table_num) WHERE table_num > 0"
+        )
+
 
 def audit(action: str, detail: str = "") -> None:
     with db() as conn:
@@ -350,26 +369,41 @@ def verify_conf(c: dict, conn: sqlite3.Connection | None = None) -> None:
 def apply_conf(c: dict, conn: sqlite3.Connection | None = None) -> None:
     path = Path(c["awg_dir"]) / "awg0.conf"
     path.parent.mkdir(parents=True, exist_ok=True)
+    previous = path.read_bytes() if path.exists() else None
     tmp = path.with_suffix(".tmp")
     tmp.write_text(render_conf(c, conn))
     os.chmod(tmp, 0o600)
     tmp.replace(path)
 
-    if not Path(f"/sys/class/net/{c['iface']}").exists():
-        run(["systemctl", "start", f"awg-quick@{c['iface']}"])
-        for _ in range(10):
-            if Path(f"/sys/class/net/{c['iface']}").exists():
-                break
-            time.sleep(0.3)
-        if Path(f"/sys/class/net/{c['iface']}").exists():
-            verify_conf(c, conn)
-        return
-    res = run(
-        ["bash", "-c", f"awg syncconf {c['iface']} <(awg-quick strip {c['iface']})"]
-    )
-    if res.returncode != 0:
-        raise RuntimeError(f"syncconf: {res.stderr.strip()}")
-    verify_conf(c, conn)
+    try:
+        if not Path(f"/sys/class/net/{c['iface']}").exists():
+            res = run(["systemctl", "start", f"awg-quick@{c['iface']}"])
+            for _ in range(10):
+                if Path(f"/sys/class/net/{c['iface']}").exists():
+                    break
+                time.sleep(0.3)
+            if not Path(f"/sys/class/net/{c['iface']}").exists():
+                raise RuntimeError(
+                    f"awg-quick@{c['iface']}: interface did not come up"
+                    + (f": {res.stderr.strip()}" if res.stderr.strip() else "")
+                )
+        else:
+            res = run(
+                ["bash", "-c",
+                 f"awg syncconf {c['iface']} <(awg-quick strip {c['iface']})"]
+            )
+            if res.returncode != 0:
+                raise RuntimeError(f"syncconf: {res.stderr.strip()}")
+        verify_conf(c, conn)
+    except Exception:
+        # The database transaction is rolled back by the caller; the file
+        # must not keep the config of a change that never happened.
+        if previous is None:
+            path.unlink(missing_ok=True)
+        else:
+            path.write_bytes(previous)
+            os.chmod(path, 0o600)
+        raise
 
 
 def iface_dump(name: str) -> dict:
@@ -589,6 +623,17 @@ def _prune_attempts(now: float | None = None) -> None:
             del _attempts[key]
 
 
+def rate_key(ip: str) -> str:
+    """IPv6 addresses rotate within a /64, so the whole prefix is the key."""
+    try:
+        address = ipaddress.ip_address(ip)
+    except ValueError:
+        return ip
+    if address.version == 6:
+        return str(ipaddress.ip_network(f"{ip}/64", strict=False))
+    return ip
+
+
 def _count(key: str) -> int:
     _prune_attempts()
     return len(_attempts.get(key, []))
@@ -618,8 +663,11 @@ def note_failure(ip: str, email: str = "") -> None:
 
 
 def clear_failures(ip: str, email: str = "") -> None:
-    """A successful sign-in resets the counters for that address."""
-    _attempts.pop(f"ip:{ip}", None)
+    """A successful sign-in resets the counters for that account.
+
+    The address counter is kept: otherwise one valid account would reset the
+    per-address limit for everybody behind the same NAT.
+    """
     if email:
         _attempts.pop(f"email:{email}", None)
         _attempts.pop(f"pair:{ip}|{email}", None)
@@ -893,6 +941,7 @@ def login_page(request: Request):
 @app.post("/login")
 def login(request: Request, email: str = Form(""), password: str = Form(...)):
     ip = request.client.host if request.client else "?"
+    ip_key = rate_key(ip)
     email = normalize_email(email)
 
     def fail(message: str, status: int = 401):
@@ -900,13 +949,8 @@ def login(request: Request, email: str = Form(""), password: str = Form(...)):
             request, "login.html", login_context(message, email), status_code=status
         )
 
-    if rate_limited(ip, email):
+    if rate_limited(ip_key, email):
         return fail("too many attempts, wait 5 minutes", 429)
-    delay = login_delay(email)
-    if delay:
-        # Slows down guessing against one address without locking it: the
-        # right password still gets in, just a few seconds later.
-        time.sleep(delay)
 
     token = ""
     location = ""
@@ -944,16 +988,22 @@ def login(request: Request, email: str = Form(""), password: str = Form(...)):
             role = "user"
 
     if not role:
-        note_failure(ip, email)
-        # Read by fail2ban through journald; never log the password.
-        print(f"KASKAD_AUTH_FAIL ip={ip} email={email or '-'}", flush=True)
-        audit("login_failed", f"{ip} {email or '-'}")
+        delay = login_delay(email)
+        if delay:
+            # Slows down guessing against one address without locking it: a
+            # correct password never sleeps, only wrong ones do.
+            time.sleep(delay)
+        note_failure(ip_key, email)
+        # Read by fail2ban through journald; never log the password, and keep
+        # control characters out of the line.
+        safe_email = re.sub(r"[\x00-\x1f\x7f]", "", email)[:254] or "-"
+        print(f"KASKAD_AUTH_FAIL ip={ip} email={safe_email}", flush=True)
+        audit("login_failed", f"{ip} {safe_email}")
         return fail("wrong email or password")
 
     token = start_session(role, uid, tv)
-    clear_failures(ip, email)
-    if role == "admin":
-        prune_sessions()
+    clear_failures(ip_key, email)
+    prune_sessions()
     response = RedirectResponse(location, status_code=303)
     response.set_cookie(
         COOKIE, token, httponly=True, secure=True, samesite="strict", max_age=SESSION_TTL
@@ -972,20 +1022,26 @@ def logout(request: Request):
 
 @app.get("/healthz")
 def healthz():
-    """Unauthenticated liveness probe: the database answers, the exit is known."""
+    """Liveness for monitoring: database readable and failover reporting."""
     try:
         with db() as conn:
             conn.execute("SELECT 1").fetchone()
         c = cfg()
     except Exception as exc:
         print(f"healthz: {exc}", flush=True)
-        return JSONResponse({"ok": False}, status_code=503)
+        return JSONResponse({"ok": False, "error": "database"}, status_code=503)
+    status = read_status()
+    ts = int(status.get("ts") or 0)
+    age = int(time.time()) - ts if ts else None
+    fresh = age is not None and age <= 120
+    active = run_dir("active-exit")
     return JSONResponse({
-        "ok": True,
+        "ok": fresh,
         "version": c.get("version", ""),
         "commit": c.get("commit", ""),
-        "active": run_dir("active-exit") or None,
-    })
+        "active": None if active in ("", "none") else active,
+        "failover_age": age,
+    }, status_code=200 if fresh else 503)
 
 
 # ---------------------------------------------------------------- overview
@@ -1384,12 +1440,20 @@ def create_client(
     now = datetime.now(timezone.utc).isoformat(timespec="seconds")
     try:
         with db() as conn:
-            table_num = routing.allocate_table(conn)
-            cur = conn.execute(
-                "INSERT INTO clients (name, ip, public_key, private_key, preshared_key, enabled, created_at, internet, table_num) "
-                "VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?)",
-                (name, ip, pubkey(private), private, genpsk(), now, 1 if internet else 0, table_num),
-            )
+            for attempt in range(3):
+                table_num = routing.allocate_table(conn)
+                try:
+                    cur = conn.execute(
+                        "INSERT INTO clients (name, ip, public_key, private_key, preshared_key, enabled, created_at, internet, table_num) "
+                        "VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?)",
+                        (name, ip, pubkey(private), private, genpsk(), now, 1 if internet else 0, table_num),
+                    )
+                    break
+                except sqlite3.IntegrityError:
+                    # Two admins can allocate the same number at once; the
+                    # unique index rejects one, which just picks the next.
+                    if attempt == 2:
+                        raise
             cid = cur.lastrowid
             for eid in exits:
                 conn.execute("INSERT OR IGNORE INTO client_exits (client_id, exit_id) VALUES (?, ?)", (cid, eid))
@@ -1663,10 +1727,13 @@ def account_reset(request: Request, cid: int, csrf_token: str = Form(...)):
     password = secrets.token_urlsafe(12)
     with db() as conn:
         conn.execute(
-            "UPDATE users SET password_hash = ? WHERE id = ?",
+            "UPDATE users SET password_hash = ?, token_version = token_version + 1 "
+            "WHERE id = ?",
             (hash_password(password), account["id"]),
         )
-    revoke_user_sessions(int(account["id"]))
+        conn.execute(
+            "UPDATE sessions SET revoked = 1 WHERE uid = ?", (account["id"],)
+        )
     audit("account_password_reset", account["email"])
     return account_redirect(cid, ok="password reset", secret=stash_secret(password))
 
@@ -1682,9 +1749,13 @@ def account_toggle(request: Request, cid: int, csrf_token: str = Form(...)):
     enabled = 0 if account["enabled"] else 1
     with db() as conn:
         conn.execute(
-            "UPDATE users SET enabled = ? WHERE id = ?", (enabled, account["id"])
+            "UPDATE users SET enabled = ?, token_version = token_version + 1 "
+            "WHERE id = ?",
+            (enabled, account["id"]),
         )
-    revoke_user_sessions(int(account["id"]))
+        conn.execute(
+            "UPDATE sessions SET revoked = 1 WHERE uid = ?", (account["id"],)
+        )
     audit("account_toggle", f"{account['email']} -> {enabled}")
     return account_redirect(cid, ok="account enabled" if enabled else "account disabled")
 
@@ -1797,14 +1868,15 @@ def me_password(
     problem = password_error(new_password, "new password")
     if problem:
         return RedirectResponse("/me?err=" + quote(problem), status_code=303)
+    new_hash = hash_password(new_password)
     with db() as conn:
         conn.execute(
-            "UPDATE users SET password_hash = ? WHERE id = ?",
-            (hash_password(new_password), row["uid"]),
+            "UPDATE users SET password_hash = ?, token_version = token_version + 1 "
+            "WHERE id = ?",
+            (new_hash, row["uid"]),
         )
-    # Every other session of this account dies with the password change.
-    revoke_user_sessions(int(row["uid"]))
-    with db() as conn:
+        # Every other session of this account dies with the password change.
+        conn.execute("UPDATE sessions SET revoked = 1 WHERE uid = ?", (row["uid"],))
         tv = conn.execute(
             "SELECT token_version FROM users WHERE id = ?", (row["uid"],)
         ).fetchone()[0]

@@ -51,6 +51,9 @@ state: dict[str, dict] = {}
 # an exit came up later.
 known_ifaces: set[str] | None = None
 routing_pending = False
+routing_retry_at = 0.0
+routing_backoff = 10
+routing_last_error = ""
 
 
 def log(msg: str) -> None:
@@ -186,37 +189,46 @@ def awg_ifaces() -> set[str]:
         return set()
 
 
-def pending_after_apply(errors: list[str]) -> bool:
-    """Keep retrying while the last apply reported failures."""
-    return bool(errors)
-
-
 def sync_routing(c: dict) -> None:
     """Re-applies routing when tunnels appeared or disappeared."""
-    global known_ifaces, routing_pending
+    global known_ifaces, routing_pending, routing_retry_at
+    global routing_backoff, routing_last_error
     current = awg_ifaces()
     if known_ifaces is None:
         # The routing unit runs once at boot and may have failed or raced
         # with the exits; a first sync costs one diff and fixes that.
         log(f"initial routing sync: {sorted(current)}")
         routing_pending = True
+        routing_retry_at = 0.0
     elif known_ifaces != current:
         appeared = sorted(current - known_ifaces)
         vanished = sorted(known_ifaces - current)
         log(f"interfaces changed: +{appeared or '-'} -{vanished or '-'}")
         routing_pending = True
+        routing_retry_at = 0.0
+        routing_backoff = 10
     known_ifaces = current
-    if not routing_pending:
+    if not routing_pending or time.time() < routing_retry_at:
         return
     # awg-quick creates the interface before it finishes configuring it, so
-    # give it a moment; a failure stays pending and is retried next tick.
+    # give it a moment.
     time.sleep(1)
     result = routing.apply()
-    for error in result.get("errors", []):
-        log(f"routing: {error}")
-    routing_pending = pending_after_apply(result.get("errors", []))
-    if not routing_pending:
-        log(f"routing re-applied: tables {result.get('tables')}")
+    errors = result.get("errors", [])
+    if errors:
+        message = "; ".join(errors)
+        if message != routing_last_error:
+            # A permanent error must not flood the journal every tick.
+            log(f"routing: {message}")
+            routing_last_error = message
+        routing_backoff = min(max(routing_backoff * 2, 10), 300)
+        routing_retry_at = time.time() + routing_backoff
+        routing_pending = True
+        return
+    routing_backoff = 10
+    routing_last_error = ""
+    routing_pending = False
+    log(f"routing re-applied: tables {result.get('tables')}")
 
 
 def probe(exit: dict) -> bool:

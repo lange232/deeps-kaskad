@@ -234,10 +234,17 @@ class ThrottleTests(PanelTestCase):
         self.assertFalse(app.rate_limited("1.1.1.1"))
         self.assertNotIn("ip:1.1.1.1", app._attempts)
 
-    def test_success_clears_the_counters(self):
-        app.note_failure("1.1.1.1", "a@example.com")
-        app.clear_failures("1.1.1.1", "a@example.com")
-        self.assertFalse(app.rate_limited("1.1.1.1", "a@example.com"))
+    def test_ipv6_is_keyed_by_prefix(self):
+        one = app.rate_key("2001:db8:1:2::1")
+        two = app.rate_key("2001:db8:1:2::ffff")
+        self.assertEqual(one, two)
+        self.assertEqual(app.rate_key("10.0.0.1"), "10.0.0.1")
+
+    def test_success_keeps_the_address_counter(self):
+        for n in range(app.IP_LIMIT):
+            app.note_failure("1.1.1.1", f"user{n}@example.com")
+        app.clear_failures("1.1.1.1", "user0@example.com")
+        self.assertTrue(app.rate_limited("1.1.1.1", "fresh@example.com"))
 
     def test_expired_flash_secrets_are_dropped(self):
         app._flash_secrets["stale"] = (time.time() - 1, "password")
@@ -288,9 +295,23 @@ class SessionTests(PanelTestCase):
                          "/login")
 
     def test_healthz_is_public(self):
-        response = self.client.get("/healthz")
+        fresh = {"ts": int(time.time())}
+        with mock.patch.object(app, "read_status", return_value=fresh):
+            response = self.client.get("/healthz")
         self.assertEqual(response.status_code, 200)
         self.assertTrue(response.json()["ok"])
+
+    def test_healthz_reports_a_stale_failover(self):
+        old = {"ts": int(time.time()) - 600}
+        with mock.patch.object(app, "read_status", return_value=old):
+            response = self.client.get("/healthz")
+        self.assertEqual(response.status_code, 503)
+        self.assertFalse(response.json()["ok"])
+
+    def test_healthz_fails_without_a_database(self):
+        with mock.patch.object(app, "db", side_effect=RuntimeError("boom")):
+            response = self.client.get("/healthz")
+        self.assertEqual(response.status_code, 503)
 
 
 class ClientTests(PanelTestCase):
@@ -313,6 +334,8 @@ class ClientTests(PanelTestCase):
         self.assertEqual(user["client_id"], client["id"])
         self.assertEqual(user["email"], "new@example.com")
         app.apply_conf.assert_called()
+        # The tunnel must be configured from the uncommitted transaction.
+        self.assertIsNotNone(app.apply_conf.call_args.args[1])
 
     def test_duplicate_email_creates_nothing(self):
         self.seed_client(email="taken@example.com")
@@ -466,6 +489,8 @@ class UserPageTests(PanelTestCase):
         response = stale.get("/me")
         self.assertEqual(response.status_code, 303)
         self.assertEqual(response.headers["location"], "/login")
+        # The response installed a fresh session for this device.
+        self.assertEqual(self.client.get("/me").status_code, 200)
 
     def test_wrong_current_password_changes_nothing(self):
         self.seed_client(email="c1@example.com")

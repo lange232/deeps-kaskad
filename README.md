@@ -157,13 +157,14 @@ without access to Launchpad.
 
 ## Versioning
 
-`VERSION`, the git tag and the `CHANGELOG.md` release heading change only when
-`develop` is merged into `main`. Work in progress is listed under `Unreleased`.
-A patch release is for an urgent fix, not for every commit.
+`VERSION`, the git tag and the `CHANGELOG.md` release heading change when a
+release is prepared; work in progress is listed under `Unreleased` and tags
+are created only on `main`. A patch release is for an urgent fix, not for
+every commit.
 
 The panel shows the version and the commit it runs; the commit comes from
-`git describe --always --dirty`, so a deploy from an unclean tree is visible
-as `-dirty` instead of silently reporting the last commit.
+`git rev-parse --short` with a `-dirty` suffix when the tree has uncommitted
+changes, so a deploy from an unclean tree is visible.
 
 ## Panel
 
@@ -280,6 +281,7 @@ Restore:
 systemctl stop kaskad-panel kaskad-failover
 mkdir -p /root/kaskad-restore
 tar -xzf /var/backups/kaskad/kaskad-<stamp>.tar.gz -C /root/kaskad-restore panel.db
+rm -f /var/lib/kaskad/panel.db-wal /var/lib/kaskad/panel.db-shm
 install -o root -m 0600 /root/kaskad-restore/panel.db /var/lib/kaskad/panel.db
 tar -xzf /var/backups/kaskad/kaskad-<stamp>.tar.gz -C / --exclude panel.db
 systemctl start kaskad-panel kaskad-failover

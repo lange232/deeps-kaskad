@@ -177,6 +177,13 @@
         set -o pipefail
         python3 - <<'PY'
         import os, sqlite3, subprocess, sys
+        import ipaddress
+
+        def kernel_form(cidr):
+            net = ipaddress.ip_network(cidr, strict=False)
+            if net.prefixlen == net.max_prefixlen:
+                return str(net.network_address)
+            return str(net)
 
         missing = []
         conn = sqlite3.connect("/var/lib/kaskad/panel.db")
@@ -198,7 +205,7 @@
                 continue
             shown_routes = [line.split() for line in res.stdout.splitlines() if line.split()]
             for cidr in [x.strip() for x in (row["routes"] or "").split(",") if x.strip()]:
-                prefix = cidr[:-3] if cidr.endswith("/32") else cidr
+                prefix = kernel_form(cidr)
                 if not any(
                     parts[0] == prefix and f"dev {row['iface']}" in " ".join(parts)
                     for parts in shown_routes
@@ -249,8 +256,8 @@
         newest=$(find "$dir" -maxdepth 1 -type f -name 'kaskad-*.tar.gz' \
             -printf '%T@\n' 2>/dev/null | sort -n | tail -1)
         if [ -z "$newest" ]; then
-            echo "no backups yet"
-            exit 0
+            echo "no backups yet: kaskad-backup.timer has produced nothing"
+            exit 1
         fi
         age=$(( $(date +%s) - ${newest%.*} ))
         echo "newest backup is $((age / 3600))h old"

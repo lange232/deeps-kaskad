@@ -2,7 +2,10 @@
 - name: Product version
   ansible.builtin.set_fact:
     kaskad_version: "{{ lookup('file', kaskad_repo_dir ~ '/VERSION') | trim }}"
-    kaskad_commit: "{{ lookup('pipe', 'git -C ' ~ kaskad_repo_dir ~ ' describe --always --dirty 2>/dev/null || true') | trim }}"
+    kaskad_commit: >-
+      {{ (lookup('pipe', 'git -C ' ~ kaskad_repo_dir ~ ' rev-parse --short=8 HEAD 2>/dev/null || true') | trim)
+         ~ ('' if (lookup('pipe', 'git -C ' ~ kaskad_repo_dir ~ ' status --porcelain --untracked-files=no 2>/dev/null || true') | trim) == ''
+            else '-dirty') }}
 
 - name: Panel packages
   ansible.builtin.apt:

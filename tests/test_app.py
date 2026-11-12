@@ -10,6 +10,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "panel"))
 
@@ -98,7 +99,23 @@ class RenderTests(unittest.TestCase):
         self.assertNotIn("PublicKey = pubkey", app.render_conf(c))
 
     @unittest.skipUnless(app, "fastapi is not installed")
-    def test_disabled_clients_are_left_out(self):
+    def test_failed_apply_restores_the_previous_file(self):
+        c = {
+            "address": "10.80.0.1", "net": "10.80.0.0/24", "port": 51820,
+            "mtu": 1280, "params": {}, "awg_dir": self.tmp.name, "iface": "awg0",
+        }
+        path = Path(self.tmp.name) / "awg0.conf"
+        path.write_text("previous\n")
+        failed = subprocess.CompletedProcess(args=[], returncode=1,
+                                             stdout="", stderr="boom")
+        with mock.patch.object(app, "run", return_value=failed):
+            with self.assertRaises(RuntimeError):
+                app.apply_conf(c)
+        self.assertEqual(path.read_text(), "previous\n")
+
+    @unittest.skipUnless(app, "fastapi is not installed")
+    def test_renderer_does_not_filter_enabled(self):
+        """The caller selects enabled clients; the renderer packs what it gets."""
         c = {
             "address": "10.80.0.1", "net": "10.80.0.0/24", "port": 51820,
             "mtu": 1280, "params": {}, "awg_dir": self.tmp.name,

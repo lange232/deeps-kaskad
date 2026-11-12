@@ -225,10 +225,16 @@ class SyncRoutingTests(unittest.TestCase):
     def setUp(self):
         failover.known_ifaces = None
         failover.routing_pending = False
+        failover.routing_retry_at = 0.0
+        failover.routing_backoff = 10
+        failover.routing_last_error = ""
 
     def tearDown(self):
         failover.known_ifaces = None
         failover.routing_pending = False
+        failover.routing_retry_at = 0.0
+        failover.routing_backoff = 10
+        failover.routing_last_error = ""
 
     def sync(self, ifaces, apply=None):
         apply = apply or mock.Mock(return_value={"errors": [], "tables": []})
@@ -264,10 +270,16 @@ class SyncRoutingTests(unittest.TestCase):
         failing = mock.Mock(return_value={"errors": ["boom"], "tables": []})
         self.sync({"awg0", "awg2"}, failing)
         self.assertTrue(failover.routing_pending)
-        # Same interfaces, but the pending flag keeps retrying.
+        self.assertGreater(failover.routing_backoff, 10)
+        # Within the backoff window the daemon does not hammer the kernel.
+        skipped = self.sync({"awg0", "awg2"})
+        skipped.assert_not_called()
+        # After the window it retries and, on success, clears the state.
+        failover.routing_retry_at = 0.0
         apply = self.sync({"awg0", "awg2"})
         apply.assert_called_once()
         self.assertFalse(failover.routing_pending)
+        self.assertEqual(failover.routing_backoff, 10)
 
 
 class ActiveMarkerTests(unittest.TestCase):

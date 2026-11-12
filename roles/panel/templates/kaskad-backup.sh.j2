@@ -12,17 +12,27 @@ KEEP="{{ kaskad_backup_keep_days }}"
 STAMP="$(date +%Y%m%d-%H%M%S)"
 ARCHIVE="$DEST/kaskad-$STAMP.tar.gz"
 WORK="$(mktemp -d)"
-trap 'rm -rf "$WORK"' EXIT
+trap 'rm -rf "$WORK" "$ARCHIVE.part"' EXIT
 
-mkdir -p "$DEST"
+if [ ! -d "$DEST" ]; then
+    echo "backup directory $DEST is missing (created by the panel role)" >&2
+    exit 1
+fi
 
 # sqlite3 .backup under a running panel: the API takes a consistent snapshot
 # even while the panel writes, and the copy is verified before it is packed.
 /opt/kaskad/venv/bin/python - "$WORK/panel.db" <<'PY'
+import os
 import sqlite3
 import sys
 
-src = sqlite3.connect("/var/lib/kaskad/panel.db", timeout=30)
+source = "/var/lib/kaskad/panel.db"
+if not os.path.exists(source):
+    raise SystemExit(f"{source} does not exist")
+
+# Read-only: a typo or a moved database must not create an empty file that
+# passes the integrity check.
+src = sqlite3.connect(f"file:{source}?mode=ro", uri=True, timeout=30)
 dst = sqlite3.connect(sys.argv[1])
 with dst:
     src.backup(dst)
@@ -42,8 +52,10 @@ for dir in /etc/kaskad /etc/amnezia/amneziawg /etc/letsencrypt; do
         args+=(-C / "${dir#/}")
     fi
 done
-tar -czf "$ARCHIVE" "${args[@]}"
-chmod 0600 "$ARCHIVE"
+# The archive only appears under its final name when it is complete.
+tar -czf "$ARCHIVE.part" "${args[@]}"
+chmod 0600 "$ARCHIVE.part"
+mv "$ARCHIVE.part" "$ARCHIVE"
 
 find "$DEST" -maxdepth 1 -type f -name 'kaskad-*.tar.gz' \
     -mtime "+$KEEP" -delete
