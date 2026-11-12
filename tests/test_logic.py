@@ -61,6 +61,37 @@ class ChooseTests(unittest.TestCase):
         self.assertFalse(clear)
 
 
+class ClientExitTests(unittest.TestCase):
+    def test_first_alive_wins(self):
+        self.assertEqual(failover.pick_client_exit(["awg1", "awg2"], ["awg1", "awg2"]), "awg1")
+
+    def test_falls_to_second_when_first_down(self):
+        self.assertEqual(failover.pick_client_exit(["awg1", "awg2"], {"awg2"}), "awg2")
+
+    def test_order_beats_exit_priority(self):
+        # The client put awg3 first, so it wins even if awg1 is also alive.
+        self.assertEqual(failover.pick_client_exit(["awg3", "awg1"], {"awg1", "awg3"}), "awg3")
+
+    def test_all_down_means_no_internet(self):
+        self.assertIsNone(failover.pick_client_exit(["awg1", "awg2"], set()))
+
+    def test_no_grants(self):
+        self.assertIsNone(failover.pick_client_exit([], {"awg1"}))
+
+
+class ClientTableTests(unittest.TestCase):
+    def test_table_range_is_above_routed(self):
+        self.assertEqual(routing.client_table(7), 3007)
+        self.assertGreater(routing.CLIENT_TABLE_BASE, routing.ROUTED_TABLE_BASE)
+
+    def test_client_tables_are_cleaned(self):
+        self.assertIn(3004, routing.tables_to_flush({3004}, set()))
+        self.assertEqual(routing.tables_to_flush({3004}, set()), [3004])
+
+    def test_client_tables_never_reserved(self):
+        self.assertEqual(routing.tables_to_flush({254, 255, 3001}, {3001}), [3001])
+
+
 class TablesTests(unittest.TestCase):
     def test_unions_current_and_previous(self):
         self.assertEqual(routing.tables_to_flush({1005}, {1001, 1065}), [1001, 1005, 1065])

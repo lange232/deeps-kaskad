@@ -30,6 +30,66 @@
     </div>
   </div>
 
+  {% if internet_exits and cl.internet %}
+  <section>
+    <h2 class="oc-section__title">exit priority</h2>
+    <div class="oc-panel" style="padding:16px">
+      <p class="oc-muted" style="margin:0 0 12px">
+        internet traffic uses the first available exit in this list; if none of them is up,
+        there is no internet.
+      </p>
+      {% if current_exit %}
+      <p style="margin:0 0 12px">
+        in use now: <span class="oc-badge oc-badge--accent">{{ current_exit.name }}</span>
+        <span class="oc-mono oc-muted">{{ current_exit.iface }}</span>
+      </p>
+      {% else %}
+      <p style="margin:0 0 12px">
+        <span class="oc-badge oc-badge--danger">no internet</span>
+        none of the granted exits is up
+      </p>
+      {% endif %}
+      <table class="oc-table">
+        <thead>
+          <tr><th>#</th><th>exit</th><th>interface</th><th>state</th><th></th></tr>
+        </thead>
+        <tbody>
+        {% for e in internet_exits %}
+          <tr>
+            <td class="oc-num">{{ loop.index }}</td>
+            <td>
+              {{ e.name }}
+              {% if current_exit and current_exit.id == e.id %}<span class="oc-badge oc-badge--accent">in use</span>{% endif %}
+            </td>
+            <td class="oc-mono">{{ e.iface }}</td>
+            <td>
+              {% if alive.get(e.iface) %}<span class="oc-badge oc-badge--success">up</span>
+              {% else %}<span class="oc-badge oc-badge--subtle">down</span>{% endif %}
+            </td>
+            <td>
+              <div class="actions">
+                <form method="post" action="/me/exits/move">
+                  <input type="hidden" name="csrf_token" value="{{ csrf }}">
+                  <input type="hidden" name="exit_id" value="{{ e.id }}">
+                  <input type="hidden" name="direction" value="up">
+                  <button class="oc-btn oc-btn--ghost oc-btn--sm" {{ 'disabled' if loop.first }}>up</button>
+                </form>
+                <form method="post" action="/me/exits/move">
+                  <input type="hidden" name="csrf_token" value="{{ csrf }}">
+                  <input type="hidden" name="exit_id" value="{{ e.id }}">
+                  <input type="hidden" name="direction" value="down">
+                  <button class="oc-btn oc-btn--ghost oc-btn--sm" {{ 'disabled' if loop.last }}>down</button>
+                </form>
+              </div>
+            </td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>
+  {% endif %}
+
   <section>
     <h2 class="oc-section__title">configuration</h2>
     <div class="oc-panel" style="padding:16px">

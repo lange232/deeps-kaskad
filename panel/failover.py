@@ -11,6 +11,11 @@ so an unstable link does not cause flapping.
 Manual switch: the panel stores an interface name in the settings table and
 the daemon keeps that exit active while it is enabled and alive. Clearing the
 value returns to automatic selection.
+
+Per-client exits: the administrator grants a set of internet exits to a
+client and the client orders them. Every tick each such client gets a default
+route in its own table pointing at the first granted exit that is alive. If
+none of them is alive the route is removed and that client has no internet.
 """
 from __future__ import annotations
 
@@ -22,6 +27,8 @@ import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
+
+import routing
 
 CONFIG_PATH = Path(os.environ.get("KASKAD_CONFIG", "/etc/kaskad/panel.json"))
 DB_PATH = Path(os.environ.get("KASKAD_DB", "/var/lib/kaskad/panel.db"))
@@ -81,6 +88,66 @@ def exits() -> list[dict]:
         ]
     finally:
         conn.close()
+
+
+def client_grants() -> list[dict]:
+    """Granted internet exits, ordered by the client's own priority."""
+    conn = sqlite3.connect(DB_PATH, timeout=5)
+    conn.row_factory = sqlite3.Row
+    try:
+        return [
+            dict(r)
+            for r in conn.execute(
+                "SELECT ce.client_id, ce.priority AS choice, c.ip, e.iface "
+                "FROM client_internet_exits ce "
+                "JOIN clients c ON c.id = ce.client_id "
+                "AND c.enabled = 1 AND c.internet = 1 "
+                "JOIN exits e ON e.id = ce.exit_id "
+                "AND e.enabled = 1 AND e.mode = 'internet' "
+                "ORDER BY ce.client_id, ce.priority, e.priority, e.id"
+            ).fetchall()
+        ]
+    finally:
+        conn.close()
+
+
+def pick_client_exit(choices: list[str], alive) -> str | None:
+    """First granted exit that is alive, or None when all are down."""
+    for iface in choices:
+        if iface in alive:
+            return iface
+    return None
+
+
+def current_default(table: int) -> str | None:
+    res = run(["ip", "route", "show", "default", "table", str(table)])
+    for line in (res.stdout or "").splitlines():
+        parts = line.split()
+        if "dev" in parts:
+            return parts[parts.index("dev") + 1]
+    return None
+
+
+def apply_client_routes(choices: dict[tuple[int, str], list[str]], alive) -> dict[str, str]:
+    """Points each client table at its first alive granted exit."""
+    used: dict[str, str] = {}
+    for (client_id, ip), order in choices.items():
+        table = routing.CLIENT_TABLE_BASE + client_id
+        desired = pick_client_exit(order, alive)
+        if desired:
+            used[ip] = desired
+        if desired == current_default(table):
+            continue
+        if desired:
+            run(["ip", "route", "replace", "default", "dev", desired,
+                 "table", str(table)])
+            log(f"client {ip}: exit {desired}")
+        else:
+            run(["ip", "route", "del", "default", "table", str(table)])
+            log(f"client {ip}: no granted exit is alive")
+        # Stale conntrack entries keep the source address of the old exit.
+        run(["conntrack", "-D", "-s", f"{ip}/32"], timeout=5)
+    return used
 
 
 def run(cmd: list[str], timeout: int = 5) -> subprocess.CompletedProcess:
@@ -159,11 +226,12 @@ def update_state(exit: dict, ok: bool) -> None:
             st["alive_since"] = 0
 
 
-def write_status(active, rows: list[dict], manual: str = "") -> None:
+def write_status(active, rows: list[dict], manual: str = "", clients=None) -> None:
     payload = {
         "ts": int(time.time()),
         "active": active,
         "manual": manual,
+        "clients": clients or {},
         "exits": {
             e["iface"]: {
                 "name": e["name"],
@@ -233,11 +301,20 @@ def tick(c: dict) -> None:
         set_setting(MANUAL_KEY, "")
         log(f"manual exit {manual} is down, back to automatic")
         manual = ""
-    if desired and desired != active:
+    # The active-exit file outlives a service restart, so repairing the route
+    # is not optional: after a reboot or a manual flush the table can be
+    # empty while the file still names the right exit.
+    if desired and (desired != active or current_default(c["route_table"]) != desired):
         log(f"switching to {desired}")
         switch(desired, c)
 
-    write_status(read_active(), rows, manual)
+    choices: dict[tuple[int, str], list[str]] = {}
+    for grant in client_grants():
+        key = (grant["client_id"], grant["ip"])
+        choices.setdefault(key, []).append(grant["iface"])
+    client_routes = apply_client_routes(choices, alive)
+
+    write_status(read_active(), rows, manual, client_routes)
 
 
 def main() -> None:

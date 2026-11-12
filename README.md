@@ -160,6 +160,12 @@ The administrator manages clients (create, change class and access, account,
 download the config, QR, enable/disable, delete), exits (add, enable/disable,
 delete, manual switch), service status and the action journal.
 
+Internet exits are granted per client: the administrator ticks the exits a
+client may use, and the client puts them in their own order on `/me`.
+Traffic uses the first granted exit that is alive; if none of them is up the
+client has no internet. Clients without granted exits stay on the automatic
+active exit selected by the failover daemon.
+
 Access mode is controlled by `kaskad_panel_expose`: `lan` keeps the port open,
 `clients` exposes it only through the tunnel at `https://10.80.0.1:8080`.
 
