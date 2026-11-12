@@ -258,6 +258,11 @@
     daemon_reload: true
   when: not ansible_check_mode
 
+- name: Apply pending restarts before the first backup
+  # Handlers run at the end of the play by default, which would make the first
+  # archive contain the database and code of the previous release.
+  ansible.builtin.meta: flush_handlers
+
 - name: Backup script
   ansible.builtin.template:
     src: kaskad-backup.sh.j2
