@@ -4,9 +4,10 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 name="${1:-test1}"
+inv="${KASKAD_INVENTORY:-inventory.yml}"
 
 echo "== servers"
-ansible-playbook playbooks/check.yml
+ansible-playbook -i "$inv" playbooks/check.yml
 
 echo
 echo "== client $name"

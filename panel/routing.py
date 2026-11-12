@@ -47,6 +47,36 @@ def routed_table(exit_id: int) -> int:
     return ROUTED_TABLE_BASE + int(exit_id)
 
 
+def tables_to_flush(current: set[int], previous: set[int]) -> list[int]:
+    """Tables to flush: everything we used now or before, never reserved ones."""
+    return sorted(
+        t for t in (current | previous)
+        if t > ROUTED_TABLE_BASE and t not in RESERVED_TABLES
+    )
+
+
+def get_setting(key: str) -> str:
+    conn = sqlite3.connect(DB_PATH, timeout=5)
+    try:
+        row = conn.execute("SELECT value FROM settings WHERE key = ?", (key,)).fetchone()
+        return row[0] if row else ""
+    finally:
+        conn.close()
+
+
+def save_setting(key: str, value: str) -> None:
+    conn = sqlite3.connect(DB_PATH, timeout=5)
+    try:
+        conn.execute(
+            "INSERT INTO settings (key, value) VALUES (?, ?) "
+            "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            (key, value),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def cleanup_rules(internet_table: int) -> None:
     """Removes all rules of ours, no matter who installed them.
 
@@ -67,9 +97,10 @@ def cleanup_rules(internet_table: int) -> None:
         table = spec[idx + 1]
         if not table.isdigit():
             continue
-        if int(table) in RESERVED_TABLES and int(table) != internet_table:
+        value = int(table)
+        if value in RESERVED_TABLES and value != internet_table:
             continue
-        if int(table) == internet_table or ROUTED_TABLE_BASE < int(table) <= ROUTED_TABLE_BASE + 64:
+        if value == internet_table or value > ROUTED_TABLE_BASE:
             run(["ip", "rule", "del"] + spec)
 
 
@@ -88,10 +119,23 @@ def apply() -> dict:
         db.close()
 
     cleanup_rules(internet_table)
-    # Rebuild routed exit tables from scratch; flushing extra ones is harmless.
-    for table in range(ROUTED_TABLE_BASE + 1, ROUTED_TABLE_BASE + 65):
-        if table in RESERVED_TABLES:
-            continue
+
+    # Exit ids grow as exits are added and removed, so the set of tables we
+    # own is persisted in the database instead of assuming a fixed range.
+    current_tables = {
+        routed_table(ex["id"]) for ex in exits
+        if ex["mode"] == "routes" and Path(f"/sys/class/net/{ex['iface']}").exists()
+    }
+    raw_previous = get_setting("routing_tables")
+    if raw_previous:
+        try:
+            previous_tables = {int(x) for x in json.loads(raw_previous)}
+        except (ValueError, TypeError):
+            previous_tables = set()
+    else:
+        # First run on an existing database: clean the legacy range too.
+        previous_tables = set(range(ROUTED_TABLE_BASE + 1, ROUTED_TABLE_BASE + 65))
+    for table in tables_to_flush(current_tables, previous_tables):
         run(["ip", "route", "flush", "table", str(table)])
 
     tables: set[int] = set()
@@ -136,6 +180,7 @@ def apply() -> dict:
         prio = ROUTE_PRIORITY if "to" in rule else INTERNET_PRIORITY
         run(["ip", "rule", "add"] + rule + ["priority", str(prio)])
 
+    save_setting("routing_tables", json.dumps(sorted(tables)))
     return {"rules": len(unique), "tables": sorted(tables)}
 
 

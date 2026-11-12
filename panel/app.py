@@ -499,7 +499,7 @@ def client_view(cl, live: dict, assigned=None) -> dict:
     }
 
 
-def exit_view(e, status: dict, active: str | None) -> dict:
+def exit_view(e, status: dict, active, manual: str = "") -> dict:
     st = status.get("exits", {}).get(e["iface"], {})
     return {
         "id": e["id"],
@@ -514,6 +514,7 @@ def exit_view(e, status: dict, active: str | None) -> dict:
         "alive": st.get("alive"),
         "last_ok": st.get("last_ok", 0),
         "active": e["iface"] == active,
+        "pinned": bool(manual) and e["iface"] == manual,
     }
 
 
@@ -581,7 +582,8 @@ def overview(request: Request, err: str | None = None, ok: str | None = None):
     clients = [client_view(cl, live) for cl in client_rows()]
     status = read_status()
     active = run_dir("active-exit")
-    exits = [exit_view(e, status, active) for e in exits_rows()]
+    manual = setting("manual_exit") or ""
+    exits = [exit_view(e, status, active, manual) for e in exits_rows()]
     with db() as conn:
         events = conn.execute(
             "SELECT ts, action, detail FROM audit ORDER BY id DESC LIMIT 6"
@@ -594,7 +596,7 @@ def overview(request: Request, err: str | None = None, ok: str | None = None):
     return render_page(
         request, "overview.html", "overview",
         csrf=csrf(token), err=err, ok=ok,
-        clients=clients, exits=exits, active_exit=active,
+        clients=clients, exits=exits, active_exit=active, manual_exit=manual,
         active_row=active_exit, online=online, rx=rx, tx=tx,
         status=services(), events=events, net=c["net"],
     )
@@ -610,12 +612,13 @@ def exits_page(request: Request, mode: str | None = None):
     token = require(request)
     status = read_status()
     active = run_dir("active-exit")
-    items = [exit_view(e, status, active) for e in exits_rows()]
+    manual = setting("manual_exit") or ""
+    items = [exit_view(e, status, active, manual) for e in exits_rows()]
     if mode in ("internet", "routes"):
         items = [e for e in items if e["mode"] == mode]
     return render_page(
         request, "exits.html", "exits",
-        csrf=csrf(token), exits=items, mode=mode or "",
+        csrf=csrf(token), exits=items, mode=mode or "", manual_exit=manual,
         counts={
             "all": len(exits_rows()),
             "internet": sum(1 for e in exits_rows() if e["mode"] == "internet"),
@@ -647,10 +650,11 @@ def exit_page(request: Request, eid: int, err: str | None = None, ok: str | None
         raise HTTPException(status_code=404)
     status = read_status()
     active = run_dir("active-exit")
+    manual = setting("manual_exit") or ""
     return render_page(
         request, "exit_detail.html", "exits",
         csrf=csrf(token), err=err, ok=ok,
-        exit=exit_view(row, status, active),
+        exit=exit_view(row, status, active, manual),
         conf=mask_conf(awgconf.render(row["conf"], cfg()["exit_mtu"],
                                       [x.strip() for x in (row["routes"] or "").split(",") if x.strip()] or None)),
         clients=assigned,
@@ -804,10 +808,19 @@ def activate_exit(request: Request, eid: int, csrf_token: str = Form(...)):
         row = conn.execute("SELECT * FROM exits WHERE id = ?", (eid,)).fetchone()
     if not row:
         raise HTTPException(status_code=404)
-    Path("/run/kaskad").mkdir(parents=True, exist_ok=True)
-    (Path("/run/kaskad") / "requested-exit").write_text(row["iface"] + "\n")
-    audit("exit_requested", row["name"])
-    return RedirectResponse("/exits?ok=switch+requested", status_code=303)
+    set_setting("manual_exit", row["iface"])
+    audit("exit_pinned", f"{row['name']} {row['iface']}")
+    return RedirectResponse("/exits?ok=exit+pinned", status_code=303)
+
+
+@app.post("/exits/auto")
+def exit_auto(request: Request, csrf_token: str = Form(...)):
+    token = require(request)
+    if not hmac.compare_digest(csrf_token, csrf(token)):
+        raise HTTPException(status_code=400, detail="csrf")
+    set_setting("manual_exit", "")
+    audit("exit_auto", "")
+    return RedirectResponse("/exits?ok=automatic+selection", status_code=303)
 
 
 # ---------------------------------------------------------------- clients

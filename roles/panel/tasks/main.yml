@@ -50,7 +50,9 @@
     group: root
     mode: "0644"
     directory_mode: "0755"
-  notify: Restart panel
+  notify:
+    - Restart panel
+    - Restart failover
 
 - name: Virtual environment
   ansible.builtin.pip:

@@ -8,9 +8,9 @@ Strict priority: the best alive exit is always active. Returning to a higher
 priority exit only happens after FAILBACK_STABLE seconds of stable operation,
 so an unstable link does not cause flapping.
 
-Manual switch: the panel writes an interface name to
-/run/kaskad/requested-exit and the daemon applies it if the exit is enabled
-and alive.
+Manual switch: the panel stores an interface name in the settings table and
+the daemon keeps that exit active while it is enabled and alive. Clearing the
+value returns to automatic selection.
 """
 from __future__ import annotations
 
@@ -27,8 +27,8 @@ CONFIG_PATH = Path(os.environ.get("KASKAD_CONFIG", "/etc/kaskad/panel.json"))
 DB_PATH = Path(os.environ.get("KASKAD_DB", "/var/lib/kaskad/panel.db"))
 RUN_DIR = Path("/run/kaskad")
 ACTIVE_FILE = RUN_DIR / "active-exit"
-REQUEST_FILE = RUN_DIR / "requested-exit"
 STATUS_FILE = RUN_DIR / "status.json"
+MANUAL_KEY = "manual_exit"
 
 INTERVAL = 10
 DEAD_AFTER = 3
@@ -45,6 +45,28 @@ def log(msg: str) -> None:
 
 def cfg() -> dict:
     return json.loads(CONFIG_PATH.read_text())
+
+
+def get_setting(key: str) -> str:
+    conn = sqlite3.connect(DB_PATH, timeout=5)
+    try:
+        row = conn.execute("SELECT value FROM settings WHERE key = ?", (key,)).fetchone()
+        return row[0] if row else ""
+    finally:
+        conn.close()
+
+
+def set_setting(key: str, value: str) -> None:
+    conn = sqlite3.connect(DB_PATH, timeout=5)
+    try:
+        conn.execute(
+            "INSERT INTO settings (key, value) VALUES (?, ?) "
+            "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            (key, value),
+        )
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def exits() -> list[dict]:
@@ -137,10 +159,11 @@ def update_state(exit: dict, ok: bool) -> None:
             st["alive_since"] = 0
 
 
-def write_status(active: str | None, rows: list[dict]) -> None:
+def write_status(active, rows: list[dict], manual: str = "") -> None:
     payload = {
         "ts": int(time.time()),
         "active": active,
+        "manual": manual,
         "exits": {
             e["iface"]: {
                 "name": e["name"],
@@ -157,50 +180,64 @@ def write_status(active: str | None, rows: list[dict]) -> None:
     write_atomic(STATUS_FILE, json.dumps(payload))
 
 
+def choose(active, alive, manual, alive_since, now, stable):
+    """Pick the active exit.
+
+    alive is a list of interfaces sorted by priority. A manual choice is
+    sticky while that exit is alive; if it died the caller is told to clear
+    it. Automatic selection keeps the current exit until a higher priority
+    one has been stable for `stable` seconds.
+    """
+    if manual:
+        if manual in alive:
+            return manual, False
+        return _auto(active, alive, alive_since, now, stable), True
+    return _auto(active, alive, alive_since, now, stable), False
+
+
+def _auto(active, alive, alive_since, now, stable):
+    if not alive:
+        return None
+    best = alive[0]
+    if best == active:
+        return best
+    if active not in alive:
+        return best
+    since = alive_since.get(best, 0)
+    if since and now - since >= stable:
+        return best
+    return active
+
+
 def tick(c: dict) -> None:
     rows = exits()
     for e in rows:
         if e["enabled"]:
             update_state(e, probe(e))
 
-    alive = [
+    alive_rows = [
         e for e in rows
         if e["enabled"] and e.get("mode") == "internet" and state.get(e["iface"], {}).get("alive")
     ]
+    alive = [e["iface"] for e in alive_rows]
     active = read_active()
+    manual = get_setting(MANUAL_KEY)
+    alive_since = {
+        e["iface"]: state.get(e["iface"], {}).get("alive_since", 0) for e in alive_rows
+    }
 
-    desired = alive[0]["iface"] if alive else None
-
-    # A manual request wins over automation when the exit is alive.
-    requested = ""
-    try:
-        requested = REQUEST_FILE.read_text().strip()
-    except OSError:
-        pass
-    if requested:
-        try:
-            REQUEST_FILE.unlink()
-        except OSError:
-            pass
-        match = next((e for e in alive if e["iface"] == requested), None)
-        if match:
-            desired = match["iface"]
-            log(f"manual switch to {desired}")
-        elif requested:
-            log(f"manual request {requested} rejected: not enabled or not alive")
-
+    desired, clear_manual = choose(
+        active, alive, manual, alive_since, int(time.time()), FAILBACK_STABLE
+    )
+    if clear_manual:
+        set_setting(MANUAL_KEY, "")
+        log(f"manual exit {manual} is down, back to automatic")
+        manual = ""
     if desired and desired != active:
-        active_row = next((e for e in rows if e["iface"] == active), None)
-        active_ok = bool(active_row and active_row["enabled"] and state.get(active, {}).get("alive"))
-        if not active_ok:
-            switch(desired, c)
-        else:
-            since = state.get(desired, {}).get("alive_since", 0)
-            if since and int(time.time()) - since >= FAILBACK_STABLE:
-                log(f"failing back to {desired}")
-                switch(desired, c)
+        log(f"switching to {desired}")
+        switch(desired, c)
 
-    write_status(read_active(), rows)
+    write_status(read_active(), rows, manual)
 
 
 def main() -> None:

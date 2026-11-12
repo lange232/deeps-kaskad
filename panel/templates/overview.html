@@ -74,7 +74,7 @@
         <tbody>
         {% for e in exits %}
           <tr>
-            <td><span class="name-cell">{{ e.name }}{% if e.active %}<span class="oc-badge oc-badge--accent">active</span>{% endif %}</span></td>
+            <td><span class="name-cell">{{ e.name }}{% if e.active %}<span class="oc-badge oc-badge--accent">active</span>{% endif %}{% if e.pinned %}<span class="oc-badge oc-badge--warning">pinned</span>{% endif %}</span></td>
             <td>{% if e.mode == 'routes' %}<span class="oc-badge oc-badge--info">subnets</span>{% else %}<span class="oc-badge oc-badge--success">internet</span>{% endif %}</td>
             <td class="oc-mono">{{ e.iface }}</td>
             <td>

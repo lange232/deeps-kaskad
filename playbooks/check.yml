@@ -13,13 +13,31 @@
       ansible.builtin.debug:
         var: kaskad_show.stdout_lines
 
-    - name: Handshake with the upstream
+    - name: Internet exits configured
+      ansible.builtin.shell: |
+        python3 - <<'PY'
+        import sqlite3, sys
+        conn = sqlite3.connect("/var/lib/kaskad/panel.db")
+        n = conn.execute(
+            "SELECT count(*) FROM exits WHERE enabled = 1 AND mode = 'internet'"
+        ).fetchone()[0]
+        sys.exit(0 if n else 1)
+        PY
+      args:
+        executable: /bin/bash
+      register: kaskad_has_internet
+      changed_when: false
+      failed_when: false
+
+    - name: Handshake with the active exit
       ansible.builtin.shell: |
         set -o pipefail
-        awg show awg1 latest-handshakes | awk '{ if ($NF + 0 > 0) found = 1 } END { exit(found ? 0 : 1) }'
+        iface=$(tr -d '[:space:]' < /run/kaskad/active-exit)
+        awg show "$iface" latest-handshakes | awk '{ if ($NF + 0 > 0) found = 1 } END { exit(found ? 0 : 1) }'
       args:
         executable: /bin/bash
       changed_when: false
+      when: kaskad_has_internet.rc == 0
 
     - name: Transit through the active exit
       ansible.builtin.shell: |
@@ -31,17 +49,64 @@
       register: kaskad_upstream_ping
       changed_when: false
       failed_when: kaskad_upstream_ping.rc != 0
+      when: kaskad_has_internet.rc == 0
 
 - name: S1 entry
   hosts: all
   become: true
   gather_facts: false
   tasks:
-    - name: Routing policy
+    - name: Client routing rules match the database
       ansible.builtin.shell: |
         set -o pipefail
-        ip rule show | grep -q "from 10.80.0.0/24 iif awg0 lookup {{ kaskad_route_table }}"
-        ip route show table {{ kaskad_route_table }} | grep -q "default dev awg"
+        ROUTE_TABLE={{ kaskad_route_table }} TABLE_BASE=1000 python3 - <<'PY'
+        import os, sqlite3, subprocess, sys
+
+        table = os.environ["ROUTE_TABLE"]
+        base = int(os.environ["TABLE_BASE"])
+        rules = subprocess.run(["ip", "rule", "show"], capture_output=True, text=True).stdout
+        missing = []
+
+        conn = sqlite3.connect("/var/lib/kaskad/panel.db")
+        conn.row_factory = sqlite3.Row
+        for cl in conn.execute("SELECT ip, internet FROM clients WHERE enabled = 1"):
+            if cl["internet"] and f"from {cl['ip']} iif awg0 lookup {table}" not in rules:
+                missing.append(f"internet rule for {cl['ip']}")
+
+        for row in conn.execute(
+            "SELECT c.ip, e.id, e.routes FROM client_exits ce "
+            "JOIN clients c ON c.id = ce.client_id "
+            "JOIN exits e ON e.id = ce.exit_id "
+            "WHERE c.enabled = 1 AND e.enabled = 1 AND e.mode = 'routes'"
+        ):
+            for cidr in [x.strip() for x in row["routes"].split(",") if x.strip()]:
+                # iproute2 prints a /32 destination without the prefix length.
+                shown = cidr[:-3] if cidr.endswith("/32") else cidr
+                if f"from {row['ip']} to {shown} iif awg0 lookup {base + row['id']}" not in rules:
+                    missing.append(f"route {row['ip']} -> {cidr}")
+
+        if missing:
+            print("missing rules: " + "; ".join(missing))
+            sys.exit(1)
+        PY
+      args:
+        executable: /bin/bash
+      changed_when: false
+
+    - name: Active internet route present when exits exist
+      ansible.builtin.shell: |
+        set -o pipefail
+        if ip route show table {{ kaskad_route_table }} | grep -q "default dev awg"; then
+            exit 0
+        fi
+        python3 - <<'PY'
+        import sqlite3, sys
+        conn = sqlite3.connect("/var/lib/kaskad/panel.db")
+        n = conn.execute(
+            "SELECT count(*) FROM exits WHERE enabled = 1 AND mode = 'internet'"
+        ).fetchone()[0]
+        sys.exit(1 if n else 0)
+        PY
       args:
         executable: /bin/bash
       changed_when: false
@@ -54,11 +119,12 @@
       args:
         executable: /bin/bash
       changed_when: false
+      when: kaskad_has_internet.rc == 0
 
     - name: NAT towards the upstream
       ansible.builtin.shell: |
         set -o pipefail
-        iptables -t nat -S POSTROUTING | grep -q "10.80.0.0/24"
+        iptables -t nat -S POSTROUTING | grep -qE "10\.80\.0\.0/24.*-o awg\+.*MASQUERADE"
       args:
         executable: /bin/bash
       changed_when: false
@@ -66,7 +132,8 @@
     - name: Client traffic allowed in FORWARD
       ansible.builtin.shell: |
         set -o pipefail
-        iptables -C FORWARD -i awg0 ! -o awg0 -j ACCEPT
+        iptables -C FORWARD -i awg0 -o awg+ -j ACCEPT
+        iptables -C FORWARD -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
         iptables -C FORWARD -i awg0 -j DROP
       args:
         executable: /bin/bash

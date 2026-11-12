@@ -7,6 +7,7 @@
   <div class="name-cell">
     <h1 style="margin:0">{{ exit.name }}</h1>
     {% if exit.active %}<span class="oc-badge oc-badge--accent">active</span>{% endif %}
+    {% if exit.pinned %}<span class="oc-badge oc-badge--warning">pinned</span>{% endif %}
     {% if not exit.enabled %}<span class="oc-badge oc-badge--subtle">disabled</span>
     {% elif exit.alive %}<span class="oc-badge oc-badge--success"><span class="oc-dot"></span>up</span>
     {% elif exit.alive is none %}<span class="oc-badge">no data</span>
@@ -38,7 +39,13 @@
       {% if exit.mode == 'internet' %}
       <form method="post" action="/exits/{{ exit.id }}/activate">
         <input type="hidden" name="csrf_token" value="{{ csrf }}">
-        <button class="oc-btn oc-btn--outline oc-btn--sm" {{ 'disabled' if exit.active or not exit.enabled }}>make active</button>
+        <button class="oc-btn oc-btn--outline oc-btn--sm" {{ 'disabled' if (exit.active and exit.pinned) or not exit.enabled }}>make active</button>
+      </form>
+      {% endif %}
+      {% if exit.pinned %}
+      <form method="post" action="/exits/auto">
+        <input type="hidden" name="csrf_token" value="{{ csrf }}">
+        <button class="oc-btn oc-btn--neutral oc-btn--sm">return to auto</button>
       </form>
       {% endif %}
       <form method="post" action="/exits/{{ exit.id }}/toggle">
