@@ -1,0 +1,82 @@
+---
+- name: Interface state
+  hosts: all
+  become: true
+  gather_facts: false
+  tasks:
+    - name: awg show
+      ansible.builtin.command: awg show
+      register: kaskad_show
+      changed_when: false
+
+    - name: Show
+      ansible.builtin.debug:
+        var: kaskad_show.stdout_lines
+
+    - name: Handshake with the upstream
+      ansible.builtin.shell: |
+        set -o pipefail
+        awg show awg1 latest-handshakes | awk '{ if ($NF + 0 > 0) found = 1 } END { exit(found ? 0 : 1) }'
+      args:
+        executable: /bin/bash
+      changed_when: false
+
+    - name: Transit through the active exit
+      ansible.builtin.shell: |
+        set -o pipefail
+        iface=$(tr -d '[:space:]' < /run/kaskad/active-exit)
+        ping -c2 -W3 -I "$iface" 1.1.1.1
+      args:
+        executable: /bin/bash
+      register: kaskad_upstream_ping
+      changed_when: false
+      failed_when: kaskad_upstream_ping.rc != 0
+
+- name: S1 entry
+  hosts: all
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Routing policy
+      ansible.builtin.shell: |
+        set -o pipefail
+        ip rule show | grep -q "from 10.80.0.0/24 iif awg0 lookup {{ kaskad_route_table }}"
+        ip route show table {{ kaskad_route_table }} | grep -q "default dev awg"
+      args:
+        executable: /bin/bash
+      changed_when: false
+
+    - name: Active exit recorded
+      ansible.builtin.shell: |
+        set -o pipefail
+        [ -s /run/kaskad/active-exit ]
+        [ -e "/sys/class/net/$(tr -d '[:space:]' < /run/kaskad/active-exit)" ]
+      args:
+        executable: /bin/bash
+      changed_when: false
+
+    - name: NAT towards the upstream
+      ansible.builtin.shell: |
+        set -o pipefail
+        iptables -t nat -S POSTROUTING | grep -q "10.80.0.0/24"
+      args:
+        executable: /bin/bash
+      changed_when: false
+
+    - name: Client traffic allowed in FORWARD
+      ansible.builtin.shell: |
+        set -o pipefail
+        iptables -C FORWARD -i awg0 ! -o awg0 -j ACCEPT
+        iptables -C FORWARD -i awg0 -j DROP
+      args:
+        executable: /bin/bash
+      changed_when: false
+
+    - name: Client peers
+      ansible.builtin.command: awg show awg0
+      register: kaskad_awg0_show
+      changed_when: false
+
+    - name: Show awg0
+      ansible.builtin.debug:
+        var: kaskad_awg0_show.stdout_lines

@@ -1,0 +1,129 @@
+{% extends "base.html" %}
+{% block title %}overview — deeps kaskad{% endblock %}
+{% block body %}
+<div class="page-head">
+  <h1>Overview</h1>
+  <p class="oc-muted">cascade state and recent events</p>
+</div>
+
+{% if err %}<div class="oc-alert oc-alert--danger" style="margin-bottom:16px"><span class="oc-dot" style="margin-top:7px"></span><div class="oc-alert__body">{{ err }}</div></div>{% endif %}
+{% if ok %}<div class="oc-alert oc-alert--success" style="margin-bottom:16px"><span class="oc-dot" style="margin-top:7px"></span><div class="oc-alert__body">{{ ok }}</div></div>{% endif %}
+
+<div class="stack">
+  <div class="stat-grid">
+    <div class="stat-tile">
+      <div class="stat-label">active exit</div>
+      <div class="stat-value">{{ active_row.name if active_row else '—' }}</div>
+      <div class="stat-sub oc-mono">
+        {% if active_row %}{{ active_row.iface }} · {{ active_row.endpoint }}{% else %}no healthy internet exit{% endif %}
+      </div>
+    </div>
+    <div class="stat-tile">
+      <div class="stat-label">clients online</div>
+      <div class="stat-value">{{ online }}<span class="of">of {{ clients | length }}</span></div>
+      <div class="stat-sub">handshake younger than 3 minutes</div>
+    </div>
+    <div class="stat-tile">
+      <div class="stat-label">client traffic</div>
+      <div class="stat-value oc-num">{{ (rx / 1048576) | round(1) }}<span class="of">/ {{ (tx / 1048576) | round(1) }} MiB</span></div>
+      <div class="stat-sub">received / sent</div>
+    </div>
+    <div class="stat-tile">
+      <div class="stat-label">exits</div>
+      <div class="stat-value">{{ exits | selectattr('alive') | list | length }}<span class="of">of {{ exits | length }}</span></div>
+      <div class="stat-sub">alive by health-check</div>
+    </div>
+  </div>
+
+  <section>
+    <div class="toolbar">
+      <h2 class="oc-section__title" style="margin:0">services</h2>
+      <a class="oc-btn oc-btn--ghost oc-btn--sm" href="/settings">settings</a>
+    </div>
+    <div class="oc-panel">
+      <table class="oc-table">
+        <tbody>
+          {% for key, label, desc in [
+            ('awg0', 'awg-quick@awg0', 'client tunnel'),
+            ('routing', 'kaskad-routing', 'routing tables and rules'),
+            ('firewall', 'kaskad-firewall', 'iptables, NAT, MSS'),
+            ('failover', 'kaskad-failover', 'active exit selection') ] %}
+          <tr>
+            <td class="oc-mono" style="width:220px">{{ label }}</td>
+            <td style="width:130px">
+              <span class="oc-badge {{ 'oc-badge--success' if status[key] == 'active' else 'oc-badge--danger' }}">
+                <span class="oc-dot"></span>{{ status[key] }}
+              </span>
+            </td>
+            <td class="oc-muted">{{ desc }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section>
+    <div class="toolbar">
+      <h2 class="oc-section__title" style="margin:0">exits</h2>
+      <a class="oc-btn oc-btn--ghost oc-btn--sm" href="/exits">all exits</a>
+    </div>
+    <div class="oc-panel">
+      <table class="oc-table">
+        <thead><tr><th>name</th><th>mode</th><th>interface</th><th>state</th><th></th></tr></thead>
+        <tbody>
+        {% for e in exits %}
+          <tr>
+            <td><span class="name-cell">{{ e.name }}{% if e.active %}<span class="oc-badge oc-badge--accent">active</span>{% endif %}</span></td>
+            <td>{% if e.mode == 'routes' %}<span class="oc-badge oc-badge--info">subnets</span>{% else %}<span class="oc-badge oc-badge--success">internet</span>{% endif %}</td>
+            <td class="oc-mono">{{ e.iface }}</td>
+            <td>
+              {% if not e.enabled %}<span class="oc-badge oc-badge--subtle">disabled</span>
+              {% elif e.alive %}<span class="oc-badge oc-badge--success"><span class="oc-dot"></span>up</span>
+              {% else %}<span class="oc-badge oc-badge--danger"><span class="oc-dot"></span>down</span>{% endif %}
+            </td>
+            <td><a class="oc-btn oc-btn--ghost oc-btn--sm" href="/exits/{{ e.id }}">open</a></td>
+          </tr>
+        {% else %}
+          <tr><td colspan="5" class="oc-muted">no exits — clients will have no internet.</td></tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section>
+    <div class="toolbar">
+      <h2 class="oc-section__title" style="margin:0">recent events</h2>
+      <a class="oc-btn oc-btn--ghost oc-btn--sm" href="/journal">full journal</a>
+    </div>
+    <div class="oc-panel">
+      <table class="oc-table">
+        <tbody>
+        {% for e in events %}
+          <tr>
+            <td class="oc-mono oc-muted" style="width:150px; white-space:nowrap">{{ e.ts[:16] | replace('T', ' ') }}</td>
+            <td style="width:150px">{{ e.action }}</td>
+            <td class="oc-muted">{{ e.detail or '' }}</td>
+          </tr>
+        {% else %}
+          <tr><td class="oc-muted">no events yet.</td></tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>
+</div>
+
+<script>
+function rel(ts) {
+  if (!ts || Number(ts) <= 0) return 'no data';
+  const d = Math.floor(Date.now() / 1000 - Number(ts));
+  if (d < 60) return d + 's ago';
+  if (d < 3600) return Math.floor(d / 60) + 'm ago';
+  if (d < 86400) return Math.floor(d / 3600) + 'h ago';
+  return Math.floor(d / 86400) + 'd ago';
+}
+setTimeout(() => location.reload(), 15000);
+</script>
+{% endblock %}

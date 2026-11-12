@@ -1,0 +1,75 @@
+#!/bin/bash
+# {{ ansible_managed }}
+# Rules for client traffic. iptables, not a separate nft table: on hosts
+# with Docker the FORWARD policy is DROP, and a separate inet table cannot
+# override it — a packet is dropped by any base chain that says so.
+set -euo pipefail
+
+CLIENTS={{ kaskad_clients_net }}
+AWG0=awg0
+PANEL_PORT={{ kaskad_panel_port }}
+EXPOSE={{ kaskad_panel_expose }}
+
+# ensure <table> <chain> <rule...> — insert at the top if not present.
+ensure() {
+    local table="$1" chain="$2"
+    shift 2
+    if ! iptables -t "$table" -C "$chain" "$@" 2>/dev/null; then
+        iptables -t "$table" -I "$chain" 1 "$@"
+    fi
+}
+
+# del <table> <chain> <rule...> — remove every occurrence.
+del() {
+    local table="$1" chain="$2"
+    shift 2
+    while iptables -t "$table" -C "$chain" "$@" 2>/dev/null; do
+        iptables -t "$table" -D "$chain" "$@"
+    done
+}
+
+up() {
+    # Return traffic from exits to clients: the FORWARD policy is DROP
+    # (set by Docker), so established flows must be allowed explicitly.
+    ensure filter FORWARD -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+
+    # Order matters: insert the drop first, then the accepts before it.
+    # Only tunnels (awg+) are allowed, never eth0: otherwise a client
+    # without an internet exit would leak through the default gateway.
+    ensure filter FORWARD -i "$AWG0" -j DROP
+    ensure filter FORWARD -i "$AWG0" -o "$AWG0" -j ACCEPT
+    ensure filter FORWARD -i "$AWG0" -o awg+ -j ACCEPT
+
+    ensure filter INPUT -p udp --dport {{ kaskad_awg0_port }} -j ACCEPT
+    ensure filter INPUT -p tcp --dport "$PANEL_PORT" -j ACCEPT
+
+    if [ "$EXPOSE" = "clients" ]; then
+        ensure filter INPUT ! -i "$AWG0" -p tcp --dport "$PANEL_PORT" -j DROP
+    else
+        del filter INPUT ! -i "$AWG0" -p tcp --dport "$PANEL_PORT" -j DROP
+    fi
+
+    ensure mangle FORWARD -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu
+    # NAT only towards tunnels; client-to-client traffic is untouched.
+    ensure nat POSTROUTING -s "$CLIENTS" -o awg+ ! -d "$CLIENTS" -j MASQUERADE
+}
+
+down() {
+    del filter FORWARD -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+    del filter FORWARD -i "$AWG0" -o awg+ -j ACCEPT
+    del filter FORWARD -i "$AWG0" ! -o "$AWG0" -j ACCEPT
+    del filter FORWARD -i "$AWG0" -o "$AWG0" -j ACCEPT
+    del filter FORWARD -i "$AWG0" -j DROP
+    del filter INPUT -p udp --dport {{ kaskad_awg0_port }} -j ACCEPT
+    del filter INPUT -p tcp --dport "$PANEL_PORT" -j ACCEPT
+    del filter INPUT ! -i "$AWG0" -p tcp --dport "$PANEL_PORT" -j DROP
+    del mangle FORWARD -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu
+    del nat POSTROUTING -s "$CLIENTS" -o awg+ ! -d "$CLIENTS" -j MASQUERADE
+    del nat POSTROUTING -s "$CLIENTS" ! -o "$AWG0" -j MASQUERADE
+}
+
+case "${1:-up}" in
+    up) up ;;
+    down) down ;;
+    *) echo "usage: $0 {up|down}" >&2; exit 2 ;;
+esac

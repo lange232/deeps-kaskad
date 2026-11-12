@@ -1,0 +1,64 @@
+{% extends "base.html" %}
+{% block title %}clients — deeps kaskad{% endblock %}
+{% block body %}
+<div class="page-head">
+  <h1>Clients</h1>
+  <p class="oc-muted">internet and subnet access</p>
+</div>
+
+<div class="toolbar">
+  <form method="get" action="/clients" class="actions" style="flex:1; max-width:360px">
+    <input class="oc-input oc-input--sm" type="text" name="q" value="{{ q }}" placeholder="search by name or address">
+    <button class="oc-btn oc-btn--neutral oc-btn--sm">search</button>
+    {% if q %}<a class="oc-btn oc-btn--ghost oc-btn--sm" href="/clients">reset</a>{% endif %}
+  </form>
+  <a class="oc-btn oc-btn--contrast oc-btn--sm" href="/clients/new">add client</a>
+</div>
+
+{% if clients %}
+<div class="oc-panel">
+  <table class="oc-table">
+    <thead>
+      <tr><th>name</th><th>address</th><th>access</th><th>handshake</th><th>rx / tx</th><th>state</th><th></th></tr>
+    </thead>
+    <tbody>
+    {% for c in clients %}
+      <tr>
+        <td>{{ c.name }}</td>
+        <td class="oc-mono oc-num">{{ c.ip }}</td>
+        <td>
+          <div class="actions">
+            {% if c.internet %}<span class="oc-badge oc-badge--success">internet</span>{% endif %}
+            {% for name in c.exits %}<span class="oc-badge oc-badge--info">{{ name }}</span>{% endfor %}
+            {% if not c.internet and not c.exits %}<span class="oc-badge oc-badge--danger">no access</span>{% endif %}
+          </div>
+        </td>
+        <td class="oc-num" data-hs="{{ c.handshake }}">—</td>
+        <td class="oc-num">{{ (c.rx / 1048576) | round(1) }} / {{ (c.tx / 1048576) | round(1) }} MiB</td>
+        <td>
+          {% if c.enabled %}<span class="oc-badge oc-badge--success"><span class="oc-dot"></span>enabled</span>
+          {% else %}<span class="oc-badge oc-badge--subtle">disabled</span>{% endif %}
+        </td>
+        <td><a class="oc-btn oc-btn--outline oc-btn--sm" href="/clients/{{ c.id }}">open</a></td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% else %}
+<div class="oc-empty">{% if q %}nothing found{% else %}no clients yet{% endif %}</div>
+{% endif %}
+
+<script>
+function rel(ts) {
+  if (!ts || Number(ts) <= 0) return 'no data';
+  const d = Math.floor(Date.now() / 1000 - Number(ts));
+  if (d < 60) return d + 's ago';
+  if (d < 3600) return Math.floor(d / 60) + 'm ago';
+  if (d < 86400) return Math.floor(d / 3600) + 'h ago';
+  return Math.floor(d / 86400) + 'd ago';
+}
+for (const el of document.querySelectorAll('[data-hs]')) el.textContent = rel(el.dataset.hs);
+setTimeout(() => location.reload(), 15000);
+</script>
+{% endblock %}

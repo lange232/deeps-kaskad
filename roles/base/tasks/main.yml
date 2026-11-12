@@ -1,0 +1,50 @@
+---
+- name: Base packages
+  ansible.builtin.apt:
+    update_cache: true
+    cache_valid_time: 3600
+    state: present
+    name:
+      - iproute2
+      - iptables
+      - nftables
+      - curl
+      - dnsutils
+      - tcpdump
+      - gnupg2
+      - software-properties-common
+      - python3-launchpadlib
+      - ca-certificates
+
+- name: Kernel parameters
+  ansible.builtin.copy:
+    dest: /etc/sysctl.d/60-kaskad.conf
+    mode: "0644"
+    content: |
+      net.ipv4.ip_forward = 1
+      net.ipv4.conf.all.src_valid_mark = 1
+      net.ipv4.conf.all.send_redirects = 0
+      net.ipv4.conf.default.send_redirects = 0
+      net.ipv4.conf.all.accept_redirects = 0
+      net.ipv4.conf.default.accept_redirects = 0
+      net.ipv4.conf.all.accept_source_route = 0
+      net.ipv4.tcp_mtu_probing = 1
+
+- name: Apply kernel parameters
+  ansible.builtin.command: sysctl --system
+  changed_when: false
+
+- name: AmneziaWG configuration directory
+  ansible.builtin.file:
+    path: "{{ kaskad_awg_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0700"
+
+- name: Verify forwarding
+  ansible.builtin.command: sysctl -n net.ipv4.ip_forward
+  register: kaskad_fwd
+  changed_when: false
+  when: not ansible_check_mode
+  failed_when: kaskad_fwd.stdout | trim != "1"

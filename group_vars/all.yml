@@ -1,0 +1,55 @@
+---
+# Shared topology settings. Change here; roles pick them up.
+
+# Client segment (plain WireGuard on the wire, S1 entry).
+kaskad_clients_net: 10.80.0.0/24
+kaskad_s1_clients_ip: 10.80.0.1
+kaskad_awg0_port: 51820
+kaskad_awg0_mtu: 1280
+
+# Upstream: S1 is a client of an external AmneziaWG server.
+# The provider config lives in the panel database; exits are added in the UI.
+kaskad_awg1_mtu: 1340
+kaskad_dns: "1.1.1.1, 1.0.0.1"
+
+# Routing
+kaskad_route_table: 100
+
+# Panel
+kaskad_endpoint: "{{ ansible_host }}"
+kaskad_panel_port: 8080
+# lan — port open to the network; clients — only through awg0
+kaskad_panel_expose: lan
+kaskad_panel_tls_regen: auto
+kaskad_panel_san: "DNS:{{ ansible_host }},IP:{{ ansible_default_ipv4.address }},IP:{{ kaskad_s1_clients_ip }}"
+kaskad_panel_san_list: "{{ kaskad_panel_san | regex_replace('(IP Address:|IP:|DNS:)', '') | split(',') | map('trim') | sort | join(' ') }}"
+
+# Paths
+kaskad_awg_dir: /etc/amnezia/amneziawg
+kaskad_repo_dir: "{{ playbook_dir | dirname }}"
+
+# Where amneziawg comes from: ppa (ppa:amnezia/ppa) or local
+# (files/awg/*.deb for hosts without access to Launchpad).
+kaskad_awg_packages_mode: ppa
+kaskad_awg_local_packages:
+  - amneziawg-tools_1.0.20210914-0~202608130144+ee0f0a9~ubuntu24.04.1_amd64.deb
+  - amneziawg-dkms_1.0.0-0~202609061402+4569c4c~ubuntu24.04.1_all.deb
+  - amneziawg_1.0.20210914-0~202608130144+ee0f0a9~ubuntu24.04.1_all.deb
+
+# awg0 parameters: neutral, so a stock WireGuard client works unchanged.
+# Key order does not matter.
+kaskad_awg0_params:
+  Jc: 0
+  Jmin: 0
+  Jmax: 0
+  S1: 0
+  S2: 0
+  S3: 0
+  S4: 0
+  H1: 1
+  H2: 2
+  H3: 3
+  H4: 4
+  ContentPaddingAddition: 0
+  RandomTrailers: "off"
+  DisableCookies: "off"

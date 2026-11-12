@@ -1,0 +1,22 @@
+state/
+__pycache__/
+.venv/
+
+# agent and local editor files
+AGENTS.md
+CLAUDE.md
+.opencode/
+.cursor/
+.cursorrules
+.github/copilot-instructions.md
+.idea/
+.vscode/
+.aider*
+
+# environment-specific, never published
+inventory.yml
+inventory.lab*.yml
+host_vars/*.yml
+!host_vars/example.yml
+internal/
+files/awg/*.deb

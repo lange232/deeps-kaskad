@@ -1,0 +1,48 @@
+opencode-ui — дизайн-токены и компоненты в стиле OpenCode
+
+Значения токенов, метрики контролов и визуальные приёмы в этом скилле
+сняты с открытого проекта OpenCode:
+  https://github.com/anomalyco/opencode
+  пакеты packages/ui (файлы packages/ui/src/styles/**/*.css,
+  packages/ui/src/**/ *.css, packages/ui/src/theme/themes/oc-2.json)
+
+OpenCode распространяется под лицензией MIT:
+
+  MIT License
+
+  Copyright (c) 2025 opencode
+
+  Permission is hereby granted, free of charge, to any person obtaining a copy
+  of this software and associated documentation files (the "Software"), to deal
+  in the Software without restriction, including without limitation the rights
+  to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+  copies of the Software, and to permit persons to whom the Software is
+  furnished to do so, subject to the following conditions:
+
+  The above copyright notice and this permission notice shall be included in all
+  copies or substantial portions of the Software.
+
+  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+  IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+  FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+  AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+  LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+  OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+  SOFTWARE.
+
+CSS в этом скилле переписан: собственные имена переменных (--ui-*),
+собственные классы (.oc-*), собственная структура. Код OpenCode не
+копировался построчно, но значения и пропорции производны от него,
+поэтому лицензия и уведомление сохранены.
+
+Шрифты в комплект не входят и не распространяются вместе со скиллом:
+
+  Inter — SIL Open Font License 1.1, https://rsms.me/inter/
+  IBM Plex Mono — SIL Open Font License 1.1,
+    https://github.com/IBM/plex
+  JetBrains Mono (используется в OpenCode как Nerd Font вариант) —
+    SIL Open Font License 1.1, https://www.jetbrains.com/lp/mono/
+
+При самохостинге шрифтов приложите их тексты OFL. Названия «OpenCode»,
+логотип и бренд-цвета принадлежат проекту OpenCode; этот скилл не
+является официальным и не должен выдавать сторонний продукт за OpenCode.

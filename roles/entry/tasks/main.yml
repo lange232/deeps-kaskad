@@ -1,0 +1,50 @@
+---
+# S1 entry: client traffic routing and iptables rules. Clients and exits are
+# owned by the panel and are not managed here.
+- name: Remove the script from the old scheme
+  ansible.builtin.file:
+    path: /usr/local/sbin/kaskad-routing
+    state: absent
+
+- name: Routing policy unit
+  ansible.builtin.template:
+    src: kaskad-routing.service.j2
+    dest: /etc/systemd/system/kaskad-routing.service
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart kaskad-routing
+
+- name: Firewall script
+  ansible.builtin.template:
+    src: kaskad-firewall.sh.j2
+    dest: /usr/local/sbin/kaskad-firewall
+    owner: root
+    group: root
+    mode: "0755"
+  notify: Restart firewall
+
+- name: Firewall unit
+  ansible.builtin.template:
+    src: kaskad-firewall.service.j2
+    dest: /etc/systemd/system/kaskad-firewall.service
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart firewall
+
+- name: Rules enabled
+  ansible.builtin.systemd:
+    name: kaskad-firewall
+    enabled: true
+    state: started
+    daemon_reload: true
+  when: not ansible_check_mode
+
+- name: Routing policy enabled
+  ansible.builtin.systemd:
+    name: kaskad-routing
+    enabled: true
+    state: started
+    daemon_reload: true
+  when: not ansible_check_mode

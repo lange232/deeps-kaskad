@@ -1,0 +1,73 @@
+{% extends "base.html" %}
+{% block title %}new exit — deeps kaskad{% endblock %}
+{% block body %}
+<div class="crumbs"><a href="/exits">Exits</a><span>/</span><span>new</span></div>
+<div class="page-head">
+  <h1>New exit</h1>
+  <p class="oc-muted">AmneziaWG or plain WireGuard</p>
+</div>
+
+{% if err %}<div class="oc-alert oc-alert--danger" style="margin-bottom:16px"><span class="oc-dot" style="margin-top:7px"></span><div class="oc-alert__body">{{ err }}</div></div>{% endif %}
+
+<div class="oc-panel" style="padding:16px; max-width:780px">
+  <form method="post" action="/exits">
+    <input type="hidden" name="csrf_token" value="{{ csrf }}">
+    <div class="form-grid">
+      <label class="oc-field">
+        <span class="oc-field__label">name</span>
+        <input class="oc-input" type="text" name="name" value="{{ form.name }}"
+               placeholder="de1" required maxlength="32" spellcheck="false">
+      </label>
+      <label class="oc-field">
+        <span class="oc-field__label">mode</span>
+        <span class="oc-select-wrap">
+          <select class="oc-select" name="mode" id="exit-mode">
+            <option value="internet" {{ 'selected' if form.mode == 'internet' }}>internet exit</option>
+            <option value="routes" {{ 'selected' if form.mode == 'routes' }}>subnets only</option>
+          </select>
+        </span>
+      </label>
+      <label class="oc-field">
+        <span class="oc-field__label">priority</span>
+        <input class="oc-input" type="text" name="priority" value="{{ form.priority }}"
+               placeholder="10" inputmode="numeric">
+        <span class="oc-hint">lower is more important</span>
+      </label>
+      <label class="oc-field" id="exit-routes-row">
+        <span class="oc-field__label">subnets</span>
+        <input class="oc-input" type="text" name="routes" value="{{ form.routes }}"
+               placeholder="192.168.50.0/24, 10.20.0.0/24">
+      </label>
+      <label class="oc-field" id="exit-dns-row">
+        <span class="oc-field__label">DNS from the subnet</span>
+        <input class="oc-input" type="text" name="dns" value="{{ form.dns }}"
+               placeholder="192.168.50.1">
+        <span class="oc-hint">for clients without internet</span>
+      </label>
+      <label class="oc-field full">
+        <span class="oc-field__label">provider config</span>
+        <textarea class="oc-input oc-textarea" name="conf" required
+          placeholder="[Interface]&#10;Address = ...&#10;PrivateKey = ...&#10;&#10;[Peer]&#10;PublicKey = ...&#10;Endpoint = host:port"></textarea>
+        <span class="oc-hint">DNS, PostUp and IPv6 are stripped automatically; neutral parameters are added for plain WG.</span>
+      </label>
+    </div>
+    <div class="actions" style="margin-top:16px">
+      <button class="oc-btn oc-btn--contrast">add</button>
+      <a class="oc-btn oc-btn--ghost" href="/exits">cancel</a>
+    </div>
+  </form>
+</div>
+
+<script>
+const mode = document.getElementById('exit-mode');
+const routesRow = document.getElementById('exit-routes-row');
+const dnsRow = document.getElementById('exit-dns-row');
+function syncMode() {
+  const routes = mode.value === 'routes';
+  routesRow.style.display = routes ? '' : 'none';
+  dnsRow.style.display = routes ? '' : 'none';
+}
+mode.addEventListener('change', syncMode);
+syncMode();
+</script>
+{% endblock %}

@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+{% block title %}journal — deeps kaskad{% endblock %}
+{% block body %}
+<div class="page-head">
+  <h1>Journal</h1>
+  <p class="oc-muted">panel actions · {{ total }} entries</p>
+</div>
+
+<div class="toolbar">
+  <div class="oc-tabs oc-tabs--pill" role="tablist" style="overflow-x:auto">
+    <a class="oc-tabs__item" role="tab" aria-selected="{{ 'true' if not action else 'false' }}" href="/journal">all</a>
+    {% for a in actions %}
+    <a class="oc-tabs__item" role="tab" aria-selected="{{ 'true' if action == a else 'false' }}" href="/journal?action={{ a }}">{{ a }}</a>
+    {% endfor %}
+  </div>
+</div>
+
+{% if events %}
+<div class="oc-panel">
+  <table class="oc-table">
+    <thead><tr><th style="width:150px">time</th><th style="width:160px">action</th><th>details</th></tr></thead>
+    <tbody>
+    {% for e in events %}
+      <tr>
+        <td class="oc-mono oc-muted" style="white-space:nowrap">{{ e.ts[:16] | replace('T', ' ') }}</td>
+        <td>{{ e.action }}</td>
+        <td class="oc-muted">{{ e.detail or '' }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+{% if pages > 1 %}
+<div class="actions" style="margin-top:14px; justify-content:space-between">
+  <div class="oc-muted" style="font-size:12px">page {{ page }} of {{ pages }}</div>
+  <div class="actions">
+    {% if page > 1 %}<a class="oc-btn oc-btn--ghost oc-btn--sm" href="/journal?page={{ page - 1 }}{{ '&action=' ~ action if action }}">back</a>{% endif %}
+    {% if page < pages %}<a class="oc-btn oc-btn--ghost oc-btn--sm" href="/journal?page={{ page + 1 }}{{ '&action=' ~ action if action }}">next</a>{% endif %}
+  </div>
+</div>
+{% endif %}
+{% else %}
+<div class="oc-empty">no entries</div>
+{% endif %}
+{% endblock %}

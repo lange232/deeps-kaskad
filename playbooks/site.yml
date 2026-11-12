@@ -1,0 +1,41 @@
+---
+- name: Preparation
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    kaskad_repo: "{{ playbook_dir | dirname }}"
+  tasks:
+    - name: Legacy client registry present?
+      ansible.builtin.stat:
+        path: "{{ kaskad_repo }}/state/clients.yml"
+      register: kaskad_legacy_clients
+
+    - name: Build the panel seed
+      ansible.builtin.command:
+        cmd: python3 {{ kaskad_repo }}/scripts/make-seed.py
+      register: kaskad_seed_make
+      changed_when: false
+      when: kaskad_legacy_clients.stat.exists
+
+- name: Base layer
+  hosts: all
+  become: true
+  roles:
+    - role: base
+      tags: [base]
+    - role: amneziawg
+      tags: [amneziawg]
+- name: Panel
+  hosts: all
+  become: true
+  roles:
+    - role: panel
+      tags: [panel]
+
+- name: Network and firewall
+  hosts: all
+  become: true
+  roles:
+    - role: entry
+      tags: [entry]

@@ -1,0 +1,83 @@
+---
+- name: Kernel headers
+  ansible.builtin.apt:
+    state: present
+    name: "linux-headers-{{ ansible_kernel }}"
+
+- name: DKMS dependencies
+  ansible.builtin.apt:
+    state: present
+    name:
+      - dkms
+      - build-essential
+      - perl-base
+
+- name: Packages from the repository
+  when: kaskad_awg_packages_mode == 'ppa'
+  block:
+    - name: Amnezia repository
+      ansible.builtin.apt_repository:
+        repo: ppa:amnezia/ppa
+        state: present
+        update_cache: true
+
+    - name: Install amneziawg (dkms + tools)
+      ansible.builtin.apt:
+        state: present
+        name: amneziawg
+
+- name: Packages from files/awg
+  when: kaskad_awg_packages_mode == 'local'
+  block:
+    - name: Package directory
+      ansible.builtin.file:
+        path: /var/cache/kaskad
+        state: directory
+        mode: "0755"
+
+    - name: Copy packages
+      ansible.builtin.copy:
+        src: "{{ kaskad_repo_dir }}/files/awg/{{ item }}"
+        dest: /var/cache/kaskad/
+        mode: "0644"
+      loop: "{{ kaskad_awg_local_packages }}"
+
+    - name: Install packages
+      ansible.builtin.apt:
+        deb: "/var/cache/kaskad/{{ item }}"
+      loop: "{{ kaskad_awg_local_packages }}"
+      when: not ansible_check_mode
+
+- name: Load the kernel module
+  ansible.builtin.command: modprobe amneziawg
+  changed_when: false
+  when: not ansible_check_mode
+
+- name: Verify the module is loaded
+  ansible.builtin.shell: |
+    set -o pipefail
+    lsmod | awk '$1 == "amneziawg" {found=1} END {exit !found}'
+  args:
+    executable: /bin/bash
+  changed_when: false
+  when: not ansible_check_mode
+
+- name: Tool version
+  ansible.builtin.command: awg --version
+  register: kaskad_awg_version
+  changed_when: false
+  failed_when: kaskad_awg_version.rc != 0
+  when: not ansible_check_mode
+
+- name: DKMS status
+  ansible.builtin.command: dkms status -m amneziawg
+  register: kaskad_dkms
+  changed_when: false
+  failed_when: false
+  when: not ansible_check_mode
+
+- name: Install summary
+  ansible.builtin.debug:
+    msg:
+      - "{{ kaskad_awg_version.stdout | default('check mode') }}"
+      - "dkms: {{ kaskad_dkms.stdout | default('no data') }}"

@@ -1,0 +1,15 @@
+# {{ ansible_managed }}
+[Unit]
+Description=deeps kaskad client routing (tables and rules)
+After=awg-quick@awg0.service kaskad-panel.service
+Wants=awg-quick@awg0.service kaskad-panel.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+Environment=KASKAD_CONFIG=/etc/kaskad/panel.json
+Environment=KASKAD_DB=/var/lib/kaskad/panel.db
+ExecStart=/opt/kaskad/venv/bin/python /opt/kaskad/app/routing.py apply
+
+[Install]
+WantedBy=multi-user.target

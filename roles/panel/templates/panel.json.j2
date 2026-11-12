@@ -1,0 +1,19 @@
+{{ {
+  "listen": {"host": "0.0.0.0", "port": kaskad_panel_port | int},
+  "tls": {
+    "cert": "/etc/kaskad/tls/panel.crt",
+    "key": "/etc/kaskad/tls/panel.key"
+  },
+  "awg_dir": kaskad_awg_dir,
+  "iface": "awg0",
+  "address": kaskad_s1_clients_ip,
+  "net": kaskad_clients_net,
+  "clients_net": kaskad_clients_net,
+  "route_table": kaskad_route_table | int,
+  "exit_mtu": kaskad_awg1_mtu | int,
+  "port": kaskad_awg0_port | int,
+  "mtu": kaskad_awg0_mtu | int,
+  "dns": kaskad_dns,
+  "endpoint": kaskad_endpoint,
+  "params": kaskad_awg0_params
+} | to_nice_json }}

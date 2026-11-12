@@ -1,0 +1,75 @@
+{% extends "base.html" %}
+{% block title %}exits — deeps kaskad{% endblock %}
+{% block body %}
+<div class="page-head">
+  <h1>Exits</h1>
+  <p class="oc-muted">internet gateways and subnet gateways</p>
+</div>
+
+<div class="toolbar">
+  <div class="oc-tabs" role="tablist">
+    <a class="oc-tabs__item" role="tab" aria-selected="{{ 'true' if not mode else 'false' }}" href="/exits">all · {{ counts.all }}</a>
+    <a class="oc-tabs__item" role="tab" aria-selected="{{ 'true' if mode == 'internet' else 'false' }}" href="/exits?mode=internet">internet · {{ counts.internet }}</a>
+    <a class="oc-tabs__item" role="tab" aria-selected="{{ 'true' if mode == 'routes' else 'false' }}" href="/exits?mode=routes">subnets · {{ counts.routes }}</a>
+  </div>
+  <a class="oc-btn oc-btn--contrast oc-btn--sm" href="/exits/new">add exit</a>
+</div>
+
+{% if exits %}
+<div class="oc-panel">
+  <div class="oc-panel__head">
+    <span>health-check every 10 s</span>
+    <span style="flex:1"></span>
+    <span class="oc-badge oc-badge--subtle">{{ exits | selectattr('enabled') | list | length }} of {{ exits | length }} enabled</span>
+  </div>
+  <table class="oc-table">
+    <thead>
+      <tr><th>name</th><th>mode</th><th>interface</th><th>address</th><th>state</th><th></th></tr>
+    </thead>
+    <tbody>
+    {% for e in exits %}
+      <tr>
+        <td><span class="name-cell">{{ e.name }}{% if e.active %}<span class="oc-badge oc-badge--accent">active</span>{% endif %}</span></td>
+        <td>
+          {% if e.mode == 'routes' %}
+            <span class="oc-badge oc-badge--info">subnets</span>
+            <div class="cell-sub oc-mono">{{ e.routes }}</div>
+          {% else %}
+            <span class="oc-badge oc-badge--success">internet</span>
+          {% endif %}
+        </td>
+        <td class="oc-mono">{{ e.iface }}{% if e.mode == 'internet' %}<span class="cell-sub"> · {{ e.priority }}</span>{% endif %}</td>
+        <td class="oc-mono oc-muted">{{ e.endpoint }}</td>
+        <td>
+          {% if not e.enabled %}<span class="oc-badge oc-badge--subtle">disabled</span>
+          {% elif e.alive %}<span class="oc-badge oc-badge--success"><span class="oc-dot"></span>up</span>
+          {% elif e.alive is none %}<span class="oc-badge">no data</span>
+          {% else %}<span class="oc-badge oc-badge--danger"><span class="oc-dot"></span>down</span>{% endif %}
+          {% if e.last_ok %}<div class="cell-sub" data-hs="{{ e.last_ok }}"></div>{% endif %}
+        </td>
+        <td><a class="oc-btn oc-btn--outline oc-btn--sm" href="/exits/{{ e.id }}">open</a></td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% else %}
+<div class="oc-card oc-card--warning">
+  <div class="oc-card__title">No exits</div>
+  <div class="oc-card__desc">Add at least one internet exit, otherwise clients will have no access.</div>
+</div>
+{% endif %}
+
+<script>
+function rel(ts) {
+  if (!ts || Number(ts) <= 0) return 'no data';
+  const d = Math.floor(Date.now() / 1000 - Number(ts));
+  if (d < 60) return d + 's ago';
+  if (d < 3600) return Math.floor(d / 60) + 'm ago';
+  if (d < 86400) return Math.floor(d / 3600) + 'h ago';
+  return Math.floor(d / 86400) + 'd ago';
+}
+for (const el of document.querySelectorAll('[data-hs]')) el.textContent = rel(el.dataset.hs);
+setTimeout(() => location.reload(), 15000);
+</script>
+{% endblock %}

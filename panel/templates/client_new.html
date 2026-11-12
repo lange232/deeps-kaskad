@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+{% block title %}new client — deeps kaskad{% endblock %}
+{% block body %}
+<div class="crumbs"><a href="/clients">Clients</a><span>/</span><span>new</span></div>
+<div class="page-head">
+  <h1>New client</h1>
+  <p class="oc-muted">the address is assigned automatically</p>
+</div>
+
+{% if err %}<div class="oc-alert oc-alert--danger" style="margin-bottom:16px"><span class="oc-dot" style="margin-top:7px"></span><div class="oc-alert__body">{{ err }}</div></div>{% endif %}
+
+<div class="oc-panel" style="padding:16px; max-width:640px">
+  <form method="post" action="/clients">
+    <input type="hidden" name="csrf_token" value="{{ csrf }}">
+    <label class="oc-field">
+      <span class="oc-field__label">name</span>
+      <input class="oc-input" type="text" name="name" placeholder="phone-alice" required maxlength="32" spellcheck="false">
+      <span class="oc-hint">latin letters, digits, dot, dash</span>
+    </label>
+
+    <div style="margin-top:18px">
+      <label class="oc-switch">
+        <input type="checkbox" name="internet" value="1" checked>
+        <span class="oc-switch__track"><span class="oc-switch__thumb"></span></span>
+        internet access
+      </label>
+    </div>
+
+    {% if routed %}
+    <p class="oc-section__title" style="margin:20px 0 10px">subnet access</p>
+    <div class="actions" style="flex-direction:column; align-items:flex-start; gap:10px">
+      {% for e in routed %}
+      <label class="oc-check">
+        <input type="checkbox" name="exits" value="{{ e.id }}">
+        <span class="oc-check__box"></span>
+        {{ e.name }} <span class="oc-mono oc-muted" style="margin-left:8px">{{ e.routes }}</span>
+      </label>
+      {% endfor %}
+    </div>
+    {% endif %}
+
+    <div class="actions" style="margin-top:20px">
+      <button class="oc-btn oc-btn--contrast">create</button>
+      <a class="oc-btn oc-btn--ghost" href="/clients">cancel</a>
+    </div>
+  </form>
+</div>
+{% endblock %}

@@ -1,0 +1,68 @@
+{% extends "base.html" %}
+{% block title %}settings — deeps kaskad{% endblock %}
+{% block body %}
+<div class="page-head">
+  <h1>Settings</h1>
+  <p class="oc-muted">read-only: managed by Ansible, not by the panel</p>
+</div>
+
+<div class="stack">
+  <section>
+    <h2 class="oc-section__title">panel</h2>
+    <div class="oc-panel">
+      <table class="oc-table">
+        <tbody>
+          <tr><td class="oc-muted" style="width:220px">address</td><td class="oc-mono">https://{{ cfg.listen.host }}:{{ cfg.listen.port }}</td></tr>
+          <tr><td class="oc-muted">client subnet</td><td class="oc-mono">{{ cfg.net }}</td></tr>
+          <tr><td class="oc-muted">entry address</td><td class="oc-mono">{{ cfg.address }}</td></tr>
+          <tr><td class="oc-muted">client endpoint</td><td class="oc-mono">{{ cfg.endpoint }}:{{ cfg.port }}</td></tr>
+          <tr><td class="oc-muted">client MTU</td><td class="oc-num">{{ cfg.mtu }}</td></tr>
+          <tr><td class="oc-muted">exit MTU</td><td class="oc-num">{{ cfg.exit_mtu }}</td></tr>
+          <tr><td class="oc-muted">default DNS</td><td class="oc-mono">{{ cfg.dns }}</td></tr>
+          <tr><td class="oc-muted">internet exit table</td><td class="oc-num">{{ cfg.route_table }}</td></tr>
+          <tr><td class="oc-muted">config directory</td><td class="oc-mono">{{ cfg.awg_dir }}</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section>
+    <h2 class="oc-section__title">services</h2>
+    <div class="oc-panel">
+      <table class="oc-table">
+        <tbody>
+          {% for key, label in [('awg0','awg-quick@awg0'),('routing','kaskad-routing'),('firewall','kaskad-firewall'),('failover','kaskad-failover')] %}
+          <tr>
+            <td class="oc-mono" style="width:220px">{{ label }}</td>
+            <td><span class="oc-badge {{ 'oc-badge--success' if status[key] == 'active' else 'oc-badge--danger' }}"><span class="oc-dot"></span>{{ status[key] }}</span></td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section>
+    <h2 class="oc-section__title">data</h2>
+    <div class="oc-panel" style="padding:16px">
+      <div class="kv-grid">
+        <div><div class="k">clients</div><div class="v oc-num">{{ clients_n }}</div></div>
+        <div><div class="k">exits</div><div class="v oc-num">{{ exits_n }}</div></div>
+        <div><div class="k">journal entries</div><div class="v oc-num">{{ audits_n }}</div></div>
+        <div><div class="k">database size</div><div class="v oc-num">{{ (db_size / 1024) | round(0) }} KiB</div></div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="oc-card">
+      <div class="oc-card__title">Panel password</div>
+      <div class="oc-card__desc">
+        Stored as a hash in <code class="oc-mono">/etc/kaskad/panel.env</code>. Reset: delete the file,
+        run <code class="oc-mono">ansible-playbook --tags panel</code>, restart
+        <code class="oc-mono">kaskad-panel</code> — the new password is printed once.
+      </div>
+    </div>
+  </section>
+</div>
+{% endblock %}

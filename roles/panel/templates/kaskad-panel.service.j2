@@ -1,0 +1,23 @@
+# {{ ansible_managed }}
+[Unit]
+Description=kaskad panel (awg0 clients)
+After=network-online.target awg-quick@awg0.service
+Wants=network-online.target awg-quick@awg0.service
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/kaskad/app
+EnvironmentFile=/etc/kaskad/panel.env
+Environment=KASKAD_CONFIG=/etc/kaskad/panel.json
+Environment=KASKAD_DB=/var/lib/kaskad/panel.db
+ExecStart=/opt/kaskad/venv/bin/python /opt/kaskad/app/app.py serve
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/lib/kaskad /etc/amnezia/amneziawg
+
+[Install]
+WantedBy=multi-user.target

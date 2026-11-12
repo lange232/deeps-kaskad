@@ -1,0 +1,510 @@
+/*
+  opencode-ui — OpenCode-style design tokens.
+
+  Naming: the project uses its own names (--ui-*); values are taken from the
+  real OpenCode system (@opencode/ui, theme oc-2) and normalized.
+
+  Theme: dark by default. Light is enabled by <html data-theme="light"> or by
+  the system preference when the attribute is not set.
+
+  File layout:
+    1. primitives (palette, alphas)
+    2. metrics (fonts, sizes, radii, control heights)
+    3. semantics, dark theme (default)
+    4. semantics, light theme
+    5. shadows
+*/
+
+/* ─────────────────────────── 1. Primitives ─────────────────────────── */
+
+:root {
+  /* neutral scale: 50 is the lightest, 1200 the darkest */
+  --ui-grey-50: #ffffff;
+  --ui-grey-100: #fafafa;
+  --ui-grey-200: #f2f2f2;
+  --ui-grey-300: #eeeeee;
+  --ui-grey-400: #dbdbdb;
+  --ui-grey-500: #aeaeae;
+  --ui-grey-600: #808080;
+  --ui-grey-700: #5c5c5c;
+  --ui-grey-800: #3a3a3a;
+  --ui-grey-900: #2e2e2e;
+  --ui-grey-1000: #242424;
+  --ui-grey-1100: #161616;
+  --ui-grey-1200: #080808;
+
+  /* alphas over the dark background */
+  --ui-a-light-0: #ffffff00;
+  --ui-a-light-2: #ffffff05;
+  --ui-a-light-4: #ffffff0a;
+  --ui-a-light-6: #ffffff0f;
+  --ui-a-light-8: #ffffff14;
+  --ui-a-light-10: #ffffff1a;
+  --ui-a-light-12: #ffffff1f;
+  --ui-a-light-14: #ffffff24;
+  --ui-a-light-16: #ffffff29;
+  --ui-a-light-20: #ffffff33;
+  --ui-a-light-24: #ffffff3d;
+  --ui-a-light-30: #ffffff4d;
+  --ui-a-light-40: #ffffff66;
+  --ui-a-light-50: #ffffff80;
+  --ui-a-light-60: #ffffff99;
+  --ui-a-light-70: #ffffffb2;
+  --ui-a-light-80: #ffffffcc;
+  --ui-a-light-90: #ffffffe5;
+  --ui-a-light-100: #ffffffff;
+
+  /* alphas over the light background */
+  --ui-a-dark-0: #00000000;
+  --ui-a-dark-2: #00000005;
+  --ui-a-dark-4: #0000000a;
+  --ui-a-dark-6: #0000000f;
+  --ui-a-dark-8: #00000014;
+  --ui-a-dark-10: #0000001a;
+  --ui-a-dark-12: #0000001f;
+  --ui-a-dark-14: #00000024;
+  --ui-a-dark-16: #00000029;
+  --ui-a-dark-20: #00000033;
+  --ui-a-dark-24: #0000003d;
+  --ui-a-dark-30: #0000004d;
+  --ui-a-dark-40: #00000066;
+  --ui-a-dark-50: #00000080;
+  --ui-a-dark-60: #00000099;
+  --ui-a-dark-70: #000000b2;
+  --ui-a-dark-80: #000000cc;
+  --ui-a-dark-90: #000000e5;
+  --ui-a-dark-100: #000000ff;
+
+  /* colour ramps: 100 is the light state background, 800 the text on light,
+     500/400 the text on dark, 1200/900 the state background in the dark theme */
+  --ui-red-100: #fceceb;
+  --ui-red-300: #f2bbb7;
+  --ui-red-400: #f29b96;
+  --ui-red-500: #f17471;
+  --ui-red-800: #b82d35;
+  --ui-red-900: #97252b;
+  --ui-red-1200: #461516;
+
+  --ui-orange-100: #fdf2ed;
+  --ui-orange-300: #ffd8c6;
+  --ui-orange-400: #ffc1a4;
+  --ui-orange-500: #ffa478;
+  --ui-orange-800: #d16427;
+  --ui-orange-900: #b35624;
+  --ui-orange-1200: #5a2c14;
+
+  --ui-yellow-100: #fefaec;
+  --ui-yellow-300: #f7e5b5;
+  --ui-yellow-400: #f3da9b;
+  --ui-yellow-500: #f2cf76;
+  --ui-yellow-800: #cb9f34;
+  --ui-yellow-900: #ac8833;
+  --ui-yellow-1200: #4b4025;
+
+  --ui-green-100: #e7f9ea;
+  --ui-green-300: #b8e9c1;
+  --ui-green-400: #96e3a6;
+  --ui-green-500: #6bd586;
+  --ui-green-800: #198b43;
+  --ui-green-900: #1d783c;
+  --ui-green-1200: #14361d;
+
+  --ui-cyan-100: #e2f7fb;
+  --ui-cyan-300: #a3e4ef;
+  --ui-cyan-400: #65d9eb;
+  --ui-cyan-500: #00c5df;
+  --ui-cyan-800: #007d9b;
+  --ui-cyan-900: #006c85;
+  --ui-cyan-1200: #00353f;
+
+  --ui-blue-100: #f5f8ff;
+  --ui-blue-300: #c3d4fd;
+  --ui-blue-400: #a2bcff;
+  --ui-blue-500: #7698fd;
+  --ui-blue-600: #3b5cf6;
+  --ui-blue-700: #0b34f4;
+  --ui-blue-800: #3250df;
+  --ui-blue-900: #2c47c8;
+  --ui-blue-1200: #021945;
+
+  --ui-purple-300: #b9b8f5;
+  --ui-purple-400: #9e99f7;
+  --ui-purple-800: #5230c2;
+
+  --ui-pink-400: #f799c6;
+  --ui-pink-800: #c83d8b;
+}
+
+/* ─────────────────────────── 2. Metrics ─────────────────────────── */
+
+:root {
+  --ui-font-sans:
+    "Inter", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --ui-font-mono:
+    "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono",
+    "Courier New", monospace;
+
+  /* Inter variable: 440 reads as regular, 530 as medium, 670 as bold.
+     For static Inter use 400 / 500 / 600. */
+  --ui-fw-regular: 440;
+  --ui-fw-medium: 530;
+  --ui-fw-bold: 670;
+
+  --ui-fs-2xs: 11px;
+  --ui-fs-xs: 12px;
+  --ui-fs-sm: 13px;
+  --ui-fs-md: 14px;
+  --ui-fs-lg: 16px;
+  --ui-fs-xl: 20px;
+
+  --ui-lh-tight: 16px;
+  --ui-lh-compact: 20px;
+  --ui-lh-normal: 130%;
+  --ui-lh-large: 150%;
+
+  /* -0.04px is the signature OpenCode density: 13–14px text is tightened */
+  --ui-ls-tight: -0.04px;
+  --ui-ls-wide: 0.05px;
+
+  --ui-radius-xs: 2px;
+  --ui-radius-sm: 4px;
+  --ui-radius-md: 6px;
+  --ui-radius-lg: 8px;
+  --ui-radius-xl: 10px;
+  --ui-radius-full: 9999px;
+
+  /* control heights: 24 / 28 / 32 */
+  --ui-control-sm: 24px;
+  --ui-control-md: 28px;
+  --ui-control-lg: 32px;
+
+  --ui-space-1: 4px;
+  --ui-space-2: 8px;
+  --ui-space-3: 12px;
+  --ui-space-4: 16px;
+  --ui-space-5: 20px;
+  --ui-space-6: 24px;
+  --ui-space-8: 32px;
+
+  --ui-z-dialog: 50;
+  --ui-z-popover: 40;
+}
+
+/* ────────────────── 3. Semantics: dark theme (default) ────────────────── */
+
+:root {
+  color-scheme: dark;
+
+  --ui-bg-base: var(--ui-grey-1100);
+  --ui-bg-deep: var(--ui-grey-1200);
+  --ui-bg-layer-1: var(--ui-grey-1000);
+  --ui-bg-layer-2: var(--ui-grey-900);
+  --ui-bg-layer-3: var(--ui-grey-800);
+  --ui-bg-layer-4: var(--ui-grey-700);
+  --ui-bg-inverse: var(--ui-grey-50);
+  --ui-bg-contrast: var(--ui-grey-700);
+  --ui-bg-accent: var(--ui-blue-600);
+  --ui-bg-button-neutral: var(--ui-a-light-6);
+
+  --ui-text-base: var(--ui-grey-100);
+  --ui-text-muted: var(--ui-grey-500);
+  --ui-text-faint: var(--ui-grey-600);
+  --ui-text-inverse: var(--ui-grey-1100);
+  --ui-text-contrast: var(--ui-grey-50);
+  --ui-text-accent: var(--ui-blue-400);
+  --ui-text-accent-hover: var(--ui-blue-300);
+
+  --ui-icon-base: var(--ui-grey-400);
+  --ui-icon-muted: var(--ui-grey-600);
+  --ui-icon-faint: var(--ui-grey-700);
+  --ui-icon-inverse: var(--ui-grey-1100);
+  --ui-icon-accent: var(--ui-blue-400);
+
+  --ui-border-muted: var(--ui-a-light-8);
+  --ui-border-base: var(--ui-a-light-10);
+  --ui-border-strong: var(--ui-a-light-20);
+  --ui-border-inverse: var(--ui-grey-50);
+  --ui-border-focus: var(--ui-blue-500);
+
+  --ui-overlay-hover: var(--ui-a-light-6);
+  --ui-overlay-pressed: var(--ui-a-light-10);
+  --ui-overlay-contrast-hover: var(--ui-a-dark-24);
+  --ui-overlay-contrast-pressed: var(--ui-a-dark-40);
+  --ui-overlay-scrim: var(--ui-a-dark-60);
+
+  --ui-state-success-bg: var(--ui-green-1200);
+  --ui-state-success-fg: var(--ui-green-500);
+  --ui-state-success-border: var(--ui-green-900);
+  --ui-state-warning-bg: var(--ui-yellow-1200);
+  --ui-state-warning-fg: var(--ui-yellow-500);
+  --ui-state-warning-border: var(--ui-yellow-900);
+  --ui-state-danger-bg: var(--ui-red-1200);
+  --ui-state-danger-fg: var(--ui-red-500);
+  --ui-state-danger-border: var(--ui-red-900);
+  --ui-state-info-bg: var(--ui-blue-1200);
+  --ui-state-info-fg: var(--ui-blue-500);
+  --ui-state-info-border: var(--ui-blue-900);
+
+  /* OpenCode brand accent: warm peach */
+  --ui-brand: #fab283;
+  --ui-brand-fg: var(--ui-grey-1100);
+}
+
+/* ─────────────────────── 4. Light theme ─────────────────────── */
+
+:root[data-theme="light"] {
+  color-scheme: light;
+
+  --ui-bg-base: var(--ui-grey-50);
+  --ui-bg-deep: var(--ui-grey-100);
+  --ui-bg-layer-1: var(--ui-grey-100);
+  --ui-bg-layer-2: var(--ui-grey-200);
+  --ui-bg-layer-3: var(--ui-grey-300);
+  --ui-bg-layer-4: var(--ui-grey-400);
+  --ui-bg-inverse: var(--ui-grey-1100);
+  --ui-bg-contrast: var(--ui-grey-1000);
+  --ui-bg-accent: var(--ui-blue-600);
+  --ui-bg-button-neutral: var(--ui-grey-50);
+
+  --ui-text-base: var(--ui-grey-1100);
+  --ui-text-muted: var(--ui-grey-700);
+  --ui-text-faint: var(--ui-grey-600);
+  --ui-text-inverse: var(--ui-grey-50);
+  --ui-text-contrast: var(--ui-grey-50);
+  --ui-text-accent: var(--ui-blue-600);
+  --ui-text-accent-hover: var(--ui-blue-700);
+
+  --ui-icon-base: var(--ui-grey-800);
+  --ui-icon-muted: var(--ui-grey-600);
+  --ui-icon-faint: var(--ui-grey-500);
+  --ui-icon-inverse: var(--ui-grey-50);
+  --ui-icon-accent: var(--ui-blue-600);
+
+  --ui-border-muted: var(--ui-a-dark-8);
+  --ui-border-base: var(--ui-a-dark-10);
+  --ui-border-strong: var(--ui-a-dark-20);
+  --ui-border-inverse: var(--ui-grey-1000);
+  --ui-border-focus: var(--ui-blue-500);
+
+  --ui-overlay-hover: var(--ui-a-dark-4);
+  --ui-overlay-pressed: var(--ui-a-dark-8);
+  --ui-overlay-contrast-hover: var(--ui-a-light-12);
+  --ui-overlay-contrast-pressed: var(--ui-a-light-24);
+  --ui-overlay-scrim: var(--ui-a-dark-40);
+
+  --ui-state-success-bg: var(--ui-green-100);
+  --ui-state-success-fg: var(--ui-green-800);
+  --ui-state-success-border: var(--ui-green-300);
+  --ui-state-warning-bg: var(--ui-yellow-100);
+  --ui-state-warning-fg: var(--ui-yellow-800);
+  --ui-state-warning-border: var(--ui-yellow-300);
+  --ui-state-danger-bg: var(--ui-red-100);
+  --ui-state-danger-fg: var(--ui-red-800);
+  --ui-state-danger-border: var(--ui-red-300);
+  --ui-state-info-bg: var(--ui-blue-100);
+  --ui-state-info-fg: var(--ui-blue-800);
+  --ui-state-info-border: var(--ui-blue-300);
+
+  --ui-brand: #dcde8d;
+  --ui-brand-fg: var(--ui-grey-1100);
+}
+
+/* system light theme when no theme is chosen manually */
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme]) {
+    color-scheme: light;
+
+    --ui-bg-base: var(--ui-grey-50);
+    --ui-bg-deep: var(--ui-grey-100);
+    --ui-bg-layer-1: var(--ui-grey-100);
+    --ui-bg-layer-2: var(--ui-grey-200);
+    --ui-bg-layer-3: var(--ui-grey-300);
+    --ui-bg-layer-4: var(--ui-grey-400);
+    --ui-bg-inverse: var(--ui-grey-1100);
+    --ui-bg-contrast: var(--ui-grey-1000);
+    --ui-bg-accent: var(--ui-blue-600);
+    --ui-bg-button-neutral: var(--ui-grey-50);
+
+    --ui-text-base: var(--ui-grey-1100);
+    --ui-text-muted: var(--ui-grey-700);
+    --ui-text-faint: var(--ui-grey-600);
+    --ui-text-inverse: var(--ui-grey-50);
+    --ui-text-contrast: var(--ui-grey-50);
+    --ui-text-accent: var(--ui-blue-600);
+    --ui-text-accent-hover: var(--ui-blue-700);
+
+    --ui-icon-base: var(--ui-grey-800);
+    --ui-icon-muted: var(--ui-grey-600);
+    --ui-icon-faint: var(--ui-grey-500);
+    --ui-icon-inverse: var(--ui-grey-50);
+    --ui-icon-accent: var(--ui-blue-600);
+
+    --ui-border-muted: var(--ui-a-dark-8);
+    --ui-border-base: var(--ui-a-dark-10);
+    --ui-border-strong: var(--ui-a-dark-20);
+    --ui-border-inverse: var(--ui-grey-1000);
+    --ui-border-focus: var(--ui-blue-500);
+
+    --ui-overlay-hover: var(--ui-a-dark-4);
+    --ui-overlay-pressed: var(--ui-a-dark-8);
+    --ui-overlay-contrast-hover: var(--ui-a-light-12);
+    --ui-overlay-contrast-pressed: var(--ui-a-light-24);
+    --ui-overlay-scrim: var(--ui-a-dark-40);
+
+    --ui-state-success-bg: var(--ui-green-100);
+    --ui-state-success-fg: var(--ui-green-800);
+    --ui-state-success-border: var(--ui-green-300);
+    --ui-state-warning-bg: var(--ui-yellow-100);
+    --ui-state-warning-fg: var(--ui-yellow-800);
+    --ui-state-warning-border: var(--ui-yellow-300);
+    --ui-state-danger-bg: var(--ui-red-100);
+    --ui-state-danger-fg: var(--ui-red-800);
+    --ui-state-danger-border: var(--ui-red-300);
+    --ui-state-info-bg: var(--ui-blue-100);
+    --ui-state-info-fg: var(--ui-blue-800);
+    --ui-state-info-border: var(--ui-blue-300);
+
+    --ui-brand: #dcde8d;
+    --ui-brand-fg: var(--ui-grey-1100);
+  }
+}
+
+/* ─────────────────────────── 5. Shadows ─────────────────────────── */
+
+:root {
+  /* dark theme: light edge plus a deep shadow */
+  --ui-shadow-elements: 0 0.5px 0.5px 0 var(--ui-a-dark-40);
+  --ui-shadow-raised:
+    0 2px 4px 0 var(--ui-a-dark-30), 0 1px 2px 0 var(--ui-a-dark-30),
+    0 0 0 0.5px var(--ui-a-light-16), 0 -0.5px 0 0 var(--ui-a-light-6);
+  --ui-shadow-floating:
+    0 8px 16px 0 var(--ui-a-dark-30), 0 4px 8px 0 var(--ui-a-dark-30),
+    0 0 0 0.5px var(--ui-a-light-16), 0 -0.5px 0 0 var(--ui-a-light-6);
+  --ui-shadow-overlay:
+    0 16px 32px 0 var(--ui-a-dark-30), 0 8px 16px 0 var(--ui-a-dark-30),
+    0 0 0 0.5px var(--ui-a-light-16), 0 -0.5px 0 0 var(--ui-a-light-6);
+  --ui-shadow-input:
+    0 1px 2px 0 var(--ui-a-dark-0), 0 0 0 0.5px var(--ui-a-light-16),
+    0 -0.5px 0 0 var(--ui-a-light-6);
+  --ui-shadow-button-neutral:
+    0 1px 2px 0 var(--ui-a-dark-40), 0 0 0 0.5px var(--ui-a-light-20),
+    0 -0.5px 0 0 var(--ui-a-light-10);
+  --ui-shadow-button-contrast:
+    0 1px 2px 0 var(--ui-a-dark-40), 0 0 0 0.5px var(--ui-a-light-40),
+    0 -0.5px 0 0 var(--ui-a-light-30);
+  --ui-shadow-focus: 0 0 0 2px var(--ui-border-focus);
+}
+
+:root[data-theme="light"] {
+  --ui-shadow-elements: 0 0.5px 0.5px 0 var(--ui-a-dark-40);
+  --ui-shadow-raised:
+    0 2px 4px 0 var(--ui-a-dark-4), 0 1px 2px -1px var(--ui-a-dark-8),
+    0 0 0 0.5px var(--ui-a-dark-12);
+  --ui-shadow-floating:
+    0 8px 16px 0 var(--ui-a-dark-4), 0 4px 8px 0 var(--ui-a-dark-8),
+    0 0 0 0.5px var(--ui-a-dark-12);
+  --ui-shadow-overlay:
+    0 16px 32px 0 var(--ui-a-dark-4), 0 8px 16px 0 var(--ui-a-dark-8),
+    0 0 0 0.5px var(--ui-a-dark-12);
+  --ui-shadow-input:
+    0 1px 1.5px 0 var(--ui-a-dark-10), 0 0 0 0.5px var(--ui-a-dark-14);
+  --ui-shadow-button-neutral:
+    0 1px 1.5px 0 var(--ui-a-dark-10), 0 0 0 0.5px var(--ui-a-dark-14);
+  --ui-shadow-button-contrast:
+    0 1px 1.5px 0 var(--ui-a-dark-20), 0 0 0 0.5px var(--ui-grey-800),
+    inset 0 1px 2px 0 var(--ui-a-light-14), inset 0 -1px 2px 0 var(--ui-a-dark-6);
+}
+
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme]) {
+    --ui-shadow-elements: 0 0.5px 0.5px 0 var(--ui-a-dark-40);
+    --ui-shadow-raised:
+      0 2px 4px 0 var(--ui-a-dark-4), 0 1px 2px -1px var(--ui-a-dark-8),
+      0 0 0 0.5px var(--ui-a-dark-12);
+    --ui-shadow-floating:
+      0 8px 16px 0 var(--ui-a-dark-4), 0 4px 8px 0 var(--ui-a-dark-8),
+      0 0 0 0.5px var(--ui-a-dark-12);
+    --ui-shadow-overlay:
+      0 16px 32px 0 var(--ui-a-dark-4), 0 8px 16px 0 var(--ui-a-dark-8),
+      0 0 0 0.5px var(--ui-a-dark-12);
+    --ui-shadow-input:
+      0 1px 1.5px 0 var(--ui-a-dark-10), 0 0 0 0.5px var(--ui-a-dark-14);
+    --ui-shadow-button-neutral:
+      0 1px 1.5px 0 var(--ui-a-dark-10), 0 0 0 0.5px var(--ui-a-dark-14);
+    --ui-shadow-button-contrast:
+      0 1px 1.5px 0 var(--ui-a-dark-20), 0 0 0 0.5px var(--ui-grey-800),
+      inset 0 1px 2px 0 var(--ui-a-light-14), inset 0 -1px 2px 0 var(--ui-a-dark-6);
+  }
+}
+
+/* ─────────────────────────── Base ─────────────────────────── */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  font-family: var(--ui-font-sans);
+  font-size: var(--ui-fs-md);
+  line-height: var(--ui-lh-large);
+  -webkit-text-size-adjust: 100%;
+  text-wrap-style: pretty;
+}
+
+body {
+  margin: 0;
+  background: var(--ui-bg-base);
+  color: var(--ui-text-base);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: geometricPrecision;
+}
+
+code,
+kbd,
+pre,
+samp {
+  font-family: var(--ui-font-mono);
+}
+
+:focus-visible {
+  outline: 2px solid var(--ui-border-focus);
+  outline-offset: 2px;
+}
+
+::selection {
+  background: color-mix(in srgb, var(--ui-bg-accent) 35%, transparent);
+}
+
+/* Scrollbar: 4px pill, visible only while hovering the container. */
+@media (hover: hover) and (pointer: fine) {
+  ::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+
+  ::-webkit-scrollbar-track,
+  ::-webkit-scrollbar-corner {
+    background: transparent;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    min-width: 32px;
+    min-height: 32px;
+    border: 2px solid transparent;
+    border-radius: var(--ui-radius-full);
+    background-color: transparent;
+    background-clip: padding-box;
+  }
+
+  :hover::-webkit-scrollbar-thumb {
+    background-color: var(--ui-border-muted);
+  }
+
+  ::-webkit-scrollbar-thumb:hover,
+  ::-webkit-scrollbar-thumb:active {
+    background-color: var(--ui-border-strong);
+  }
+}

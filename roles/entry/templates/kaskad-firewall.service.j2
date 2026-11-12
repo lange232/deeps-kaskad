@@ -1,0 +1,14 @@
+# {{ ansible_managed }}
+[Unit]
+Description=kaskad firewall and NAT for awg0 clients
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/kaskad-firewall up
+ExecStop=/usr/local/sbin/kaskad-firewall down
+
+[Install]
+WantedBy=multi-user.target

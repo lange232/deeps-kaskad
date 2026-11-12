@@ -1,0 +1,212 @@
+---
+- name: Panel packages
+  ansible.builtin.apt:
+    state: present
+    name:
+      - python3-venv
+      - python3-pip
+      - qrencode
+      - openssl
+      - conntrack
+
+- name: Directories
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "{{ item.mode }}"
+  loop:
+    - { path: /opt/kaskad, mode: "0755" }
+    - { path: /etc/kaskad, mode: "0700" }
+    - { path: /etc/kaskad/tls, mode: "0700" }
+    - { path: /var/lib/kaskad, mode: "0700" }
+
+- name: awg-quick drop-in directory
+  ansible.builtin.file:
+    path: /etc/systemd/system/awg-quick@.service.d
+    state: directory
+    mode: "0755"
+
+- name: Restart exit interfaces on failure
+  ansible.builtin.template:
+    src: awg-quick-dropin.conf.j2
+    dest: /etc/systemd/system/awg-quick@.service.d/kaskad.conf
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Remove the old upstream drop-in
+  ansible.builtin.file:
+    path: /etc/systemd/system/awg-quick@awg1.service.d/kaskad.conf
+    state: absent
+  notify: Restart panel
+
+- name: Panel code
+  ansible.builtin.copy:
+    src: "{{ kaskad_repo_dir }}/panel/"
+    dest: /opt/kaskad/app/
+    owner: root
+    group: root
+    mode: "0644"
+    directory_mode: "0755"
+  notify: Restart panel
+
+- name: Virtual environment
+  ansible.builtin.pip:
+    requirements: /opt/kaskad/app/requirements.txt
+    virtualenv: /opt/kaskad/venv
+    virtualenv_command: python3 -m venv
+  notify: Restart panel
+
+- name: Current certificate SAN
+  ansible.builtin.shell: |
+    set -o pipefail
+    openssl x509 -in /etc/kaskad/tls/panel.crt -noout -ext subjectAltName 2>/dev/null \
+      | tail -n +2 | tr ',' '\n' | sed 's/.*://' | tr -d ' ' | grep -v '^$' | sort | tr '\n' ' '
+  args:
+    executable: /bin/bash
+  register: kaskad_tls_san
+  changed_when: false
+  failed_when: false
+
+- name: Certificate
+  ansible.builtin.shell: |
+    set -euo pipefail
+    openssl req -x509 -newkey rsa:2048 -sha256 -days 825 -nodes \
+      -keyout /etc/kaskad/tls/panel.key \
+      -out /etc/kaskad/tls/panel.crt \
+      -subj "/CN=kaskad" \
+      -addext "subjectAltName={{ kaskad_panel_san }}"
+    chmod 0600 /etc/kaskad/tls/panel.key
+    chmod 0644 /etc/kaskad/tls/panel.crt
+  args:
+    executable: /bin/bash
+  when: >-
+    kaskad_panel_tls_regen == 'always'
+    or kaskad_tls_san.rc != 0
+    or (kaskad_tls_san.stdout | trim) != (kaskad_panel_san_list | trim)
+  notify: Restart panel
+
+- name: Password and session secret
+  ansible.builtin.shell: |
+    set -euo pipefail
+    python3 - <<'PY'
+    import base64, hashlib, os, secrets
+    pw = secrets.token_urlsafe(18)
+    salt = os.urandom(16)
+    digest = hashlib.pbkdf2_hmac("sha256", pw.encode(), salt, 310000)
+    b64 = lambda b: base64.b64encode(b).decode()
+    with open("/etc/kaskad/panel.env", "w") as fh:
+        fh.write("KASKAD_ADMIN_PASSWORD_HASH=pbkdf2$310000$%s$%s\n" % (b64(salt), b64(digest)))
+        fh.write("KASKAD_SESSION_SECRET=%s\n" % base64.urlsafe_b64encode(os.urandom(32)).decode())
+    os.chmod("/etc/kaskad/panel.env", 0o600)
+    print(pw)
+    PY
+  args:
+    executable: /bin/bash
+    creates: /etc/kaskad/panel.env
+  register: kaskad_panel_password
+  no_log: true
+
+- name: Panel password (shown once)
+  ansible.builtin.debug:
+    msg: "panel password: {{ kaskad_panel_password.stdout | trim }}"
+  when:
+    - not ansible_check_mode
+    - kaskad_panel_password is changed
+
+- name: Panel config
+  ansible.builtin.template:
+    src: panel.json.j2
+    dest: /etc/kaskad/panel.json
+    owner: root
+    group: root
+    mode: "0600"
+  notify: Restart panel
+
+- name: Seed file present?
+  ansible.builtin.stat:
+    path: "{{ kaskad_repo_dir }}/state/seed.json"
+  delegate_to: localhost
+  run_once: true
+  register: kaskad_seed_stat
+
+- name: Seed file
+  ansible.builtin.copy:
+    src: "{{ kaskad_repo_dir }}/state/seed.json"
+    dest: /etc/kaskad/seed.json
+    owner: root
+    group: root
+    mode: "0600"
+  no_log: true
+  when: kaskad_seed_stat.stat.exists
+
+- name: Import clients
+  ansible.builtin.command:
+    cmd: /opt/kaskad/venv/bin/python /opt/kaskad/app/app.py seed /etc/kaskad/seed.json
+    chdir: /opt/kaskad/app
+  environment:
+    KASKAD_CONFIG: /etc/kaskad/panel.json
+    KASKAD_DB: /var/lib/kaskad/panel.db
+  register: kaskad_seed_run
+  changed_when: "'imported 0 clients, 0 exits' not in kaskad_seed_run.stdout"
+  when:
+    - not ansible_check_mode
+    - kaskad_seed_stat.stat.exists
+
+- name: /run/kaskad at boot
+  ansible.builtin.template:
+    src: kaskad-tmpfiles.conf.j2
+    dest: /etc/tmpfiles.d/kaskad.conf
+    owner: root
+    group: root
+    mode: "0644"
+  notify:
+    - Restart panel
+    - Restart failover
+
+- name: Create /run/kaskad now
+  ansible.builtin.command: systemd-tmpfiles --create /etc/tmpfiles.d/kaskad.conf
+  changed_when: false
+
+- name: Panel unit
+  ansible.builtin.template:
+    src: kaskad-panel.service.j2
+    dest: /etc/systemd/system/kaskad-panel.service
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart panel
+
+- name: Failover unit
+  ansible.builtin.template:
+    src: kaskad-failover.service.j2
+    dest: /etc/systemd/system/kaskad-failover.service
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart failover
+
+- name: Failover started
+  ansible.builtin.systemd:
+    name: kaskad-failover
+    enabled: true
+    state: started
+    daemon_reload: true
+  when: not ansible_check_mode
+
+- name: awg0 enabled
+  ansible.builtin.systemd:
+    name: awg-quick@awg0
+    enabled: true
+    daemon_reload: true
+  when: not ansible_check_mode
+
+- name: Panel started
+  ansible.builtin.systemd:
+    name: kaskad-panel
+    enabled: true
+    state: started
+    daemon_reload: true
+  when: not ansible_check_mode

@@ -1,0 +1,121 @@
+{% extends "base.html" %}
+{% block title %}{{ cl.name }} — deeps kaskad{% endblock %}
+{% block topbar %}<span class="oc-mono oc-muted">{{ cl.ip }}</span>{% endblock %}
+{% block body %}
+<div class="crumbs"><a href="/clients">Clients</a><span>/</span><span>{{ cl.name }}</span></div>
+<div class="page-head">
+  <div class="name-cell">
+    <h1 style="margin:0">{{ cl.name }}</h1>
+    {% if cl.enabled %}<span class="oc-badge oc-badge--success"><span class="oc-dot"></span>enabled</span>
+    {% else %}<span class="oc-badge oc-badge--subtle">disabled</span>{% endif %}
+  </div>
+  <p class="oc-muted" style="margin-top:6px">
+    <span class="oc-mono">{{ cl.ip }}/32</span> ·
+    {% if cl.internet %}<span class="oc-badge oc-badge--success">internet</span>{% endif %}
+    {% for name in cl.exits %}<span class="oc-badge oc-badge--info">{{ name }}</span>{% endfor %}
+    {% if not cl.internet and not cl.exits %}<span class="oc-badge oc-badge--danger">no access</span>{% endif %}
+  </p>
+</div>
+
+{% if err %}<div class="oc-alert oc-alert--danger" style="margin-bottom:16px"><span class="oc-dot" style="margin-top:7px"></span><div class="oc-alert__body">{{ err }}</div></div>{% endif %}
+{% if ok %}<div class="oc-alert oc-alert--success" style="margin-bottom:16px"><span class="oc-dot" style="margin-top:7px"></span><div class="oc-alert__body">{{ ok }}</div></div>{% endif %}
+
+<div class="stack">
+  <div class="oc-panel" style="padding:16px">
+    <div class="kv-grid">
+      <div><div class="k">handshake</div><div class="v" data-hs="{{ cl.handshake }}">—</div></div>
+      <div><div class="k">received</div><div class="v oc-num">{{ (cl.rx / 1048576) | round(1) }} MiB</div></div>
+      <div><div class="k">sent</div><div class="v oc-num">{{ (cl.tx / 1048576) | round(1) }} MiB</div></div>
+      <div><div class="k">address</div><div class="v oc-mono">{{ cl.ip }}</div></div>
+    </div>
+  </div>
+
+  <section>
+    <h2 class="oc-section__title">access</h2>
+    <div class="oc-panel" style="padding:16px">
+      <form method="post" action="/clients/{{ cl.id }}/access">
+        <input type="hidden" name="csrf_token" value="{{ csrf }}">
+        <label class="oc-switch">
+          <input type="checkbox" name="internet" value="1" {% if cl.internet %}checked{% endif %}>
+          <span class="oc-switch__track"><span class="oc-switch__thumb"></span></span>
+          internet access
+        </label>
+
+        {% if routed %}
+        <p class="oc-section__title" style="margin:20px 0 10px">subnets</p>
+        <div class="actions" style="flex-direction:column; align-items:flex-start; gap:10px">
+          {% for e in routed %}
+          <label class="oc-check">
+            <input type="checkbox" name="exits" value="{{ e.id }}" {% if e.id in assigned %}checked{% endif %}>
+            <span class="oc-check__box"></span>
+            {{ e.name }}
+            <span class="oc-mono oc-muted" style="margin-left:8px">{{ e.routes }}</span>
+          </label>
+          {% endfor %}
+        </div>
+        {% else %}
+        <p class="oc-muted" style="margin-top:16px">no subnet exits yet.</p>
+        {% endif %}
+
+        <div class="actions" style="margin-top:18px">
+          <button class="oc-btn oc-btn--contrast">save access</button>
+        </div>
+        <p class="oc-hint" style="margin-top:10px">
+          disabling internet and all subnets leaves the client without access
+        </p>
+      </form>
+    </div>
+  </section>
+
+  <section>
+    <h2 class="oc-section__title">configuration</h2>
+    <div class="oc-panel" style="padding:16px">
+      <div class="actions">
+        <a class="oc-btn oc-btn--outline oc-btn--sm" href="/clients/{{ cl.id }}/conf">download .conf</a>
+      </div>
+      <details id="qr" style="margin-top:14px">
+        <summary class="oc-btn oc-btn--ghost oc-btn--sm" style="display:inline-flex">show qr</summary>
+        <div style="margin-top:14px; background:var(--ui-bg-deep); padding:12px; border-radius:6px; display:inline-block">
+          <img src="/clients/{{ cl.id }}/qr.png" alt="qr" style="width:220px; height:220px; image-rendering:pixelated">
+        </div>
+      </details>
+      <details style="margin-top:14px">
+        <summary class="oc-btn oc-btn--ghost oc-btn--sm" style="display:inline-flex">show config</summary>
+        {% if conf %}<pre class="conf" style="margin-top:12px">{{ conf }}</pre>
+        {% else %}<p class="oc-muted" style="margin-top:10px">the client has neither internet nor subnets assigned — no config can be issued.</p>{% endif %}
+      </details>
+    </div>
+  </section>
+
+  <section>
+    <h2 class="oc-section__title">danger zone</h2>
+    <div class="oc-panel" style="padding:16px">
+      <div class="actions">
+        <form method="post" action="/clients/{{ cl.id }}/toggle">
+          <input type="hidden" name="csrf_token" value="{{ csrf }}">
+          <button class="oc-btn oc-btn--neutral oc-btn--sm">{{ 'disable client' if cl.enabled else 'enable client' }}</button>
+        </form>
+        <form method="post" action="/clients/{{ cl.id }}/delete"
+              onsubmit="return confirm('delete {{ cl.name }}? its config will stop working')">
+          <input type="hidden" name="csrf_token" value="{{ csrf }}">
+          <button class="oc-btn oc-btn--ghost-danger oc-btn--sm">delete client</button>
+        </form>
+        <a class="oc-btn oc-btn--ghost-muted oc-btn--sm" href="/clients">back</a>
+      </div>
+    </div>
+  </section>
+</div>
+
+<script>
+function rel(ts) {
+  if (!ts || Number(ts) <= 0) return 'no data';
+  const d = Math.floor(Date.now() / 1000 - Number(ts));
+  if (d < 60) return d + 's ago';
+  if (d < 3600) return Math.floor(d / 60) + 'm ago';
+  if (d < 86400) return Math.floor(d / 3600) + 'h ago';
+  return Math.floor(d / 86400) + 'd ago';
+}
+for (const el of document.querySelectorAll('[data-hs]')) el.textContent = rel(el.dataset.hs);
+setTimeout(() => location.reload(), 15000);
+</script>
+{% endblock %}

@@ -1,0 +1,104 @@
+{% extends "base.html" %}
+{% block title %}{{ exit.name }} — deeps kaskad{% endblock %}
+{% block topbar %}<span class="oc-mono oc-muted">{{ exit.iface }}</span>{% endblock %}
+{% block body %}
+<div class="crumbs"><a href="/exits">Exits</a><span>/</span><span>{{ exit.name }}</span></div>
+<div class="page-head">
+  <div class="name-cell">
+    <h1 style="margin:0">{{ exit.name }}</h1>
+    {% if exit.active %}<span class="oc-badge oc-badge--accent">active</span>{% endif %}
+    {% if not exit.enabled %}<span class="oc-badge oc-badge--subtle">disabled</span>
+    {% elif exit.alive %}<span class="oc-badge oc-badge--success"><span class="oc-dot"></span>up</span>
+    {% elif exit.alive is none %}<span class="oc-badge">no data</span>
+    {% else %}<span class="oc-badge oc-badge--danger"><span class="oc-dot"></span>down</span>{% endif %}
+  </div>
+  <p class="oc-muted" style="margin-top:6px">{{ exit.endpoint }}</p>
+</div>
+
+{% if err %}<div class="oc-alert oc-alert--danger" style="margin-bottom:16px"><span class="oc-dot" style="margin-top:7px"></span><div class="oc-alert__body">{{ err }}</div></div>{% endif %}
+{% if ok %}<div class="oc-alert oc-alert--success" style="margin-bottom:16px"><span class="oc-dot" style="margin-top:7px"></span><div class="oc-alert__body">{{ ok }}</div></div>{% endif %}
+
+<div class="stack">
+  <div class="oc-panel" style="padding:16px">
+    <div class="kv-grid">
+      <div><div class="k">mode</div><div class="v">
+        {% if exit.mode == 'routes' %}<span class="oc-badge oc-badge--info">subnets only</span>{% else %}<span class="oc-badge oc-badge--success">internet</span>{% endif %}
+      </div></div>
+      <div><div class="k">interface</div><div class="v oc-mono">{{ exit.iface }}</div></div>
+      <div><div class="k">priority</div><div class="v oc-num">{{ exit.priority }}</div></div>
+      <div><div class="k">endpoint</div><div class="v oc-mono">{{ exit.endpoint }}</div></div>
+      {% if exit.mode == 'routes' %}
+      <div><div class="k">subnets</div><div class="v oc-mono">{{ exit.routes }}</div></div>
+      <div><div class="k">DNS</div><div class="v oc-mono">{{ exit.dns or '—' }}</div></div>
+      {% endif %}
+      <div><div class="k">last check</div><div class="v" data-hs="{{ exit.last_ok }}">—</div></div>
+    </div>
+
+    <div class="actions" style="margin-top:18px">
+      {% if exit.mode == 'internet' %}
+      <form method="post" action="/exits/{{ exit.id }}/activate">
+        <input type="hidden" name="csrf_token" value="{{ csrf }}">
+        <button class="oc-btn oc-btn--outline oc-btn--sm" {{ 'disabled' if exit.active or not exit.enabled }}>make active</button>
+      </form>
+      {% endif %}
+      <form method="post" action="/exits/{{ exit.id }}/toggle">
+        <input type="hidden" name="csrf_token" value="{{ csrf }}">
+        <button class="oc-btn oc-btn--neutral oc-btn--sm">{{ 'disable' if exit.enabled else 'enable' }}</button>
+      </form>
+      <form method="post" action="/exits/{{ exit.id }}/delete"
+            onsubmit="return confirm('delete exit {{ exit.name }}? clients will lose access to its subnets')">
+        <input type="hidden" name="csrf_token" value="{{ csrf }}">
+        <button class="oc-btn oc-btn--ghost-danger oc-btn--sm">delete</button>
+      </form>
+      <a class="oc-btn oc-btn--ghost-muted oc-btn--sm" href="/exits">back</a>
+    </div>
+  </div>
+
+  <section>
+    <h2 class="oc-section__title">config</h2>
+    <div class="oc-panel" style="padding:16px">
+      <details>
+        <summary class="oc-btn oc-btn--outline oc-btn--sm" style="display:inline-flex">show</summary>
+        <pre class="conf" style="margin-top:12px">{{ conf }}</pre>
+      </details>
+      <p class="oc-hint" style="margin-top:10px">keys are masked; the original config is stored in the panel database</p>
+    </div>
+  </section>
+
+  {% if exit.mode == 'routes' %}
+  <section>
+    <h2 class="oc-section__title">allowed for</h2>
+    {% if clients %}
+    <div class="oc-panel">
+      <table class="oc-table">
+        <tbody>
+        {% for c in clients %}
+          <tr>
+            <td>{{ c.name }}</td>
+            <td class="oc-mono oc-muted">{{ c.ip }}</td>
+            <td><a class="oc-btn oc-btn--ghost oc-btn--sm" href="/clients/{{ c.id }}">open</a></td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+    <div class="oc-empty">not assigned to anyone</div>
+    {% endif %}
+  </section>
+  {% endif %}
+</div>
+
+<script>
+function rel(ts) {
+  if (!ts || Number(ts) <= 0) return 'no data';
+  const d = Math.floor(Date.now() / 1000 - Number(ts));
+  if (d < 60) return d + 's ago';
+  if (d < 3600) return Math.floor(d / 60) + 'm ago';
+  if (d < 86400) return Math.floor(d / 3600) + 'h ago';
+  return Math.floor(d / 86400) + 'd ago';
+}
+for (const el of document.querySelectorAll('[data-hs]')) el.textContent = rel(el.dataset.hs);
+setTimeout(() => location.reload(), 15000);
+</script>
+{% endblock %}

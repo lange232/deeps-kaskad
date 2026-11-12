@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% block title %}sign in — deeps kaskad{% endblock %}
+{% block body %}
+<div class="oc-panel" style="padding:20px">
+    <div style="display:flex; align-items:center; gap:8px; margin-bottom:6px">
+      <span class="oc-brand"><span class="oc-brand__dim">deeps</span><span class="oc-brand__mark">kaskad</span></span>
+      <span class="oc-badge oc-badge--subtle">panel</span>
+    </div>
+    <p class="oc-muted" style="margin:0 0 16px">manage clients and exits</p>
+
+    {% if error %}
+    <div class="oc-alert oc-alert--danger" style="margin-bottom:12px">
+      <span class="oc-dot" style="margin-top:7px"></span>
+      <div class="oc-alert__body">{{ error }}</div>
+    </div>
+    {% endif %}
+
+    <form method="post" action="/login">
+      <label class="oc-field">
+        <span class="oc-field__label">password</span>
+        <input class="oc-input" type="password" name="password" autofocus
+               autocomplete="current-password" required>
+      </label>
+      <button class="oc-btn oc-btn--contrast" style="width:100%; margin-top:14px">sign in</button>
+    </form>
+</div>
+{% endblock %}

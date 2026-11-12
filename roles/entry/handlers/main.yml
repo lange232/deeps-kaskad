@@ -1,0 +1,14 @@
+---
+- name: Restart kaskad-routing
+  ansible.builtin.systemd:
+    name: kaskad-routing
+    state: restarted
+    daemon_reload: true
+  when: not ansible_check_mode
+
+- name: Restart firewall
+  ansible.builtin.systemd:
+    name: kaskad-firewall
+    state: restarted
+    daemon_reload: true
+  when: not ansible_check_mode

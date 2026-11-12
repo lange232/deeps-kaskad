@@ -1,0 +1,2 @@
+# Per-host overrides, if needed. Variables shared by all hosts live in
+# group_vars/all.yml.

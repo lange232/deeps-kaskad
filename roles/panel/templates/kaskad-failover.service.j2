@@ -1,0 +1,22 @@
+# {{ ansible_managed }}
+[Unit]
+Description=kaskad exit failover
+After=network-online.target kaskad-panel.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=/etc/kaskad/panel.env
+Environment=KASKAD_CONFIG=/etc/kaskad/panel.json
+Environment=KASKAD_DB=/var/lib/kaskad/panel.db
+ExecStart=/opt/kaskad/venv/bin/python /opt/kaskad/app/failover.py
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/lib/kaskad /etc/amnezia/amneziawg /run/kaskad
+
+[Install]
+WantedBy=multi-user.target
