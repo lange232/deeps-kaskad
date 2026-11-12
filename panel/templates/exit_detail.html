@@ -26,6 +26,8 @@
         {% if exit.mode == 'routes' %}<span class="oc-badge oc-badge--info">subnets only</span>{% else %}<span class="oc-badge oc-badge--success">internet</span>{% endif %}
       </div></div>
       <div><div class="k">interface</div><div class="v oc-mono">{{ exit.iface }}</div></div>
+      <div><div class="k">comment</div><div class="v">{{ exit.comment or '—' }}</div></div>
+      <div><div class="k">comment</div><div class="v">{{ exit.comment or '—' }}</div></div>
       <div><div class="k">priority</div><div class="v oc-num">{{ exit.priority }}</div></div>
       <div><div class="k">endpoint</div><div class="v oc-mono">{{ exit.endpoint }}</div></div>
       {% if exit.mode == 'routes' %}
@@ -34,6 +36,17 @@
       {% endif %}
       <div><div class="k">last check</div><div class="v" data-hs="{{ exit.last_ok }}">—</div></div>
     </div>
+
+    <form method="post" action="/exits/{{ exit.id }}/comment" style="margin-top:18px; max-width:420px">
+      <input type="hidden" name="csrf_token" value="{{ csrf }}">
+      <label class="oc-field">
+        <span class="oc-field__label">public comment</span>
+        <input class="oc-input" type="text" name="comment" maxlength="120"
+               value="{{ exit.comment }}" placeholder="Finland, Helsinki">
+        <span class="oc-hint">clients see this instead of the interface name</span>
+      </label>
+      <button class="oc-btn oc-btn--outline oc-btn--sm" style="margin-top:10px">save comment</button>
+    </form>
 
     <div class="actions" style="margin-top:18px">
       {% if exit.mode == 'internet' %}

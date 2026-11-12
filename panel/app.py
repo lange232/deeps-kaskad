@@ -119,7 +119,8 @@ def init_db() -> None:
                 created_at TEXT NOT NULL,
                 mode TEXT NOT NULL DEFAULT 'internet',
                 routes TEXT NOT NULL DEFAULT '',
-                dns TEXT NOT NULL DEFAULT ''
+                dns TEXT NOT NULL DEFAULT '',
+                comment TEXT NOT NULL DEFAULT ''
             );
             CREATE TABLE IF NOT EXISTS audit (
                 id INTEGER PRIMARY KEY,
@@ -149,6 +150,7 @@ def migrate(conn: sqlite3.Connection) -> None:
         ("mode", "ALTER TABLE exits ADD COLUMN mode TEXT NOT NULL DEFAULT 'internet'"),
         ("routes", "ALTER TABLE exits ADD COLUMN routes TEXT NOT NULL DEFAULT ''"),
         ("dns", "ALTER TABLE exits ADD COLUMN dns TEXT NOT NULL DEFAULT ''"),
+        ("comment", "ALTER TABLE exits ADD COLUMN comment TEXT NOT NULL DEFAULT ''"),
     ):
         if name not in cols:
             conn.execute(ddl)
@@ -620,6 +622,7 @@ def exit_view(e, status: dict, active, manual: str = "") -> dict:
         "mode": e["mode"],
         "routes": e["routes"],
         "dns": e["dns"],
+        "comment": e["comment"],
         "endpoint": awgconf.endpoint(e["conf"]),
         "alive": st.get("alive"),
         "last_ok": st.get("last_ok", 0),
@@ -846,6 +849,7 @@ def create_exit(
     mode: str = Form("internet"),
     routes: str = Form(""),
     dns: str = Form(""),
+    comment: str = Form(""),
     conf: str = Form(...),
     csrf_token: str = Form(...),
 ):
@@ -853,12 +857,15 @@ def create_exit(
     if not hmac.compare_digest(csrf_token, csrf(token)):
         raise HTTPException(status_code=400, detail="csrf")
     name = name.strip()
+    comment = comment.strip()
 
     def fail(msg: str):
         return RedirectResponse("/exits/new?err=" + quote(msg), status_code=303)
 
     if not NAME_RE.match(name):
         return fail("name: latin letters, digits, dot, dash; up to 32 characters")
+    if len(comment) > 120:
+        return fail("comment: up to 120 characters")
     errors = awgconf.validate(conf)
     if errors:
         return fail("; ".join(errors))
@@ -912,10 +919,10 @@ def create_exit(
             return fail("an exit with this name already exists")
         iface = free_iface(conn)
         conn.execute(
-            "INSERT INTO exits (name, iface, priority, enabled, conf, created_at, mode, routes, dns) "
-            "VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?)",
+            "INSERT INTO exits (name, iface, priority, enabled, conf, created_at, mode, routes, dns, comment) "
+            "VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?, ?)",
             (name, iface, prio, conf, datetime.now(timezone.utc).isoformat(timespec="seconds"),
-             mode, ", ".join(nets), dns.strip()),
+             mode, ", ".join(nets), dns.strip(), comment),
         )
         row = conn.execute("SELECT * FROM exits WHERE name = ?", (name,)).fetchone()
 
@@ -927,6 +934,27 @@ def create_exit(
             conn.execute("UPDATE exits SET enabled = 0 WHERE id = ?", (row["id"],))
         return fail(f"{name}: {error}. Exit disabled, check the config")
     return RedirectResponse(f"/exits/{row['id']}?ok=exit+added", status_code=303)
+
+
+@app.post("/exits/{eid}/comment")
+def update_exit_comment(
+    request: Request, eid: int, comment: str = Form(""), csrf_token: str = Form(...)
+):
+    token = require_admin(request)
+    if not hmac.compare_digest(csrf_token, csrf(token)):
+        raise HTTPException(status_code=400, detail="csrf")
+    comment = comment.strip()
+    if len(comment) > 120:
+        return RedirectResponse(
+            f"/exits/{eid}?err=" + quote("comment: up to 120 characters"), status_code=303
+        )
+    with db() as conn:
+        row = conn.execute("SELECT * FROM exits WHERE id = ?", (eid,)).fetchone()
+        if not row:
+            raise HTTPException(status_code=404)
+        conn.execute("UPDATE exits SET comment = ? WHERE id = ?", (comment, eid))
+    audit("exit_comment", f"{row['name']}: {comment}")
+    return RedirectResponse(f"/exits/{eid}?ok=comment+saved", status_code=303)
 
 
 @app.post("/exits/{eid}/toggle")
