@@ -28,7 +28,6 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-import routing
 
 CONFIG_PATH = Path(os.environ.get("KASKAD_CONFIG", "/etc/kaskad/panel.json"))
 DB_PATH = Path(os.environ.get("KASKAD_DB", "/var/lib/kaskad/panel.db"))
@@ -98,7 +97,8 @@ def client_grants() -> list[dict]:
         return [
             dict(r)
             for r in conn.execute(
-                "SELECT ce.client_id, ce.priority AS choice, c.ip, e.iface "
+                "SELECT ce.client_id, ce.priority AS choice, c.ip, "
+                "c.table_num AS client_table, e.iface "
                 "FROM client_internet_exits ce "
                 "JOIN clients c ON c.id = ce.client_id "
                 "AND c.enabled = 1 AND c.internet = 1 "
@@ -129,24 +129,37 @@ def current_default(table: int) -> str | None:
 
 
 def apply_client_routes(choices: dict[tuple[int, str], list[str]], alive) -> dict[str, str]:
-    """Points each client table at its first alive granted exit."""
+    """Points each client table at its first alive granted exit.
+
+    The reported mapping comes from the routing table after the change, so a
+    failed `ip route` never shows up as a working exit.
+    """
     used: dict[str, str] = {}
-    for (client_id, ip), order in choices.items():
-        table = routing.CLIENT_TABLE_BASE + client_id
-        desired = pick_client_exit(order, alive)
-        if desired:
-            used[ip] = desired
-        if desired == current_default(table):
+    for (table, ip), order in choices.items():
+        if table <= 0:
+            log(f"client {ip}: no routing table allocated")
             continue
-        if desired:
-            run(["ip", "route", "replace", "default", "dev", desired,
-                 "table", str(table)])
-            log(f"client {ip}: exit {desired}")
-        else:
-            run(["ip", "route", "del", "default", "table", str(table)])
-            log(f"client {ip}: no granted exit is alive")
-        # Stale conntrack entries keep the source address of the old exit.
-        run(["conntrack", "-D", "-s", f"{ip}/32"], timeout=5)
+        desired = pick_client_exit(order, alive)
+        before = current_default(table)
+        # When nothing is alive the old route is left in place: it points at
+        # a dead exit, so traffic already fails, and a daemon restart does
+        # not cut a working client for the two probe rounds it needs.
+        if desired and desired != before:
+            res = run(["ip", "route", "replace", "default", "dev", desired,
+                       "table", str(table)])
+            if res.returncode != 0:
+                log(f"client {ip}: failed to route via {desired}: "
+                    f"{res.stderr.strip()}")
+        after = current_default(table)
+        if after in alive:
+            used[ip] = after
+        if after != before:
+            # Stale conntrack entries keep the source address of the old exit.
+            run(["conntrack", "-D", "-s", f"{ip}/32"], timeout=5)
+            log(f"client {ip}: exit {after}")
+        if desired and after != desired:
+            log(f"client {ip}: wanted {desired}, table {table} has "
+                f"{after or 'no default'}")
     return used
 
 
@@ -310,7 +323,7 @@ def tick(c: dict) -> None:
 
     choices: dict[tuple[int, str], list[str]] = {}
     for grant in client_grants():
-        key = (grant["client_id"], grant["ip"])
+        key = (grant["client_table"], grant["ip"])
         choices.setdefault(key, []).append(grant["iface"])
     client_routes = apply_client_routes(choices, alive)
 

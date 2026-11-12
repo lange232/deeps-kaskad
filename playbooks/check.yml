@@ -59,12 +59,10 @@
     - name: Client routing rules match the database
       ansible.builtin.shell: |
         set -o pipefail
-        ROUTE_TABLE={{ kaskad_route_table }} TABLE_BASE=1000 CLIENT_BASE=3000 python3 - <<'PY'
+        ROUTE_TABLE={{ kaskad_route_table }} python3 - <<'PY'
         import os, sqlite3, subprocess, sys
 
         table = os.environ["ROUTE_TABLE"]
-        base = int(os.environ["TABLE_BASE"])
-        client_base = int(os.environ["CLIENT_BASE"])
         rules = subprocess.run(["ip", "rule", "show"], capture_output=True, text=True).stdout
         missing = []
 
@@ -78,16 +76,21 @@
                 "WHERE e.enabled = 1 AND e.mode = 'internet'"
             )
         }
-        for cl in conn.execute("SELECT id, ip, internet FROM clients WHERE enabled = 1"):
+        for cl in conn.execute(
+            "SELECT id, ip, internet, table_num FROM clients WHERE enabled = 1"
+        ):
             if not cl["internet"]:
                 continue
-            # Clients with granted exits use their own table (3000 + id).
-            lookup = client_base + cl["id"] if cl["id"] in granted else table
+            # Clients with granted exits use the table allocated in the panel.
+            lookup = cl["table_num"] if cl["id"] in granted else table
+            if not lookup:
+                missing.append(f"client {cl['ip']} has granted exits but no table")
+                continue
             if f"from {cl['ip']} iif awg0 lookup {lookup}" not in rules:
                 missing.append(f"internet rule for {cl['ip']} -> {lookup}")
 
         for row in conn.execute(
-            "SELECT c.ip, e.id, e.routes FROM client_exits ce "
+            "SELECT c.ip, e.id, e.routes, e.table_num FROM client_exits ce "
             "JOIN clients c ON c.id = ce.client_id "
             "JOIN exits e ON e.id = ce.exit_id "
             "WHERE c.enabled = 1 AND e.enabled = 1 AND e.mode = 'routes'"
@@ -95,7 +98,7 @@
             for cidr in [x.strip() for x in row["routes"].split(",") if x.strip()]:
                 # iproute2 prints a /32 destination without the prefix length.
                 shown = cidr[:-3] if cidr.endswith("/32") else cidr
-                if f"from {row['ip']} to {shown} iif awg0 lookup {base + row['id']}" not in rules:
+                if f"from {row['ip']} to {shown} iif awg0 lookup {row['table_num']}" not in rules:
                     missing.append(f"route {row['ip']} -> {cidr}")
 
         if missing:

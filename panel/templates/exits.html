@@ -71,6 +71,6 @@ function rel(ts) {
   return Math.floor(d / 86400) + 'd ago';
 }
 for (const el of document.querySelectorAll('[data-hs]')) el.textContent = rel(el.dataset.hs);
-setTimeout(() => location.reload(), 15000);
+kaskadAutoRefresh(15);
 </script>
 {% endblock %}

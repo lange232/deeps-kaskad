@@ -8,8 +8,8 @@ order the client chose. Clients with routed exits get
 `from <ip> to <cidr> lookup <exit table>` rules with a higher priority, so
 specific subnets always win over the default route.
 
-Rules we installed previously are removed before every apply, so deleting a
-client or an exit does not leave stale state behind.
+Table numbers are allocated in the database and never computed from row ids:
+ids are reused after a delete, and arithmetic ranges eventually collide.
 """
 from __future__ import annotations
 
@@ -25,16 +25,12 @@ DB_PATH = Path(os.environ.get("KASKAD_DB", "/var/lib/kaskad/panel.db"))
 
 ROUTE_PRIORITY = 10000
 INTERNET_PRIORITY = 20000
-# 1000+, not 200: the 201..264 range overlaps the system tables
-# 253 (default), 254 (main) and 255 (local). A wrong value here once wiped
-# the main table and cut the host off the network.
-ROUTED_TABLE_BASE = 1000
-# Per-client internet tables live above the routed ones; ids are bounded by
-# the number of clients, and none of these ranges may touch 253/254/255.
-CLIENT_TABLE_BASE = 3000
 # A client's own choice must win over the shared automatic table.
 CLIENT_PRIORITY = 19000
-# These tables must never be flushed.
+# All routing tables we own live above the system ones: 201..264 overlaps the
+# main/local tables (253..255) and once cut a host off the network.
+TABLE_POOL_BASE = 1001
+# These tables must never be flushed or allocated.
 RESERVED_TABLES = {0, 100, 253, 254, 255}
 
 
@@ -50,19 +46,31 @@ def run(cmd: list[str]) -> subprocess.CompletedProcess:
     return subprocess.run(cmd, capture_output=True, text=True)
 
 
-def routed_table(exit_id: int) -> int:
-    return ROUTED_TABLE_BASE + int(exit_id)
+def used_tables(conn: sqlite3.Connection) -> set[int]:
+    """Table numbers already owned by exits or clients."""
+    used: set[int] = set()
+    for sql in (
+        "SELECT table_num FROM exits WHERE table_num > 0",
+        "SELECT table_num FROM clients WHERE table_num > 0",
+    ):
+        used |= {r[0] for r in conn.execute(sql)}
+    return used
 
 
-def client_table(client_id: int) -> int:
-    return CLIENT_TABLE_BASE + int(client_id)
+def allocate_table(conn: sqlite3.Connection) -> int:
+    """Lowest free table number from the shared pool."""
+    used = used_tables(conn)
+    number = TABLE_POOL_BASE
+    while number in used or number in RESERVED_TABLES:
+        number += 1
+    return number
 
 
 def tables_to_flush(current: set[int], previous: set[int]) -> list[int]:
     """Tables to flush: everything we used now or before, never reserved ones."""
     return sorted(
         t for t in (current | previous)
-        if t > ROUTED_TABLE_BASE and t not in RESERVED_TABLES
+        if t >= TABLE_POOL_BASE and t not in RESERVED_TABLES
     )
 
 
@@ -88,7 +96,17 @@ def save_setting(key: str, value: str) -> None:
         conn.close()
 
 
-def cleanup_rules(internet_table: int) -> None:
+def _is_missing(error: str) -> bool:
+    text = error.lower()
+    return (
+        "no such file" in text
+        or "no such process" in text
+        or "fib table does not exist" in text
+        or "file exists" in text
+    )
+
+
+def cleanup_rules(internet_table: int, errors: list[str]) -> None:
     """Removes all rules of ours, no matter who installed them.
 
     This cleans up leftovers from older versions (the rule for the whole
@@ -96,6 +114,9 @@ def cleanup_rules(internet_table: int) -> None:
     the routing.
     """
     res = run(["ip", "rule", "show"])
+    if res.returncode != 0:
+        errors.append(f"ip rule show: {res.stderr.strip()}")
+        return
     for line in (res.stdout or "").splitlines():
         if ":" not in line:
             continue
@@ -111,13 +132,16 @@ def cleanup_rules(internet_table: int) -> None:
         value = int(table)
         if value in RESERVED_TABLES and value != internet_table:
             continue
-        if value == internet_table or value > ROUTED_TABLE_BASE:
-            run(["ip", "rule", "del"] + spec)
+        if value == internet_table or value >= TABLE_POOL_BASE:
+            result = run(["ip", "rule", "del"] + spec)
+            if result.returncode != 0:
+                errors.append(f"ip rule del {' '.join(spec)}: {result.stderr.strip()}")
 
 
 def apply() -> dict:
     c = cfg()
     internet_table = int(c.get("route_table", 100))
+    errors: list[str] = []
     db = sqlite3.connect(DB_PATH, timeout=10)
     db.row_factory = sqlite3.Row
     try:
@@ -132,8 +156,6 @@ def apply() -> dict:
             "WHERE e.enabled = 1 AND e.mode = 'internet' "
             "ORDER BY ce.priority, e.priority, e.id",
         )
-        client_by_id = {cl["id"]: cl for cl in clients}
-        exit_by_id = {ex["id"]: ex for ex in exits}
     finally:
         db.close()
 
@@ -141,17 +163,18 @@ def apply() -> dict:
     for grant in grants:
         client_choices.setdefault(grant["client_id"], []).append(grant["iface"])
 
-    cleanup_rules(internet_table)
+    cleanup_rules(internet_table, errors)
 
-    # Exit ids grow as exits are added and removed, so the set of tables we
-    # own is persisted in the database instead of assuming a fixed range.
+    # The set of tables we own is persisted, so tables of deleted objects are
+    # flushed even though they are no longer in the database.
     current_tables = {
-        routed_table(ex["id"]) for ex in exits
-        if ex["mode"] == "routes" and Path(f"/sys/class/net/{ex['iface']}").exists()
+        ex["table_num"] for ex in exits
+        if ex["mode"] == "routes" and ex["table_num"] > 0
+        and Path(f"/sys/class/net/{ex['iface']}").exists()
     }
     current_tables |= {
-        client_table(cl["id"]) for cl in clients
-        if cl["internet"] and client_choices.get(cl["id"])
+        cl["table_num"] for cl in clients
+        if cl["internet"] and cl["table_num"] > 0 and client_choices.get(cl["id"])
     }
     raw_previous = get_setting("routing_tables")
     if raw_previous:
@@ -160,24 +183,31 @@ def apply() -> dict:
         except (ValueError, TypeError):
             previous_tables = set()
     else:
-        # First run on an existing database: clean the legacy range too.
-        previous_tables = set(range(ROUTED_TABLE_BASE + 1, ROUTED_TABLE_BASE + 65))
+        # First run on an existing database: clean the legacy ranges too.
+        previous_tables = set(range(1001, 3065))
     for table in tables_to_flush(current_tables, previous_tables):
-        run(["ip", "route", "flush", "table", str(table)])
+        result = run(["ip", "route", "flush", "table", str(table)])
+        if result.returncode != 0 and not _is_missing(result.stderr):
+            errors.append(f"ip route flush table {table}: {result.stderr.strip()}")
 
     tables: set[int] = set()
     rules: list[tuple[list[str], int]] = []
 
     # routes of routed exits
     for ex in exits:
-        if ex["mode"] != "routes":
+        if ex["mode"] != "routes" or ex["table_num"] <= 0:
             continue
         if not Path(f"/sys/class/net/{ex['iface']}").exists():
             continue
-        table = routed_table(ex["id"])
+        table = ex["table_num"]
         tables.add(table)
         for cidr in [x.strip() for x in (ex["routes"] or "").split(",") if x.strip()]:
-            run(["ip", "route", "replace", cidr, "dev", ex["iface"], "table", str(table)])
+            result = run(["ip", "route", "replace", cidr, "dev", ex["iface"],
+                          "table", str(table)])
+            if result.returncode != 0:
+                errors.append(
+                    f"ip route replace {cidr} table {table}: {result.stderr.strip()}"
+                )
 
     # clients with granted internet exits get their own table; the failover
     # daemon keeps its default route on the first exit that is alive
@@ -187,22 +217,27 @@ def apply() -> dict:
         active_exit = ""
     for cl in clients:
         choices = client_choices.get(cl["id"]) if cl["internet"] else None
-        if not choices:
+        if not choices or cl["table_num"] <= 0:
             continue
-        table = client_table(cl["id"])
+        table = cl["table_num"]
         tables.add(table)
         preferred = active_exit if active_exit in choices else choices[0]
         if Path(f"/sys/class/net/{preferred}").exists():
-            run(["ip", "route", "replace", "default", "dev", preferred,
-                 "table", str(table)])
+            result = run(["ip", "route", "replace", "default", "dev", preferred,
+                          "table", str(table)])
+            if result.returncode != 0:
+                errors.append(
+                    f"ip route replace default dev {preferred} table {table}: "
+                    f"{result.stderr.strip()}"
+                )
 
     # client rules
     for cl in clients:
         if not cl["internet"]:
             continue
-        if client_choices.get(cl["id"]):
+        if client_choices.get(cl["id"]) and cl["table_num"] > 0:
             rules.append(
-                (["from", cl["ip"], "iif", "awg0", "lookup", str(client_table(cl["id"]))],
+                (["from", cl["ip"], "iif", "awg0", "lookup", str(cl["table_num"])],
                  CLIENT_PRIORITY)
             )
         else:
@@ -211,13 +246,13 @@ def apply() -> dict:
                  INTERNET_PRIORITY)
             )
     for link in links:
-        cl = client_by_id.get(link["client_id"])
-        ex = exit_by_id.get(link["exit_id"])
-        if not cl or not ex or ex["mode"] != "routes":
+        cl = next((x for x in clients if x["id"] == link["client_id"]), None)
+        ex = next((x for x in exits if x["id"] == link["exit_id"]), None)
+        if not cl or not ex or ex["mode"] != "routes" or ex["table_num"] <= 0:
             continue
         if not Path(f"/sys/class/net/{ex['iface']}").exists():
             continue
-        table = routed_table(ex["id"])
+        table = ex["table_num"]
         for cidr in [x.strip() for x in (ex["routes"] or "").split(",") if x.strip()]:
             rules.append(
                 (["from", cl["ip"], "to", cidr, "iif", "awg0", "lookup", str(table)],
@@ -233,11 +268,16 @@ def apply() -> dict:
         seen.add(key)
         unique.append((spec, prio))
 
+    applied = 0
     for spec, prio in unique:
-        run(["ip", "rule", "add"] + spec + ["priority", str(prio)])
+        result = run(["ip", "rule", "add"] + spec + ["priority", str(prio)])
+        if result.returncode != 0:
+            errors.append(f"ip rule add {' '.join(spec)}: {result.stderr.strip()}")
+        else:
+            applied += 1
 
     save_setting("routing_tables", json.dumps(sorted(tables)))
-    return {"rules": len(unique), "tables": sorted(tables)}
+    return {"rules": applied, "tables": sorted(tables), "errors": errors}
 
 
 def main() -> None:
@@ -245,6 +285,10 @@ def main() -> None:
         sys.exit("usage: routing.py [apply]")
     result = apply()
     print(f"rules: {result['rules']}, tables: {result['tables']}")
+    for error in result["errors"]:
+        print(f"error: {error}", file=sys.stderr)
+    if result["errors"]:
+        sys.exit(1)
 
 
 if __name__ == "__main__":
