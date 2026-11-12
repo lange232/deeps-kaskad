@@ -314,6 +314,61 @@ class SessionTests(PanelTestCase):
         self.assertEqual(response.status_code, 503)
 
 
+class RollbackMessageTests(PanelTestCase):
+    """A failed device rollback must not be reported as 'nothing changed'."""
+
+    def error_text(self, response):
+        from urllib.parse import parse_qs, urlparse
+        location = response.headers["location"]
+        return parse_qs(urlparse(location).query).get("err", [""])[0]
+
+    def rollback_error(self):
+        return app.RollbackFailed(
+            "syncconf: boom; rollback failed: device still has 1 unexpected peer"
+        )
+
+    def assert_warns(self, response):
+        self.assertEqual(response.status_code, 303)
+        text = self.error_text(response)
+        self.assertIn("could not be rolled back", text)
+        self.assertIn("inspect", text)
+        self.assertNotIn("nothing", text)
+
+    def test_create_client(self):
+        self.login_admin()
+        csrf = self.csrf("/clients/new")
+        app.apply_conf.side_effect = self.rollback_error()
+        response = self.client.post("/clients", data={
+            "name": "rb", "email": "rb@example.com",
+            "password": USER_PASSWORD, "csrf_token": csrf,
+        })
+        self.assert_warns(response)
+
+    def test_toggle_client(self):
+        cid = self.seed_client()
+        self.login_admin()
+        csrf = self.csrf(f"/clients/{cid}")
+        app.apply_conf.side_effect = self.rollback_error()
+        self.assert_warns(self.client.post(f"/clients/{cid}/toggle",
+                                           data={"csrf_token": csrf}))
+
+    def test_delete_client(self):
+        cid = self.seed_client()
+        self.login_admin()
+        csrf = self.csrf(f"/clients/{cid}")
+        app.apply_conf.side_effect = self.rollback_error()
+        self.assert_warns(self.client.post(f"/clients/{cid}/delete",
+                                           data={"csrf_token": csrf}))
+
+    def test_reissue(self):
+        self.seed_client(email="rb@example.com")
+        self.login("rb@example.com", USER_PASSWORD)
+        csrf = self.csrf("/me")
+        app.apply_conf.side_effect = self.rollback_error()
+        self.assert_warns(self.client.post("/me/reissue",
+                                           data={"csrf_token": csrf}))
+
+
 class ClientTests(PanelTestCase):
     def test_create_client_with_account(self):
         self.login_admin()

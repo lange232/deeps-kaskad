@@ -42,6 +42,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- When `awg0.conf` is missing but the interface is running, the live device
+  configuration is snapshotted with `awg showconf` before anything changes. A
+  failed apply restores the device from that snapshot through a temporary
+  config file and leaves no file behind (the dump has no Address/MTU/Table,
+  so it must not replace `awg0.conf`); a failed snapshot aborts the change
+  before the device is touched.
+- A failed device rollback is reported as such in the panel: the affected
+  pages say the live tunnel could not be rolled back and that `awg0` needs
+  inspection, instead of claiming that nothing changed.
 - A failed post-apply verification now rolls the **device** back as well:
   the previous `awg0.conf` is restored, `syncconf` is applied again and the
   peer set is compared with the old file; an interface that was started for

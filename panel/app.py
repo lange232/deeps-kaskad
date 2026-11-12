@@ -22,6 +22,7 @@ import json
 import os
 import re
 import secrets
+import shlex
 import sqlite3
 import subprocess
 import sys
@@ -383,36 +384,92 @@ def syncconf(c: dict) -> None:
         raise RuntimeError(f"syncconf: {res.stderr.strip()}")
 
 
-def rollback_conf(c: dict, previous: bytes | None, had_iface: bool) -> None:
-    """Puts the interface back to the configuration of the restored file.
+def syncconf_file(c: dict, config_path: Path) -> None:
+    """Applies a config file that is not the interface's own awg0.conf."""
+    res = run(
+        ["bash", "-c",
+         f"awg syncconf {c['iface']} "
+         f"<(awg-quick strip {shlex.quote(str(config_path))})"]
+    )
+    if res.returncode != 0:
+        raise RuntimeError(f"syncconf {config_path.name}: {res.stderr.strip()}")
+
+
+class RollbackFailed(RuntimeError):
+    """The database change was cancelled, but the live tunnel could not be."""
+
+
+def showconf(c: dict) -> bytes:
+    """The live device configuration, used when there is no file to restore."""
+    res = run(["awg", "showconf", c["iface"]])
+    if res.returncode != 0 or not res.stdout.strip():
+        raise RuntimeError(
+            f"awg showconf {c['iface']}: "
+            f"{res.stderr.strip() or 'empty output'}"
+        )
+    return res.stdout.encode()
+
+
+def rollback_conf(c: dict, previous: bytes | None, snapshot: bytes | None,
+                  had_iface: bool, path: Path) -> None:
+    """Puts the file and the interface back to the previous configuration.
 
     Called after a failed apply. Raises when the live state cannot be
     restored, so the caller can report that instead of pretending the change
     did not happen.
     """
-    if had_iface:
+    if not had_iface:
         if previous is None:
-            # The old config is unknown; touching the device could be worse
-            # than leaving it, and the caller reports the original failure.
-            print(f"{c['iface']}: rollback without a previous config file",
-                  flush=True)
-            return
+            path.unlink(missing_ok=True)
+        else:
+            path.write_bytes(previous)
+            os.chmod(path, 0o600)
+        if iface_up(c):
+            run(["systemctl", "stop", f"awg-quick@{c['iface']}"])
+            for _ in range(10):
+                if not iface_up(c):
+                    break
+                time.sleep(0.3)
+            if iface_up(c):
+                raise RuntimeError(f"awg-quick@{c['iface']} is still running")
+        return
+
+    if previous is not None:
+        path.write_bytes(previous)
+        os.chmod(path, 0o600)
         syncconf(c)
         expected = conf_peers(previous.decode())
-        actual = applied_peers(c["iface"])
-        if actual != expected:
-            raise RuntimeError(
-                f"device still has {len(actual - expected)} unexpected peers"
-            )
-        return
-    if iface_up(c):
-        run(["systemctl", "stop", f"awg-quick@{c['iface']}"])
-        for _ in range(10):
-            if not iface_up(c):
-                break
-            time.sleep(0.3)
-        if iface_up(c):
-            raise RuntimeError(f"awg-quick@{c['iface']} is still running")
+    else:
+        if snapshot is None:
+            raise RuntimeError("no configuration to roll back to")
+        # The device dump lacks Address/MTU/Table, so it must not replace
+        # awg0.conf; apply it from a temporary file and leave no file behind.
+        path.unlink(missing_ok=True)
+        temp = path.with_name(f"{c['iface']}-rollback.conf")
+        temp.write_bytes(snapshot)
+        os.chmod(temp, 0o600)
+        try:
+            syncconf_file(c, temp)
+        finally:
+            temp.unlink(missing_ok=True)
+        expected = conf_peers(snapshot.decode())
+
+    actual = applied_peers(c["iface"])
+    if actual != expected:
+        raise RuntimeError(
+            f"device still has {len(actual - expected)} unexpected peers"
+        )
+
+
+def apply_error_message(exc: Exception, action: str) -> str:
+    """What the user is told: a failed rollback means the live state is unknown."""
+    if isinstance(exc, RollbackFailed):
+        return (
+            "the WireGuard config could not be applied and the live tunnel "
+            "could not be rolled back; awg0 may differ from the database - "
+            "inspect it before continuing"
+        )
+    return f"the WireGuard config could not be applied; {action}"
 
 
 def apply_conf(c: dict, conn: sqlite3.Connection | None = None) -> None:
@@ -420,6 +477,12 @@ def apply_conf(c: dict, conn: sqlite3.Connection | None = None) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     previous = path.read_bytes() if path.exists() else None
     had_iface = iface_up(c)
+    snapshot = None
+    if had_iface and previous is None:
+        # No file to restore from, but the device is live: the snapshot is
+        # taken before anything is touched, and a failure here changes nothing.
+        snapshot = showconf(c)
+
     tmp = path.with_suffix(".tmp")
     tmp.write_text(render_conf(c, conn))
     os.chmod(tmp, 0o600)
@@ -443,15 +506,10 @@ def apply_conf(c: dict, conn: sqlite3.Connection | None = None) -> None:
     except Exception as exc:
         # The database transaction is rolled back by the caller; the file and
         # the device must not keep a change that never happened.
-        if previous is None:
-            path.unlink(missing_ok=True)
-        else:
-            path.write_bytes(previous)
-            os.chmod(path, 0o600)
         try:
-            rollback_conf(c, previous, had_iface)
+            rollback_conf(c, previous, snapshot, had_iface, path)
         except Exception as rollback_exc:
-            raise RuntimeError(
+            raise RollbackFailed(
                 f"{exc}; rollback failed: {rollback_exc}"
             ) from exc
         raise
@@ -1519,7 +1577,7 @@ def create_client(
             apply_conf(c, conn)
     except RuntimeError as exc:
         print(f"client {name}: {exc}", flush=True)
-        return fail("the WireGuard config could not be applied; nothing was saved")
+        return fail(apply_error_message(exc, "nothing was saved"))
     audit("client_added", f"{name} {ip}")
     audit("account_created", f"{name} {email}")
     apply_routing()
@@ -1616,7 +1674,7 @@ def toggle_client(request: Request, cid: int, csrf_token: str = Form(...)):
     except RuntimeError as exc:
         print(f"client {cid}: {exc}", flush=True)
         return RedirectResponse(
-            f"/clients/{cid}?err={quote('the WireGuard config could not be applied; nothing changed')}",
+            f"/clients/{cid}?err={quote(apply_error_message(exc, 'nothing changed'))}",
             status_code=303,
         )
     audit("client_toggle", f"{row['name']} -> {0 if row['enabled'] else 1}")
@@ -1647,7 +1705,7 @@ def delete_client(request: Request, cid: int, csrf_token: str = Form(...)):
     except RuntimeError as exc:
         print(f"client {cid}: {exc}", flush=True)
         return RedirectResponse(
-            f"/clients/{cid}?err={quote('the WireGuard config could not be applied; nothing was deleted')}",
+            f"/clients/{cid}?err={quote(apply_error_message(exc, 'nothing was deleted'))}",
             status_code=303,
         )
     audit("client_deleted", row["name"])
@@ -1970,7 +2028,7 @@ def me_reissue(request: Request, csrf_token: str = Form(...)):
     except RuntimeError as exc:
         print(f"client {row['client_id']}: {exc}", flush=True)
         return RedirectResponse(
-            f"/me?err={quote('the WireGuard config could not be applied; your key was not changed')}",
+            f"/me?err={quote(apply_error_message(exc, 'your key was not changed'))}",
             status_code=303,
         )
     apply_routing()

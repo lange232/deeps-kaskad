@@ -172,6 +172,54 @@ class RenderTests(unittest.TestCase):
         self.assertEqual(len(stops), 1)
         self.assertFalse(state["up"])
 
+    @unittest.skipUnless(app, "fastapi is not installed")
+    def test_missing_file_snapshots_the_running_device(self):
+        c = self.config()
+        path = Path(self.tmp.name) / "awg0.conf"
+        self.assertFalse(path.exists())
+        snapshot = "[Interface]\nPrivateKey = k\n\n[Peer]\nPublicKey = oldkey\n"
+        calls = []
+
+        def fake_run(cmd, **kw):
+            calls.append(cmd)
+            if cmd[:2] == ["awg", "showconf"]:
+                return subprocess.CompletedProcess(cmd, 0, snapshot, "")
+            return subprocess.CompletedProcess(cmd, 0, "", "")
+
+        peers = mock.Mock(side_effect=[{"newkey"}, {"oldkey"}])
+        with mock.patch.object(app, "iface_up", return_value=True), \
+             mock.patch.object(app, "run", side_effect=fake_run), \
+             mock.patch.object(app, "applied_peers", peers):
+            with self.assertRaises(RuntimeError):
+                app.apply_conf(c)
+        # The dump has no Address/MTU/Table, so it must not become awg0.conf.
+        self.assertFalse(path.exists())
+        self.assertFalse((Path(self.tmp.name) / "awg0-rollback.conf").exists())
+        self.assertTrue(any(cmd[:2] == ["awg", "showconf"] for cmd in calls))
+        syncs = [cmd for cmd in calls if cmd[:2] == ["bash", "-c"]]
+        self.assertEqual(len(syncs), 2)
+        self.assertTrue(any("rollback.conf" in cmd[2] for cmd in syncs))
+
+    @unittest.skipUnless(app, "fastapi is not installed")
+    def test_snapshot_failure_changes_nothing(self):
+        c = self.config()
+        path = Path(self.tmp.name) / "awg0.conf"
+
+        def fake_run(cmd, **kw):
+            if cmd[:2] == ["awg", "showconf"]:
+                return subprocess.CompletedProcess(cmd, 1, "", "boom")
+            return subprocess.CompletedProcess(cmd, 0, "", "")
+
+        with mock.patch.object(app, "iface_up", return_value=True), \
+             mock.patch.object(app, "run", side_effect=fake_run) as run:
+            with self.assertRaises(RuntimeError) as ctx:
+                app.apply_conf(c)
+        self.assertIn("showconf", str(ctx.exception))
+        self.assertFalse(path.exists())
+        syncs = [call for call in run.call_args_list
+                 if call.args[0][:2] == ["bash", "-c"]]
+        self.assertEqual(syncs, [])
+
     def config(self):
         return {
             "address": "10.80.0.1", "net": "10.80.0.0/24", "port": 51820,
