@@ -37,13 +37,14 @@ from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse,
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
+import auth
 import awgconf
 
 BASE = Path(__file__).resolve().parent
 CONFIG_PATH = Path(os.environ.get("KASKAD_CONFIG", "/etc/kaskad/panel.json"))
 DB_PATH = Path(os.environ.get("KASKAD_DB", "/var/lib/kaskad/panel.db"))
 COOKIE = "kaskad_session"
-SESSION_TTL = 12 * 3600
+SESSION_TTL = auth.SESSION_TTL
 NAME_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,31}$")
 
 templates = Jinja2Templates(directory=str(BASE / "templates"))
@@ -111,6 +112,16 @@ def init_db() -> None:
                 ts TEXT NOT NULL,
                 action TEXT NOT NULL,
                 detail TEXT
+            );
+            CREATE TABLE IF NOT EXISTS users (
+                id INTEGER PRIMARY KEY,
+                client_id INTEGER NOT NULL UNIQUE,
+                email TEXT NOT NULL UNIQUE,
+                password_hash TEXT NOT NULL,
+                enabled INTEGER NOT NULL DEFAULT 1,
+                token_version INTEGER NOT NULL DEFAULT 1,
+                last_login TEXT,
+                created_at TEXT NOT NULL
             );
             """
         )
@@ -272,58 +283,103 @@ def unit_active(name: str) -> str:
 
 # ---------------------------------------------------------------- auth
 
-def password_hash() -> str:
-    return os.environ["KASKAD_ADMIN_PASSWORD_HASH"]
+ADMIN_LOGIN = auth.ADMIN_LOGIN
+MIN_PASSWORD = auth.MIN_PASSWORD
+email_error = auth.email_error
+password_error = auth.password_error
+normalize_email = auth.normalize_email
+hash_password = auth.hash_password
+check_password = auth.check_password
 
 
-def verify_password(password: str) -> bool:
-    try:
-        _, iterations, salt_b64, hash_b64 = password_hash().split("$")
-        salt = base64.b64decode(salt_b64)
-        expected = base64.b64decode(hash_b64)
-        got = hashlib.pbkdf2_hmac("sha256", password.encode(), salt, int(iterations))
-        return hmac.compare_digest(got, expected)
-    except Exception:
-        return False
+def verify_admin_password(password: str) -> bool:
+    return auth.check_password(password, os.environ.get("KASKAD_ADMIN_PASSWORD_HASH", ""))
 
 
-def sign(payload: bytes) -> str:
-    secret = os.environ["KASKAD_SESSION_SECRET"].encode()
-    return base64.urlsafe_b64encode(
-        hmac.new(secret, payload, hashlib.sha256).digest()
-    ).decode()
+_dummy_hash = ""
 
 
-def make_session() -> str:
-    payload = json.dumps({"exp": int(time.time()) + SESSION_TTL}).encode()
-    return base64.urlsafe_b64encode(payload).decode() + "." + sign(payload)
+def _burn_hash(password: str) -> None:
+    """Spend roughly the same time on unknown emails as on known ones."""
+    global _dummy_hash
+    if not _dummy_hash:
+        _dummy_hash = auth.hash_password(secrets.token_urlsafe(16))
+    auth.check_password(password, _dummy_hash)
 
 
-def valid_session(token: str | None) -> bool:
-    if not token or "." not in token:
-        return False
-    body, sig = token.rsplit(".", 1)
-    try:
-        payload = base64.urlsafe_b64decode(body.encode())
-    except Exception:
-        return False
-    if not hmac.compare_digest(sig, sign(payload)):
-        return False
-    try:
-        return json.loads(payload)["exp"] > time.time()
-    except Exception:
-        return False
+def _session_secret() -> str:
+    return os.environ["KASKAD_SESSION_SECRET"]
+
+
+def make_session(role: str, uid: int = 0, tv: int = 0) -> str:
+    return auth.make_session(_session_secret(), role, uid, tv)
+
+
+def session_data(token: str | None) -> dict | None:
+    return auth.session_data(_session_secret(), token)
 
 
 def csrf(token: str) -> str:
     return hmac.new(token.encode(), b"csrf", hashlib.sha256).hexdigest()[:32]
 
 
-def require(request: Request) -> str:
+def _redirect(location: str):
+    raise HTTPException(status_code=303, headers={"Location": location})
+
+
+def require_admin(request: Request) -> str:
     token = request.cookies.get(COOKIE)
-    if not valid_session(token):
-        raise HTTPException(status_code=303, headers={"Location": "/login"})
+    data = session_data(token)
+    if not data:
+        _redirect("/login")
+    if data["role"] != "admin":
+        _redirect("/me")
     return token
+
+
+def user_row(uid: int):
+    with db() as conn:
+        return conn.execute(
+            "SELECT u.id AS uid, u.email, u.password_hash, u.enabled AS account_enabled, "
+            "u.token_version, u.last_login, u.client_id, "
+            "c.name AS client_name, c.ip AS client_ip, c.enabled AS client_enabled, "
+            "c.internet, c.public_key, c.private_key, c.preshared_key "
+            "FROM users u JOIN clients c ON c.id = u.client_id WHERE u.id = ?",
+            (uid,),
+        ).fetchone()
+
+
+def require_user(request: Request) -> tuple[str, object]:
+    """Returns (session token, row with the user account and its client)."""
+    token = request.cookies.get(COOKIE)
+    data = session_data(token)
+    if not data:
+        _redirect("/login")
+    if data["role"] != "user":
+        _redirect("/")
+    row = user_row(int(data.get("uid", 0)))
+    if (
+        not row
+        or not row["account_enabled"]
+        or not row["client_enabled"]
+        or row["token_version"] != data.get("tv")
+    ):
+        _redirect("/login")
+    return token, row
+
+
+def user_client(row) -> dict:
+    """Client row shaped like the one from the clients table, for /me."""
+    return {
+        "id": row["client_id"],
+        "name": row["client_name"],
+        "ip": row["client_ip"],
+        "enabled": row["client_enabled"],
+        "internet": row["internet"],
+        "public_key": row["public_key"],
+        "private_key": row["private_key"],
+        "preshared_key": row["preshared_key"],
+    }
 
 
 _attempts: dict[str, list[float]] = {}
@@ -338,6 +394,26 @@ def rate_limited(ip: str) -> bool:
 
 def note_failure(ip: str) -> None:
     _attempts.setdefault(ip, []).append(time.time())
+
+
+_flash_secrets: dict[str, tuple[float, str]] = {}
+
+
+def stash_secret(value: str) -> str:
+    """Keep a generated password out of URLs; the panel shows it once."""
+    key = secrets.token_urlsafe(9)
+    _flash_secrets[key] = (time.time() + 300, value)
+    return key
+
+
+def pop_secret(key: str | None) -> str:
+    if not key:
+        return ""
+    item = _flash_secrets.pop(key, None)
+    if not item:
+        return ""
+    expires, value = item
+    return value if expires > time.time() else ""
 
 
 @app.middleware("http")
@@ -530,6 +606,7 @@ def services() -> dict:
 def render_page(request: Request, template: str, nav: str, **ctx):
     c = cfg()
     ctx.setdefault("hide_nav", False)
+    ctx.setdefault("role", "admin")
     ctx.setdefault("version", c.get("version", "dev"))
     ctx.setdefault("commit", c.get("commit", ""))
     ctx["nav"] = nav
@@ -538,10 +615,11 @@ def render_page(request: Request, template: str, nav: str, **ctx):
 
 # ---------------------------------------------------------------- auth
 
-def login_context(error=None):
+def login_context(error=None, email=""):
     c = cfg()
     return {
         "error": error,
+        "email": email,
         "hide_nav": True,
         "version": c.get("version", "dev"),
         "commit": c.get("commit", ""),
@@ -554,32 +632,71 @@ def login_page(request: Request):
 
 
 @app.post("/login")
-def login(request: Request, password: str = Form(...)):
+def login(request: Request, email: str = Form(""), password: str = Form(...)):
     ip = request.client.host if request.client else "?"
-    if rate_limited(ip):
+    email = normalize_email(email)
+    limit_key = f"email:{email}"
+
+    def fail(message: str, status: int = 401):
         return templates.TemplateResponse(
-            request, "login.html",
-            login_context("too many attempts, wait 5 minutes"),
-            status_code=429,
+            request, "login.html", login_context(message, email), status_code=status
         )
-    if not verify_password(password):
+
+    if rate_limited(ip) or (email and rate_limited(limit_key)):
+        return fail("too many attempts, wait 5 minutes", 429)
+
+    token = ""
+    location = ""
+    role = ""
+    if email == ADMIN_LOGIN:
+        if verify_admin_password(password):
+            token = make_session("admin")
+            location = "/"
+            role = "admin"
+    elif email:
+        row = None
+        with db() as conn:
+            row = conn.execute(
+                "SELECT u.*, c.enabled AS client_enabled FROM users u "
+                "JOIN clients c ON c.id = u.client_id WHERE u.email = ?",
+                (email,),
+            ).fetchone()
+        ok = bool(
+            row
+            and check_password(password, row["password_hash"])
+            and row["enabled"]
+            and row["client_enabled"]
+        )
+        if not row:
+            _burn_hash(password)
+        if ok:
+            with db() as conn:
+                conn.execute(
+                    "UPDATE users SET last_login = ? WHERE id = ?",
+                    (datetime.now(timezone.utc).isoformat(timespec="seconds"), row["id"]),
+                )
+            token = make_session("user", int(row["id"]), int(row["token_version"]))
+            location = "/me"
+            role = "user"
+
+    if not token:
         note_failure(ip)
-        audit("login_failed", ip)
-        return templates.TemplateResponse(
-            request, "login.html", login_context("wrong password"), status_code=401
-        )
-    token = make_session()
-    response = RedirectResponse("/", status_code=303)
+        if email:
+            note_failure(limit_key)
+        audit("login_failed", f"{ip} {email or '-'}")
+        return fail("wrong email or password")
+
+    response = RedirectResponse(location, status_code=303)
     response.set_cookie(
         COOKIE, token, httponly=True, secure=True, samesite="strict", max_age=SESSION_TTL
     )
-    audit("login", ip)
+    audit("login", f"{role} {email} {ip}")
     return response
 
 
 @app.post("/logout")
 def logout(request: Request):
-    require(request)
+    session_data(request.cookies.get(COOKIE))
     response = RedirectResponse("/login", status_code=303)
     response.delete_cookie(COOKIE)
     return response
@@ -589,7 +706,7 @@ def logout(request: Request):
 
 @app.get("/", response_class=HTMLResponse)
 def overview(request: Request, err: str | None = None, ok: str | None = None):
-    token = require(request)
+    token = require_admin(request)
     c = cfg()
     live = iface_dump(c["iface"])["peers"]
     clients = [client_view(cl, live) for cl in client_rows()]
@@ -622,7 +739,7 @@ EXIT_DEFAULTS = {"name": "", "mode": "internet", "priority": "", "routes": "", "
 
 @app.get("/exits", response_class=HTMLResponse)
 def exits_page(request: Request, mode: str | None = None):
-    token = require(request)
+    token = require_admin(request)
     status = read_status()
     active = run_dir("active-exit")
     manual = setting("manual_exit") or ""
@@ -642,7 +759,7 @@ def exits_page(request: Request, mode: str | None = None):
 
 @app.get("/exits/new", response_class=HTMLResponse)
 def exit_new_page(request: Request, err: str | None = None):
-    token = require(request)
+    token = require_admin(request)
     return render_page(
         request, "exit_new.html", "exits",
         csrf=csrf(token), err=err, form=EXIT_DEFAULTS,
@@ -651,7 +768,7 @@ def exit_new_page(request: Request, err: str | None = None):
 
 @app.get("/exits/{eid}", response_class=HTMLResponse)
 def exit_page(request: Request, eid: int, err: str | None = None, ok: str | None = None):
-    token = require(request)
+    token = require_admin(request)
     with db() as conn:
         row = conn.execute("SELECT * FROM exits WHERE id = ?", (eid,)).fetchone()
         assigned = conn.execute(
@@ -698,7 +815,7 @@ def create_exit(
     conf: str = Form(...),
     csrf_token: str = Form(...),
 ):
-    token = require(request)
+    token = require_admin(request)
     if not hmac.compare_digest(csrf_token, csrf(token)):
         raise HTTPException(status_code=400, detail="csrf")
     name = name.strip()
@@ -780,7 +897,7 @@ def create_exit(
 
 @app.post("/exits/{eid}/toggle")
 def toggle_exit(request: Request, eid: int, csrf_token: str = Form(...)):
-    token = require(request)
+    token = require_admin(request)
     if not hmac.compare_digest(csrf_token, csrf(token)):
         raise HTTPException(status_code=400, detail="csrf")
     with db() as conn:
@@ -797,7 +914,7 @@ def toggle_exit(request: Request, eid: int, csrf_token: str = Form(...)):
 
 @app.post("/exits/{eid}/delete")
 def delete_exit(request: Request, eid: int, csrf_token: str = Form(...)):
-    token = require(request)
+    token = require_admin(request)
     if not hmac.compare_digest(csrf_token, csrf(token)):
         raise HTTPException(status_code=400, detail="csrf")
     with db() as conn:
@@ -814,7 +931,7 @@ def delete_exit(request: Request, eid: int, csrf_token: str = Form(...)):
 
 @app.post("/exits/{eid}/activate")
 def activate_exit(request: Request, eid: int, csrf_token: str = Form(...)):
-    token = require(request)
+    token = require_admin(request)
     if not hmac.compare_digest(csrf_token, csrf(token)):
         raise HTTPException(status_code=400, detail="csrf")
     with db() as conn:
@@ -828,7 +945,7 @@ def activate_exit(request: Request, eid: int, csrf_token: str = Form(...)):
 
 @app.post("/exits/auto")
 def exit_auto(request: Request, csrf_token: str = Form(...)):
-    token = require(request)
+    token = require_admin(request)
     if not hmac.compare_digest(csrf_token, csrf(token)):
         raise HTTPException(status_code=400, detail="csrf")
     set_setting("manual_exit", "")
@@ -840,12 +957,26 @@ def exit_auto(request: Request, csrf_token: str = Form(...)):
 
 @app.get("/clients", response_class=HTMLResponse)
 def clients_page(request: Request, q: str | None = None):
-    token = require(request)
+    token = require_admin(request)
     live = iface_dump(cfg()["iface"])["peers"]
+    with db() as conn:
+        accounts = {
+            r["client_id"]: r
+            for r in conn.execute("SELECT client_id, email, enabled FROM users")
+        }
     items = [client_view(cl, live) for cl in client_rows()]
+    for c in items:
+        account = accounts.get(c["id"])
+        c["account_email"] = account["email"] if account else ""
+        c["account_enabled"] = bool(account["enabled"]) if account else False
     if q:
         needle = q.strip().lower()
-        items = [c for c in items if needle in c["name"].lower() or needle in c["ip"]]
+        items = [
+            c for c in items
+            if needle in c["name"].lower()
+            or needle in c["ip"]
+            or needle in c["account_email"].lower()
+        ]
     return render_page(
         request, "clients.html", "clients",
         csrf=csrf(token), clients=items, q=q or "",
@@ -854,7 +985,7 @@ def clients_page(request: Request, q: str | None = None):
 
 @app.get("/clients/new", response_class=HTMLResponse)
 def client_new_page(request: Request, err: str | None = None):
-    token = require(request)
+    token = require_admin(request)
     routed = [e for e in exits_rows() if e["mode"] == "routes" and e["enabled"]]
     return render_page(
         request, "client_new.html", "clients",
@@ -863,8 +994,14 @@ def client_new_page(request: Request, err: str | None = None):
 
 
 @app.get("/clients/{cid}", response_class=HTMLResponse)
-def client_page(request: Request, cid: int, err: str | None = None, ok: str | None = None):
-    token = require(request)
+def client_page(
+    request: Request,
+    cid: int,
+    err: str | None = None,
+    ok: str | None = None,
+    newpw: str | None = None,
+):
+    token = require_admin(request)
     c = cfg()
     with db() as conn:
         cl = conn.execute("SELECT * FROM clients WHERE id = ?", (cid,)).fetchone()
@@ -882,6 +1019,7 @@ def client_page(request: Request, cid: int, err: str | None = None, ok: str | No
         request, "client_detail.html", "clients",
         csrf=csrf(token), err=err, ok=ok, cl=view, raw=cl,
         routed=routed, assigned=set(assigned.keys()), conf=conf,
+        account=client_account(cid), newpw=pop_secret(newpw),
     )
 
 
@@ -893,7 +1031,7 @@ def create_client(
     exits: list[int] = Form([]),
     csrf_token: str = Form(...),
 ):
-    token = require(request)
+    token = require_admin(request)
     if not hmac.compare_digest(csrf_token, csrf(token)):
         raise HTTPException(status_code=400, detail="csrf")
     name = name.strip()
@@ -939,7 +1077,7 @@ def client_access_update(
     exits: list[int] = Form([]),
     csrf_token: str = Form(...),
 ):
-    token = require(request)
+    token = require_admin(request)
     if not hmac.compare_digest(csrf_token, csrf(token)):
         raise HTTPException(status_code=400, detail="csrf")
     with db() as conn:
@@ -958,7 +1096,7 @@ def client_access_update(
 
 @app.post("/clients/{cid}/toggle")
 def toggle_client(request: Request, cid: int, csrf_token: str = Form(...)):
-    token = require(request)
+    token = require_admin(request)
     if not hmac.compare_digest(csrf_token, csrf(token)):
         raise HTTPException(status_code=400, detail="csrf")
     with db() as conn:
@@ -976,13 +1114,14 @@ def toggle_client(request: Request, cid: int, csrf_token: str = Form(...)):
 
 @app.post("/clients/{cid}/delete")
 def delete_client(request: Request, cid: int, csrf_token: str = Form(...)):
-    token = require(request)
+    token = require_admin(request)
     if not hmac.compare_digest(csrf_token, csrf(token)):
         raise HTTPException(status_code=400, detail="csrf")
     with db() as conn:
         row = conn.execute("SELECT * FROM clients WHERE id = ?", (cid,)).fetchone()
         if not row:
             raise HTTPException(status_code=404)
+        conn.execute("DELETE FROM users WHERE client_id = ?", (cid,))
         conn.execute("DELETE FROM clients WHERE id = ?", (cid,))
         conn.execute("DELETE FROM client_exits WHERE client_id = ?", (cid,))
     audit("client_deleted", row["name"])
@@ -991,16 +1130,9 @@ def delete_client(request: Request, cid: int, csrf_token: str = Form(...)):
     return RedirectResponse("/clients?ok=client+deleted", status_code=303)
 
 
-@app.get("/clients/{cid}/conf")
-def download_conf(request: Request, cid: int):
-    require(request)
-    c = cfg()
-    with db() as conn:
-        cl = conn.execute("SELECT * FROM clients WHERE id = ?", (cid,)).fetchone()
-    if not cl:
-        raise HTTPException(status_code=404)
+def conf_response(cl) -> PlainTextResponse:
     try:
-        body = client_conf(c, cl)
+        body = client_conf(cfg(), cl)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     return PlainTextResponse(
@@ -1009,16 +1141,9 @@ def download_conf(request: Request, cid: int):
     )
 
 
-@app.get("/clients/{cid}/qr.png")
-def qr(request: Request, cid: int):
-    require(request)
-    c = cfg()
-    with db() as conn:
-        cl = conn.execute("SELECT * FROM clients WHERE id = ?", (cid,)).fetchone()
-    if not cl:
-        raise HTTPException(status_code=404)
+def qr_response(cl) -> Response:
     try:
-        body = client_conf(c, cl)
+        body = client_conf(cfg(), cl)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     with tempfile.NamedTemporaryFile("w", suffix=".conf", delete=False) as fh:
@@ -1037,11 +1162,225 @@ def qr(request: Request, cid: int):
     return Response(res.stdout, media_type="image/png")
 
 
+@app.get("/clients/{cid}/conf")
+def download_conf(request: Request, cid: int):
+    require_admin(request)
+    with db() as conn:
+        cl = conn.execute("SELECT * FROM clients WHERE id = ?", (cid,)).fetchone()
+    if not cl:
+        raise HTTPException(status_code=404)
+    return conf_response(cl)
+
+
+@app.get("/clients/{cid}/qr.png")
+def qr(request: Request, cid: int):
+    require_admin(request)
+    with db() as conn:
+        cl = conn.execute("SELECT * FROM clients WHERE id = ?", (cid,)).fetchone()
+    if not cl:
+        raise HTTPException(status_code=404)
+    return qr_response(cl)
+
+
+# ---------------------------------------------------------------- accounts
+
+def client_account(cid: int):
+    with db() as conn:
+        return conn.execute(
+            "SELECT * FROM users WHERE client_id = ?", (cid,)
+        ).fetchone()
+
+
+def account_redirect(cid: int, ok: str = "", err: str = "", secret: str = "") -> RedirectResponse:
+    params = []
+    if ok:
+        params.append("ok=" + quote(ok))
+    if err:
+        params.append("err=" + quote(err))
+    if secret:
+        params.append("newpw=" + quote(secret))
+    query = "?" + "&".join(params) if params else ""
+    return RedirectResponse(f"/clients/{cid}{query}", status_code=303)
+
+
+@app.post("/clients/{cid}/account")
+def account_create(
+    request: Request,
+    cid: int,
+    email: str = Form(...),
+    password: str = Form(""),
+    csrf_token: str = Form(...),
+):
+    token = require_admin(request)
+    if not hmac.compare_digest(csrf_token, csrf(token)):
+        raise HTTPException(status_code=400, detail="csrf")
+    with db() as conn:
+        cl = conn.execute("SELECT * FROM clients WHERE id = ?", (cid,)).fetchone()
+    if not cl:
+        raise HTTPException(status_code=404)
+    if client_account(cid):
+        return account_redirect(cid, err="this client already has an account")
+
+    email = normalize_email(email)
+    problem = email_error(email)
+    if problem:
+        return account_redirect(cid, err=problem)
+    password = password or secrets.token_urlsafe(12)
+    problem = password_error(password)
+    if problem:
+        return account_redirect(cid, err=problem)
+
+    try:
+        with db() as conn:
+            conn.execute(
+                "INSERT INTO users (client_id, email, password_hash, enabled, token_version, created_at) "
+                "VALUES (?, ?, ?, 1, 1, ?)",
+                (cid, email, hash_password(password),
+                 datetime.now(timezone.utc).isoformat(timespec="seconds")),
+            )
+    except sqlite3.IntegrityError:
+        return account_redirect(cid, err="email is already used by another account")
+    audit("account_created", f"{cl['name']} {email}")
+    return account_redirect(cid, ok="account created", secret=stash_secret(password))
+
+
+@app.post("/clients/{cid}/account/password")
+def account_reset(request: Request, cid: int, csrf_token: str = Form(...)):
+    token = require_admin(request)
+    if not hmac.compare_digest(csrf_token, csrf(token)):
+        raise HTTPException(status_code=400, detail="csrf")
+    account = client_account(cid)
+    if not account:
+        raise HTTPException(status_code=404)
+    password = secrets.token_urlsafe(12)
+    with db() as conn:
+        conn.execute(
+            "UPDATE users SET password_hash = ?, token_version = token_version + 1 WHERE id = ?",
+            (hash_password(password), account["id"]),
+        )
+    audit("account_password_reset", account["email"])
+    return account_redirect(cid, ok="password reset", secret=stash_secret(password))
+
+
+@app.post("/clients/{cid}/account/toggle")
+def account_toggle(request: Request, cid: int, csrf_token: str = Form(...)):
+    token = require_admin(request)
+    if not hmac.compare_digest(csrf_token, csrf(token)):
+        raise HTTPException(status_code=400, detail="csrf")
+    account = client_account(cid)
+    if not account:
+        raise HTTPException(status_code=404)
+    enabled = 0 if account["enabled"] else 1
+    with db() as conn:
+        conn.execute(
+            "UPDATE users SET enabled = ?, token_version = token_version + 1 WHERE id = ?",
+            (enabled, account["id"]),
+        )
+    audit("account_toggle", f"{account['email']} -> {enabled}")
+    return account_redirect(cid, ok="account enabled" if enabled else "account disabled")
+
+
+@app.post("/clients/{cid}/account/delete")
+def account_delete(request: Request, cid: int, csrf_token: str = Form(...)):
+    token = require_admin(request)
+    if not hmac.compare_digest(csrf_token, csrf(token)):
+        raise HTTPException(status_code=400, detail="csrf")
+    account = client_account(cid)
+    if not account:
+        raise HTTPException(status_code=404)
+    with db() as conn:
+        conn.execute("DELETE FROM users WHERE id = ?", (account["id"],))
+    audit("account_deleted", account["email"])
+    return account_redirect(cid, ok="account deleted")
+
+
+# ---------------------------------------------------------------- self service
+
+@app.get("/me", response_class=HTMLResponse)
+def me_page(request: Request, err: str | None = None, ok: str | None = None):
+    token, row = require_user(request)
+    cl = user_client(row)
+    c = cfg()
+    live = iface_dump(c["iface"])["peers"]
+    try:
+        conf = mask_conf(client_conf(c, cl))
+    except ValueError:
+        conf = None
+    return render_page(
+        request, "me.html", "me", role="user",
+        csrf=csrf(token), err=err, ok=ok, cl=client_view(cl, live),
+        email=row["email"], last_login=row["last_login"], conf=conf,
+    )
+
+
+@app.get("/me/conf")
+def me_conf(request: Request):
+    _, row = require_user(request)
+    cl = user_client(row)
+    audit("config_downloaded", row["email"])
+    return conf_response(cl)
+
+
+@app.get("/me/qr.png")
+def me_qr(request: Request):
+    _, row = require_user(request)
+    return qr_response(user_client(row))
+
+
+@app.post("/me/password")
+def me_password(
+    request: Request,
+    current_password: str = Form(...),
+    new_password: str = Form(...),
+    csrf_token: str = Form(...),
+):
+    token, row = require_user(request)
+    if not hmac.compare_digest(csrf_token, csrf(token)):
+        raise HTTPException(status_code=400, detail="csrf")
+    if not check_password(current_password, row["password_hash"]):
+        return RedirectResponse("/me?err=" + quote("current password is wrong"), status_code=303)
+    problem = password_error(new_password, "new password")
+    if problem:
+        return RedirectResponse("/me?err=" + quote(problem), status_code=303)
+    with db() as conn:
+        conn.execute(
+            "UPDATE users SET password_hash = ?, token_version = token_version + 1 WHERE id = ?",
+            (hash_password(new_password), row["uid"]),
+        )
+        tv = conn.execute(
+            "SELECT token_version FROM users WHERE id = ?", (row["uid"],)
+        ).fetchone()[0]
+    audit("user_password_changed", row["email"])
+    response = RedirectResponse("/me?ok=password+changed", status_code=303)
+    response.set_cookie(
+        COOKIE, make_session("user", int(row["uid"]), int(tv)),
+        httponly=True, secure=True, samesite="strict", max_age=SESSION_TTL,
+    )
+    return response
+
+
+@app.post("/me/reissue")
+def me_reissue(request: Request, csrf_token: str = Form(...)):
+    token, row = require_user(request)
+    if not hmac.compare_digest(csrf_token, csrf(token)):
+        raise HTTPException(status_code=400, detail="csrf")
+    private = genkey()
+    with db() as conn:
+        conn.execute(
+            "UPDATE clients SET private_key = ?, public_key = ?, preshared_key = ? WHERE id = ?",
+            (private, pubkey(private), genpsk(), row["client_id"]),
+        )
+    apply_conf(cfg())
+    apply_routing()
+    audit("user_key_reissued", row["email"])
+    return RedirectResponse("/me?ok=key+reissued", status_code=303)
+
+
 # ---------------------------------------------------------------- journal
 
 @app.get("/journal", response_class=HTMLResponse)
 def journal_page(request: Request, action: str | None = None, page: int = 1):
-    token = require(request)
+    token = require_admin(request)
     per = 50
     page = max(1, page)
     where, params = "", []
@@ -1068,7 +1407,7 @@ def journal_page(request: Request, action: str | None = None, page: int = 1):
 
 @app.get("/settings", response_class=HTMLResponse)
 def settings_page(request: Request):
-    require(request)
+    require_admin(request)
     c = cfg()
     with db() as conn:
         clients_n = conn.execute("SELECT count(*) FROM clients").fetchone()[0]

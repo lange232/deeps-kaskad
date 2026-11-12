@@ -144,13 +144,20 @@ without access to Launchpad.
 
 `https://<host>:8080`, FastAPI + SQLite with a self-signed certificate.
 
-The password is generated during the first deploy and printed once; only its
-hash is stored in `/etc/kaskad/panel.env`. Reset: delete the file, run
-`--tags panel`, restart `kaskad-panel`.
+The panel has two kinds of sign-in:
 
-What it does: clients (create, change class and access, download the config,
-QR, enable/disable, delete), exits (add, enable/disable, delete, manual
-switch), service status, action journal.
+- **administrator** — login `admin` and the password generated during the
+  first deploy and printed once; only its hash is stored in
+  `/etc/kaskad/panel.env`. Reset: delete the file, run `--tags panel`, restart
+  `kaskad-panel`.
+- **client** — an account created from the client page; the email is the
+  login and the password is generated or set by the administrator and shown
+  once. A client signs in at `/me` and sees only their own config: download,
+  QR, WireGuard instructions, self-service key reissue and password change.
+
+The administrator manages clients (create, change class and access, account,
+download the config, QR, enable/disable, delete), exits (add, enable/disable,
+delete, manual switch), service status and the action journal.
 
 Access mode is controlled by `kaskad_panel_expose`: `lan` keeps the port open,
 `clients` exposes it only through the tunnel at `https://10.80.0.1:8080`.
@@ -192,6 +199,8 @@ a client.
   rejects such configs.
 - Client tunnels are IPv4 only; on dual-stack devices IPv6 bypasses the tunnel.
 - The panel is exposed over a self-signed certificate and a password.
+- Client sessions are invalidated when the account is disabled or its client
+  is disabled; the account and the client are a one-to-one pair.
 
 ## License
 

@@ -88,6 +88,68 @@
   </section>
 
   <section>
+    <h2 class="oc-section__title">account</h2>
+    <div class="oc-panel" style="padding:16px">
+      {% if newpw %}
+      <div class="oc-alert oc-alert--success" style="margin-bottom:14px">
+        <span class="oc-dot" style="margin-top:7px"></span>
+        <div class="oc-alert__body">
+          password for <span class="oc-mono">{{ account.email if account else '' }}</span> —
+          shown once, save it now:
+          <pre class="conf" style="margin-top:8px">{{ newpw }}</pre>
+        </div>
+      </div>
+      {% endif %}
+
+      {% if account %}
+      <div class="kv-grid">
+        <div><div class="k">email</div><div class="v oc-mono">{{ account.email }}</div></div>
+        <div><div class="k">login</div><div class="v">
+          {% if account.enabled %}<span class="oc-badge oc-badge--success">enabled</span>
+          {% else %}<span class="oc-badge oc-badge--subtle">disabled</span>{% endif %}
+        </div></div>
+        <div><div class="k">last login</div><div class="v">{{ account.last_login or 'never' }}</div></div>
+      </div>
+      <div class="actions" style="margin-top:16px">
+        <form method="post" action="/clients/{{ cl.id }}/account/password">
+          <input type="hidden" name="csrf_token" value="{{ csrf }}">
+          <button class="oc-btn oc-btn--neutral oc-btn--sm">reset password</button>
+        </form>
+        <form method="post" action="/clients/{{ cl.id }}/account/toggle">
+          <input type="hidden" name="csrf_token" value="{{ csrf }}">
+          <button class="oc-btn oc-btn--neutral oc-btn--sm">{{ 'disable login' if account.enabled else 'enable login' }}</button>
+        </form>
+        <form method="post" action="/clients/{{ cl.id }}/account/delete"
+              onsubmit="return confirm('delete the account for {{ account.email }}?')">
+          <input type="hidden" name="csrf_token" value="{{ csrf }}">
+          <button class="oc-btn oc-btn--ghost-danger oc-btn--sm">delete account</button>
+        </form>
+      </div>
+      <p class="oc-hint" style="margin-top:10px">
+        the client signs in at this panel with this email and manages their own config
+      </p>
+      {% else %}
+      <form method="post" action="/clients/{{ cl.id }}/account">
+        <input type="hidden" name="csrf_token" value="{{ csrf }}">
+        <label class="oc-field">
+          <span class="oc-field__label">email</span>
+          <input class="oc-input" type="email" name="email" required placeholder="client@example.com">
+        </label>
+        <label class="oc-field" style="margin-top:12px">
+          <span class="oc-field__label">password</span>
+          <input class="oc-input" type="text" name="password" autocomplete="off"
+                 placeholder="leave empty to generate">
+        </label>
+        <p class="oc-hint" style="margin-top:8px">
+          at least 12 characters; a generated password is shown once after creation
+        </p>
+        <button class="oc-btn oc-btn--contrast oc-btn--sm" style="margin-top:12px">create account</button>
+      </form>
+      {% endif %}
+    </div>
+  </section>
+
+  <section>
     <h2 class="oc-section__title">danger zone</h2>
     <div class="oc-panel" style="padding:16px">
       <div class="actions">

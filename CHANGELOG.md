@@ -5,6 +5,28 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0] - 2026-11-12
+
+### Added
+
+- Per-client accounts: the administrator creates an account for a client in
+  the panel, the email is the login, and the password is generated and shown
+  once.
+- Self-service page `/me`: config download, QR code, WireGuard installation
+  instructions, key reissue and password change.
+- Role-based access: administrators keep the environment password, clients
+  can only reach their own config; users cannot open admin pages.
+- Sessions carry the role and a token version, so a password reset, account
+  disable or client disable signs existing sessions out immediately.
+- Login rate limiting counts attempts per IP and per email.
+- Account column on the clients page and account management in the client
+  detail page.
+
+### Fixed
+
+- Passwords use a shared pbkdf2 implementation for the administrator and
+  client accounts.
+
 ## [0.1.0] - 2026-11-12
 
 ### Added

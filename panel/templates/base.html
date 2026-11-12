@@ -111,12 +111,16 @@
 <div class="app {{ 'app--centered' if hide_nav }}">
   {% if not hide_nav %}
   <aside class="side">
+    {% if role == 'user' %}
+    <a href="/me" class="{{ 'is-active' if nav == 'me' }}">My access</a>
+    {% else %}
     <a href="/" class="{{ 'is-active' if nav == 'overview' }}">Overview</a>
     <a href="/exits" class="{{ 'is-active' if nav == 'exits' }}">Exits</a>
     <a href="/clients" class="{{ 'is-active' if nav == 'clients' }}">Clients</a>
     <a href="/journal" class="{{ 'is-active' if nav == 'journal' }}">Journal</a>
     <div class="side__sep"></div>
     <a href="/settings" class="{{ 'is-active' if nav == 'settings' }}">Settings</a>
+    {% endif %}
   </aside>
   {% endif %}
   <main class="main">

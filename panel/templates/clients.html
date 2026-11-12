@@ -8,7 +8,7 @@
 
 <div class="toolbar">
   <form method="get" action="/clients" class="actions" style="flex:1; max-width:360px">
-    <input class="oc-input oc-input--sm" type="text" name="q" value="{{ q }}" placeholder="search by name or address">
+    <input class="oc-input oc-input--sm" type="text" name="q" value="{{ q }}" placeholder="search by name, address or email">
     <button class="oc-btn oc-btn--neutral oc-btn--sm">search</button>
     {% if q %}<a class="oc-btn oc-btn--ghost oc-btn--sm" href="/clients">reset</a>{% endif %}
   </form>
@@ -19,13 +19,19 @@
 <div class="oc-panel">
   <table class="oc-table">
     <thead>
-      <tr><th>name</th><th>address</th><th>access</th><th>handshake</th><th>rx / tx</th><th>state</th><th></th></tr>
+      <tr><th>name</th><th>address</th><th>account</th><th>access</th><th>handshake</th><th>rx / tx</th><th>state</th><th></th></tr>
     </thead>
     <tbody>
     {% for c in clients %}
       <tr>
         <td>{{ c.name }}</td>
         <td class="oc-mono oc-num">{{ c.ip }}</td>
+        <td>
+          {% if c.account_email %}
+            <span class="oc-mono">{{ c.account_email }}</span>
+            {% if not c.account_enabled %}<span class="oc-badge oc-badge--subtle">login off</span>{% endif %}
+          {% else %}<span class="oc-muted">no account</span>{% endif %}
+        </td>
         <td>
           <div class="actions">
             {% if c.internet %}<span class="oc-badge oc-badge--success">internet</span>{% endif %}

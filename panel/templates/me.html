@@ -1,0 +1,134 @@
+{% extends "base.html" %}
+{% block title %}my access — deeps kaskad{% endblock %}
+{% block topbar %}<span class="oc-mono oc-muted">{{ email }}</span>{% endblock %}
+{% block body %}
+<div class="page-head">
+  <div class="name-cell">
+    <h1 style="margin:0">My access</h1>
+    {% if cl.enabled %}<span class="oc-badge oc-badge--success"><span class="oc-dot"></span>active</span>
+    {% else %}<span class="oc-badge oc-badge--subtle">disabled</span>{% endif %}
+  </div>
+  <p class="oc-muted" style="margin-top:6px">
+    <span class="oc-mono">{{ cl.name }}</span> ·
+    <span class="oc-mono">{{ cl.ip }}/32</span> ·
+    {% if cl.internet %}<span class="oc-badge oc-badge--success">internet</span>{% endif %}
+    {% for name in cl.exits %}<span class="oc-badge oc-badge--info">{{ name }}</span>{% endfor %}
+    {% if not cl.internet and not cl.exits %}<span class="oc-badge oc-badge--danger">no access</span>{% endif %}
+  </p>
+</div>
+
+{% if err %}<div class="oc-alert oc-alert--danger" style="margin-bottom:16px"><span class="oc-dot" style="margin-top:7px"></span><div class="oc-alert__body">{{ err }}</div></div>{% endif %}
+{% if ok %}<div class="oc-alert oc-alert--success" style="margin-bottom:16px"><span class="oc-dot" style="margin-top:7px"></span><div class="oc-alert__body">{{ ok }}</div></div>{% endif %}
+
+<div class="stack">
+  <div class="oc-panel" style="padding:16px">
+    <div class="kv-grid">
+      <div><div class="k">handshake</div><div class="v" data-hs="{{ cl.handshake }}">—</div></div>
+      <div><div class="k">received</div><div class="v oc-num">{{ (cl.rx / 1048576) | round(1) }} MiB</div></div>
+      <div><div class="k">sent</div><div class="v oc-num">{{ (cl.tx / 1048576) | round(1) }} MiB</div></div>
+      <div><div class="k">last login</div><div class="v">{{ last_login or 'never' }}</div></div>
+    </div>
+  </div>
+
+  <section>
+    <h2 class="oc-section__title">configuration</h2>
+    <div class="oc-panel" style="padding:16px">
+      {% if conf %}
+      <div class="actions">
+        <a class="oc-btn oc-btn--outline oc-btn--sm" href="/me/conf">download .conf</a>
+        <details id="qr" style="display:inline-flex">
+          <summary class="oc-btn oc-btn--ghost oc-btn--sm" style="display:inline-flex">show qr</summary>
+        </details>
+      </div>
+      <div id="qr-box" hidden style="margin-top:14px; background:var(--ui-bg-deep); padding:12px; border-radius:6px; display:inline-block">
+        <img src="/me/qr.png" alt="qr" style="width:240px; height:240px; image-rendering:pixelated">
+      </div>
+      <details style="margin-top:14px">
+        <summary class="oc-btn oc-btn--ghost oc-btn--sm" style="display:inline-flex">show config</summary>
+        <pre class="conf" style="margin-top:12px">{{ conf }}</pre>
+        <p class="oc-hint" style="margin-top:8px">keys are hidden here; the downloaded file is complete</p>
+      </details>
+      {% else %}
+      <p class="oc-muted" style="margin:0">
+        your account has no internet or subnet access assigned yet — contact the administrator.
+      </p>
+      {% endif %}
+    </div>
+  </section>
+
+  {% if conf %}
+  <section>
+    <h2 class="oc-section__title">wireguard client</h2>
+    <div class="oc-panel" style="padding:16px">
+      <p class="oc-muted" style="margin:0 0 12px">
+        use the standard WireGuard app; Amnezia is not required.
+        install it from <a href="https://www.wireguard.com/install/">wireguard.com/install</a>.
+      </p>
+      <ol class="oc-muted" style="margin:0; padding-left:20px; line-height:1.9">
+        <li>install WireGuard for Windows, macOS, Android, iOS or Linux;</li>
+        <li>create a tunnel: scan the QR code or import the downloaded <span class="oc-mono">.conf</span> file;</li>
+        <li>switch the tunnel on — all traffic listed above goes through deeps kaskad;</li>
+        <li>download the config again after reissuing the key.</li>
+      </ol>
+    </div>
+  </section>
+
+  <section>
+    <h2 class="oc-section__title">reissue key</h2>
+    <div class="oc-panel" style="padding:16px">
+      <p class="oc-muted" style="margin:0 0 12px">
+        generates new keys on the server. the current config stops working immediately,
+        so download the new one and update your devices.
+      </p>
+      <form method="post" action="/me/reissue"
+            onsubmit="return confirm('reissue the key? the current config will stop working')">
+        <input type="hidden" name="csrf_token" value="{{ csrf }}">
+        <button class="oc-btn oc-btn--neutral oc-btn--sm">reissue key</button>
+      </form>
+    </div>
+  </section>
+  {% endif %}
+
+  <section>
+    <h2 class="oc-section__title">password</h2>
+    <div class="oc-panel" style="padding:16px">
+      <form method="post" action="/me/password" style="max-width:380px">
+        <input type="hidden" name="csrf_token" value="{{ csrf }}">
+        <label class="oc-field">
+          <span class="oc-field__label">current password</span>
+          <input class="oc-input" type="password" name="current_password"
+                 autocomplete="current-password" required>
+        </label>
+        <label class="oc-field" style="margin-top:12px">
+          <span class="oc-field__label">new password</span>
+          <input class="oc-input" type="password" name="new_password"
+                 autocomplete="new-password" minlength="12" required>
+        </label>
+        <p class="oc-hint" style="margin-top:8px">
+          at least 12 characters; other sessions are signed out
+        </p>
+        <button class="oc-btn oc-btn--contrast oc-btn--sm" style="margin-top:12px">change password</button>
+      </form>
+    </div>
+  </section>
+</div>
+
+<script>
+function rel(ts) {
+  if (!ts || Number(ts) <= 0) return 'no data';
+  const d = Math.floor(Date.now() / 1000 - Number(ts));
+  if (d < 60) return d + 's ago';
+  if (d < 3600) return Math.floor(d / 60) + 'm ago';
+  if (d < 86400) return Math.floor(d / 3600) + 'h ago';
+  return Math.floor(d / 86400) + 'd ago';
+}
+for (const el of document.querySelectorAll('[data-hs]')) el.textContent = rel(el.dataset.hs);
+const qrDetails = document.getElementById('qr');
+if (qrDetails) {
+  qrDetails.addEventListener('toggle', () => {
+    document.getElementById('qr-box').hidden = !qrDetails.open;
+  });
+}
+setTimeout(() => location.reload(), 15000);
+</script>
+{% endblock %}

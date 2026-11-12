@@ -17,11 +17,20 @@
 
     <form method="post" action="/login">
       <label class="oc-field">
+        <span class="oc-field__label">email</span>
+        <input class="oc-input" type="text" name="email" value="{{ email }}" autofocus
+               autocomplete="username" autocapitalize="none" spellcheck="false"
+               placeholder="you@example.com" required>
+      </label>
+      <label class="oc-field" style="margin-top:12px">
         <span class="oc-field__label">password</span>
-        <input class="oc-input" type="password" name="password" autofocus
+        <input class="oc-input" type="password" name="password"
                autocomplete="current-password" required>
       </label>
       <button class="oc-btn oc-btn--contrast" style="width:100%; margin-top:14px">sign in</button>
     </form>
+    <p class="oc-hint" style="margin-top:12px">
+      clients sign in with the email from their account; administrators use <span class="oc-mono">admin</span>
+    </p>
 </div>
 {% endblock %}

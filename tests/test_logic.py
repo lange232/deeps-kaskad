@@ -8,6 +8,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "panel"))
 
+import auth  # noqa: E402
 import failover  # noqa: E402
 import routing  # noqa: E402
 
@@ -69,6 +70,83 @@ class TablesTests(unittest.TestCase):
 
     def test_high_ids_are_cleaned(self):
         self.assertEqual(routing.tables_to_flush({1200}, set()), [1200])
+
+
+class PasswordTests(unittest.TestCase):
+    def test_round_trip(self):
+        stored = auth.hash_password("correct horse battery")
+        self.assertTrue(auth.check_password("correct horse battery", stored))
+        self.assertFalse(auth.check_password("wrong password", stored))
+
+    def test_salt_is_unique(self):
+        one = auth.hash_password("same password")
+        two = auth.hash_password("same password")
+        self.assertNotEqual(one, two)
+        self.assertTrue(auth.check_password("same password", one))
+        self.assertTrue(auth.check_password("same password", two))
+
+    def test_malformed_hash_fails_closed(self):
+        for value in ("", "plain", "pbkdf2$abc$xx$yy", "md5$1$a$b"):
+            self.assertFalse(auth.check_password("secret", value))
+
+    def test_admin_hash_format_is_accepted(self):
+        # panel.env uses the same pbkdf2$iterations$salt$hash layout.
+        import base64
+        import hashlib
+        salt = b"0123456789abcdef"
+        digest = hashlib.pbkdf2_hmac("sha256", b"adminpass", salt, 1000)
+        stored = "pbkdf2$1000$%s$%s" % (
+            base64.b64encode(salt).decode(), base64.b64encode(digest).decode()
+        )
+        self.assertTrue(auth.check_password("adminpass", stored))
+
+
+class EmailTests(unittest.TestCase):
+    def test_normalizes_case_and_spaces(self):
+        self.assertEqual(auth.normalize_email("  User@Example.COM "), "user@example.com")
+
+    def test_accepts_valid(self):
+        self.assertIsNone(auth.email_error("user@example.com"))
+        self.assertIsNone(auth.email_error("a.b+tag@mail.example.co.uk"))
+
+    def test_rejects_invalid(self):
+        for value in ("", "user", "user@", "@example.com", "user@example", "a b@example.com"):
+            self.assertIsNotNone(auth.email_error(value))
+
+    def test_password_policy(self):
+        self.assertIsNotNone(auth.password_error("short"))
+        self.assertIsNone(auth.password_error("twelve chars"))
+
+
+class SessionTests(unittest.TestCase):
+    secret = "test-session-secret"
+
+    def test_admin_round_trip(self):
+        token = auth.make_session(self.secret, "admin")
+        data = auth.session_data(self.secret, token)
+        self.assertEqual(data["role"], "admin")
+        self.assertEqual(data["uid"], 0)
+
+    def test_user_round_trip_keeps_version(self):
+        token = auth.make_session(self.secret, "user", uid=7, tv=3)
+        data = auth.session_data(self.secret, token)
+        self.assertEqual((data["role"], data["uid"], data["tv"]), ("user", 7, 3))
+
+    def test_forged_role_is_rejected(self):
+        token = auth.make_session(self.secret, "root")
+        self.assertIsNone(auth.session_data(self.secret, token))
+
+    def test_other_secret_is_rejected(self):
+        token = auth.make_session(self.secret, "admin")
+        self.assertIsNone(auth.session_data("another-secret", token))
+
+    def test_expired_is_rejected(self):
+        token = auth.make_session(self.secret, "admin", ttl=-1)
+        self.assertIsNone(auth.session_data(self.secret, token))
+
+    def test_garbage_is_rejected(self):
+        for token in ("", "abc", "abc.def", None):
+            self.assertIsNone(auth.session_data(self.secret, token))
 
 
 if __name__ == "__main__":
