@@ -13,6 +13,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -206,6 +207,90 @@ class RoleTests(PanelTestCase):
         response = self.client.get("/me")
         self.assertEqual(response.status_code, 303)
         self.assertEqual(response.headers["location"], "/login")
+
+
+class ThrottleTests(PanelTestCase):
+    def test_pair_limit_blocks_only_that_pair(self):
+        for _ in range(app.PAIR_LIMIT):
+            app.note_failure("1.2.3.4", "a@example.com")
+        self.assertTrue(app.rate_limited("1.2.3.4", "a@example.com"))
+        self.assertFalse(app.rate_limited("1.2.3.4", "b@example.com"))
+        self.assertFalse(app.rate_limited("5.6.7.8", "a@example.com"))
+
+    def test_ip_limit_blocks_every_email(self):
+        for n in range(app.IP_LIMIT):
+            app.note_failure("1.2.3.4", f"user{n}@example.com")
+        self.assertTrue(app.rate_limited("1.2.3.4", "else@example.com"))
+
+    def test_email_attempts_only_add_a_delay(self):
+        for n in range(10):
+            app.note_failure(f"10.0.0.{n}", "admin")
+        self.assertFalse(app.rate_limited("9.9.9.9", "admin"))
+        self.assertGreater(app.login_delay("admin"), 0)
+        self.assertLessEqual(app.login_delay("admin"), app.EMAIL_DELAY_MAX)
+
+    def test_old_attempts_are_forgotten(self):
+        app._attempts["ip:1.1.1.1"] = [time.time() - app.RATE_WINDOW - 10]
+        self.assertFalse(app.rate_limited("1.1.1.1"))
+        self.assertNotIn("ip:1.1.1.1", app._attempts)
+
+    def test_success_clears_the_counters(self):
+        app.note_failure("1.1.1.1", "a@example.com")
+        app.clear_failures("1.1.1.1", "a@example.com")
+        self.assertFalse(app.rate_limited("1.1.1.1", "a@example.com"))
+
+    def test_expired_flash_secrets_are_dropped(self):
+        app._flash_secrets["stale"] = (time.time() - 1, "password")
+        app._prune_secrets()
+        self.assertNotIn("stale", app._flash_secrets)
+
+
+class SessionTests(PanelTestCase):
+    def stale_client(self, cookie):
+        return TestClient(app.app, base_url="https://testserver",
+                           follow_redirects=False,
+                           cookies={app.COOKIE: cookie})
+
+    def test_logout_revokes_the_cookie(self):
+        self.login_admin()
+        cookie = self.client.cookies.get(app.COOKIE)
+        response = self.client.post("/logout")
+        self.assertEqual(response.status_code, 303)
+        stale = self.stale_client(cookie)
+        self.assertEqual(stale.get("/").headers["location"], "/login")
+
+    def test_sign_out_everywhere(self):
+        self.seed_client(email="c1@example.com")
+        self.login("c1@example.com", USER_PASSWORD)
+        cookie = self.client.cookies.get(app.COOKIE)
+        csrf = self.csrf("/me")
+        response = self.client.post("/me/logout-all", data={"csrf_token": csrf})
+        self.assertEqual(response.status_code, 303)
+        self.assertEqual(response.headers["location"], "/login")
+        self.assertEqual(self.stale_client(cookie).get("/me").headers["location"],
+                         "/login")
+        with app.db() as conn:
+            self.assertEqual(conn.execute(
+                "SELECT token_version FROM users").fetchone()[0], 2)
+
+    def test_account_reset_revokes_user_sessions(self):
+        cid = self.seed_client(email="c1@example.com")
+        self.login("c1@example.com", USER_PASSWORD)
+        cookie = self.client.cookies.get(app.COOKIE)
+        self.client.post("/logout")
+
+        self.login_admin()
+        csrf = self.csrf(f"/clients/{cid}")
+        response = self.client.post(f"/clients/{cid}/account/password",
+                                    data={"csrf_token": csrf})
+        self.assertEqual(response.status_code, 303)
+        self.assertEqual(self.stale_client(cookie).get("/me").headers["location"],
+                         "/login")
+
+    def test_healthz_is_public(self):
+        response = self.client.get("/healthz")
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json()["ok"])
 
 
 class ClientTests(PanelTestCase):

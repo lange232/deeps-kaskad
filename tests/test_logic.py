@@ -338,6 +338,12 @@ class SessionTests(unittest.TestCase):
         token = auth.make_session(self.secret, "admin")
         self.assertIsNone(auth.session_data("another-secret", token))
 
+    def test_jti_is_present_and_unique(self):
+        one = auth.session_data(self.secret, auth.make_session(self.secret, "admin"))
+        two = auth.session_data(self.secret, auth.make_session(self.secret, "admin"))
+        self.assertTrue(one["jti"])
+        self.assertNotEqual(one["jti"], two["jti"])
+
     def test_expired_is_rejected(self):
         token = auth.make_session(self.secret, "admin", ttl=-1)
         self.assertIsNone(auth.session_data(self.secret, token))

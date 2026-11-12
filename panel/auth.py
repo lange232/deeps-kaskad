@@ -73,7 +73,13 @@ def sign(payload: bytes, secret: str) -> str:
 
 def make_session(secret: str, role: str, uid: int = 0, tv: int = 0, ttl: int = SESSION_TTL) -> str:
     payload = json.dumps(
-        {"role": role, "uid": uid, "tv": tv, "exp": int(time.time()) + ttl}
+        {
+            "role": role,
+            "uid": uid,
+            "tv": tv,
+            "jti": secrets.token_urlsafe(16),
+            "exp": int(time.time()) + ttl,
+        }
     ).encode()
     return base64.urlsafe_b64encode(payload).decode() + "." + sign(payload, secret)
 

@@ -109,6 +109,69 @@
         executable: /bin/bash
       changed_when: false
 
+    - name: Routing tables and client links are consistent
+      ansible.builtin.shell: |
+        set -o pipefail
+        python3 - <<'PY'
+        import sqlite3, sys
+
+        conn = sqlite3.connect("/var/lib/kaskad/panel.db")
+        problems = []
+
+        tables = [
+            r[0] for r in conn.execute(
+                "SELECT table_num FROM exits WHERE table_num > 0 "
+                "UNION ALL SELECT table_num FROM clients WHERE table_num > 0"
+            )
+        ]
+        duplicates = {t for t in tables if tables.count(t) > 1}
+        if duplicates:
+            problems.append(f"table numbers used twice: {sorted(duplicates)}")
+        low = [t for t in tables if t < 1001]
+        if low:
+            problems.append(f"table numbers below 1001: {sorted(low)}")
+
+        for name, sql in (
+            ("client_exits",
+             "SELECT count(*) FROM client_exits ce WHERE "
+             "ce.client_id NOT IN (SELECT id FROM clients) "
+             "OR ce.exit_id NOT IN (SELECT id FROM exits)"),
+            ("client_internet_exits",
+             "SELECT count(*) FROM client_internet_exits ce WHERE "
+             "ce.client_id NOT IN (SELECT id FROM clients) "
+             "OR ce.exit_id NOT IN (SELECT id FROM exits)"),
+        ):
+            orphans = conn.execute(sql).fetchone()[0]
+            if orphans:
+                problems.append(f"{name}: {orphans} rows point at missing objects")
+
+        if problems:
+            print("inconsistent database: " + "; ".join(problems))
+            sys.exit(1)
+        PY
+      args:
+        executable: /bin/bash
+      changed_when: false
+
+    - name: Panel certificate is valid for two more weeks
+      ansible.builtin.shell: |
+        set -o pipefail
+        cert=$(python3 -c 'import json; print(json.load(open("/etc/kaskad/panel.json"))["tls"]["cert"])')
+        openssl x509 -in "$cert" -noout -checkend 1209600
+      args:
+        executable: /bin/bash
+      changed_when: false
+
+    - name: fail2ban jails are active
+      ansible.builtin.shell: |
+        set -o pipefail
+        for jail in kaskad-panel sshd; do
+            fail2ban-client status "$jail" > /dev/null
+        done
+      args:
+        executable: /bin/bash
+      changed_when: false
+
     - name: Routed exit subnets are installed
       ansible.builtin.shell: |
         set -o pipefail

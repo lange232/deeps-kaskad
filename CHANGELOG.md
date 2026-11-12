@@ -9,11 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- HTTP and database tests (`tests/test_http.py`): login and rate limiting,
-  role separation, client creation with an account, duplicate emails, grants
-  and their order, delete with grants, user pages, key reissue and password
-  change with session invalidation, plus the rollback when the tunnel cannot
-  be configured. They run with `fastapi.testclient`; `panel/requirements-dev.txt`
+- `/healthz`: an unauthenticated liveness endpoint that reports the database
+  state, version and active exit (503 when the database is unreadable).
+- "sign out everywhere" on `/me`: revokes every session of the account.
+- `check.yml` verifies the panel certificate has at least two weeks left,
+  that both fail2ban jails are active, and that table numbers are unique and
+  client links point at existing rows.
+- HTTP and database tests (`tests/test_http.py`): login and throttling, role
+  separation, client creation with an account, duplicate emails, grants and
+  their order, delete with grants, user pages, key reissue and password change
+  with session invalidation, plus the rollback when the tunnel cannot be
+  configured. They run with `fastapi.testclient`; `panel/requirements-dev.txt`
   adds the one extra dependency (`httpx`).
 - Daily backups: `kaskad-backup.timer` writes one root-only archive with a
   consistent copy of `panel.db`, `/etc/kaskad`, the tunnel configs and the TLS
@@ -22,8 +28,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the README documents the restore steps.
 - `check.yml` warns when the newest backup is older than two days.
 
+### Changed
+
+- Sign-in limits are split: a wrong password blocks only that email from that
+  address (5 attempts) and an address after 20 failures, while repeated
+  guesses against one email add a growing delay instead of a hard block. The
+  administrator can no longer be locked out from the whole internet by
+  guessing his address.
+- Sessions are stored server-side, so signing out really invalidates the
+  cookie; a password change, reset or disabling an account revokes every
+  session of that user. Sessions from before this release need one new
+  sign-in.
+
 ### Fixed
 
+- Expired entries are pruned from the login limiter and from the one-time
+  password stash instead of growing forever.
 - Routing is re-applied when an `awg*` interface appears or disappears, so
   subnet routes of exits that came up after `kaskad-routing.service` are
   created without a restart. A failed apply is retried on the next tick.

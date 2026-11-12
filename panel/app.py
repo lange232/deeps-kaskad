@@ -33,7 +33,13 @@ from pathlib import Path
 from urllib.parse import quote
 
 from fastapi import FastAPI, Form, HTTPException, Request
-from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse, Response
+from fastapi.responses import (
+    HTMLResponse,
+    JSONResponse,
+    PlainTextResponse,
+    RedirectResponse,
+    Response,
+)
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
@@ -140,6 +146,14 @@ def init_db() -> None:
                 token_version INTEGER NOT NULL DEFAULT 1,
                 last_login TEXT,
                 created_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS sessions (
+                jti TEXT PRIMARY KEY,
+                role TEXT NOT NULL,
+                uid INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL,
+                expires_at INTEGER NOT NULL,
+                revoked INTEGER NOT NULL DEFAULT 0
             );
             """
         )
@@ -437,6 +451,58 @@ def session_data(token: str | None) -> dict | None:
     return auth.session_data(_session_secret(), token)
 
 
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def start_session(role: str, uid: int = 0, tv: int = 0) -> str:
+    """Creates a session that can be revoked server-side on logout."""
+    token = make_session(role, uid, tv)
+    data = session_data(token)
+    with db() as conn:
+        conn.execute(
+            "INSERT INTO sessions (jti, role, uid, created_at, expires_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (data["jti"], role, uid, _now_iso(), int(data["exp"])),
+        )
+    return token
+
+
+def session_alive(data: dict) -> bool:
+    """A signed cookie is not enough: the session must not be revoked."""
+    jti = data.get("jti")
+    if not jti:
+        return False
+    with db() as conn:
+        row = conn.execute(
+            "SELECT revoked, expires_at FROM sessions WHERE jti = ?", (jti,)
+        ).fetchone()
+    return bool(row and not row["revoked"] and row["expires_at"] > int(time.time()))
+
+
+def revoke_session(token: str | None) -> None:
+    data = session_data(token)
+    if not data or not data.get("jti"):
+        return
+    with db() as conn:
+        conn.execute("UPDATE sessions SET revoked = 1 WHERE jti = ?", (data["jti"],))
+
+
+def revoke_user_sessions(uid: int) -> None:
+    with db() as conn:
+        conn.execute("UPDATE sessions SET revoked = 1 WHERE uid = ?", (uid,))
+        conn.execute(
+            "UPDATE users SET token_version = token_version + 1 WHERE id = ?", (uid,)
+        )
+
+
+def prune_sessions() -> None:
+    """Drops sessions that expired more than a day ago."""
+    limit = int(time.time()) - 86400
+    with db() as conn:
+        conn.execute("DELETE FROM sessions WHERE expires_at < ?", (limit,))
+
+
 def csrf(token: str) -> str:
     return hmac.new(token.encode(), b"csrf", hashlib.sha256).hexdigest()[:32]
 
@@ -448,7 +514,7 @@ def _redirect(location: str):
 def require_admin(request: Request) -> str:
     token = request.cookies.get(COOKIE)
     data = session_data(token)
-    if not data:
+    if not data or not session_alive(data):
         _redirect("/login")
     if data["role"] != "admin":
         _redirect("/me")
@@ -471,7 +537,7 @@ def require_user(request: Request) -> tuple[str, object]:
     """Returns (session token, row with the user account and its client)."""
     token = request.cookies.get(COOKIE)
     data = session_data(token)
-    if not data:
+    if not data or not session_alive(data):
         _redirect("/login")
     if data["role"] != "user":
         _redirect("/")
@@ -500,31 +566,85 @@ def user_client(row) -> dict:
     }
 
 
+RATE_WINDOW = 300
+# A wrong password blocks that email from that address; one noisy address
+# cannot lock an account from the whole internet.
+PAIR_LIMIT = 5
+IP_LIMIT = 20
+# Attempts against one email only add a slowdown. A hard block here would
+# let anyone lock the administrator out by guessing his address.
+EMAIL_DELAY_AFTER = 3
+EMAIL_DELAY_MAX = 3.0
+
 _attempts: dict[str, list[float]] = {}
 
 
-def rate_limited(ip: str) -> bool:
+def _prune_attempts(now: float | None = None) -> None:
+    now = now if now is not None else time.time()
+    for key in list(_attempts):
+        hits = [t for t in _attempts[key] if now - t < RATE_WINDOW]
+        if hits:
+            _attempts[key] = hits
+        else:
+            del _attempts[key]
+
+
+def _count(key: str) -> int:
+    _prune_attempts()
+    return len(_attempts.get(key, []))
+
+
+def rate_limited(ip: str, email: str = "") -> bool:
+    if _count(f"ip:{ip}") >= IP_LIMIT:
+        return True
+    return bool(email) and _count(f"pair:{ip}|{email}") >= PAIR_LIMIT
+
+
+def login_delay(email: str) -> float:
+    """Small, growing delay for repeated guesses against one address."""
+    hits = _count(f"email:{email}") if email else 0
+    if hits < EMAIL_DELAY_AFTER:
+        return 0.0
+    return min(EMAIL_DELAY_MAX, 0.5 * (hits - EMAIL_DELAY_AFTER + 1))
+
+
+def note_failure(ip: str, email: str = "") -> None:
     now = time.time()
-    hits = [t for t in _attempts.get(ip, []) if now - t < 300]
-    _attempts[ip] = hits
-    return len(hits) >= 5
+    keys = [f"ip:{ip}"]
+    if email:
+        keys += [f"email:{email}", f"pair:{ip}|{email}"]
+    for key in keys:
+        _attempts.setdefault(key, []).append(now)
 
 
-def note_failure(ip: str) -> None:
-    _attempts.setdefault(ip, []).append(time.time())
+def clear_failures(ip: str, email: str = "") -> None:
+    """A successful sign-in resets the counters for that address."""
+    _attempts.pop(f"ip:{ip}", None)
+    if email:
+        _attempts.pop(f"email:{email}", None)
+        _attempts.pop(f"pair:{ip}|{email}", None)
 
 
 _flash_secrets: dict[str, tuple[float, str]] = {}
 
 
+def _prune_secrets(now: float | None = None) -> None:
+    now = now if now is not None else time.time()
+    for key, (expires, _) in list(_flash_secrets.items()):
+        if expires <= now:
+            del _flash_secrets[key]
+
+
 def stash_secret(value: str) -> str:
     """Keep a generated password out of URLs; the panel shows it once."""
+    _prune_secrets()
     key = secrets.token_urlsafe(9)
     _flash_secrets[key] = (time.time() + 300, value)
     return key
 
 
 def pop_secret(key: str | None) -> str:
+    _prune_secrets()
     if not key:
         return ""
     item = _flash_secrets.pop(key, None)
@@ -774,22 +894,27 @@ def login_page(request: Request):
 def login(request: Request, email: str = Form(""), password: str = Form(...)):
     ip = request.client.host if request.client else "?"
     email = normalize_email(email)
-    limit_key = f"email:{email}"
 
     def fail(message: str, status: int = 401):
         return templates.TemplateResponse(
             request, "login.html", login_context(message, email), status_code=status
         )
 
-    if rate_limited(ip) or (email and rate_limited(limit_key)):
+    if rate_limited(ip, email):
         return fail("too many attempts, wait 5 minutes", 429)
+    delay = login_delay(email)
+    if delay:
+        # Slows down guessing against one address without locking it: the
+        # right password still gets in, just a few seconds later.
+        time.sleep(delay)
 
     token = ""
     location = ""
     role = ""
+    uid = 0
+    tv = 0
     if email == ADMIN_LOGIN:
         if verify_admin_password(password):
-            token = make_session("admin")
             location = "/"
             role = "admin"
     elif email:
@@ -809,24 +934,26 @@ def login(request: Request, email: str = Form(""), password: str = Form(...)):
         if not row:
             _burn_hash(password)
         if ok:
+            uid = int(row["id"])
+            tv = int(row["token_version"])
             with db() as conn:
                 conn.execute(
-                    "UPDATE users SET last_login = ? WHERE id = ?",
-                    (datetime.now(timezone.utc).isoformat(timespec="seconds"), row["id"]),
+                    "UPDATE users SET last_login = ? WHERE id = ?", (_now_iso(), uid)
                 )
-            token = make_session("user", int(row["id"]), int(row["token_version"]))
             location = "/me"
             role = "user"
 
-    if not token:
-        note_failure(ip)
-        if email:
-            note_failure(limit_key)
+    if not role:
+        note_failure(ip, email)
         # Read by fail2ban through journald; never log the password.
         print(f"KASKAD_AUTH_FAIL ip={ip} email={email or '-'}", flush=True)
         audit("login_failed", f"{ip} {email or '-'}")
         return fail("wrong email or password")
 
+    token = start_session(role, uid, tv)
+    clear_failures(ip, email)
+    if role == "admin":
+        prune_sessions()
     response = RedirectResponse(location, status_code=303)
     response.set_cookie(
         COOKIE, token, httponly=True, secure=True, samesite="strict", max_age=SESSION_TTL
@@ -837,10 +964,28 @@ def login(request: Request, email: str = Form(""), password: str = Form(...)):
 
 @app.post("/logout")
 def logout(request: Request):
-    session_data(request.cookies.get(COOKIE))
+    revoke_session(request.cookies.get(COOKIE))
     response = RedirectResponse("/login", status_code=303)
     response.delete_cookie(COOKIE)
     return response
+
+
+@app.get("/healthz")
+def healthz():
+    """Unauthenticated liveness probe: the database answers, the exit is known."""
+    try:
+        with db() as conn:
+            conn.execute("SELECT 1").fetchone()
+        c = cfg()
+    except Exception as exc:
+        print(f"healthz: {exc}", flush=True)
+        return JSONResponse({"ok": False}, status_code=503)
+    return JSONResponse({
+        "ok": True,
+        "version": c.get("version", ""),
+        "commit": c.get("commit", ""),
+        "active": run_dir("active-exit") or None,
+    })
 
 
 # ---------------------------------------------------------------- overview
@@ -1373,6 +1518,10 @@ def delete_client(request: Request, cid: int, csrf_token: str = Form(...)):
             row = conn.execute("SELECT * FROM clients WHERE id = ?", (cid,)).fetchone()
             if not row:
                 raise HTTPException(status_code=404)
+            conn.execute(
+                "UPDATE sessions SET revoked = 1 WHERE uid IN "
+                "(SELECT id FROM users WHERE client_id = ?)", (cid,)
+            )
             conn.execute("DELETE FROM users WHERE client_id = ?", (cid,))
             conn.execute("DELETE FROM clients WHERE id = ?", (cid,))
             conn.execute("DELETE FROM client_exits WHERE client_id = ?", (cid,))
@@ -1514,9 +1663,10 @@ def account_reset(request: Request, cid: int, csrf_token: str = Form(...)):
     password = secrets.token_urlsafe(12)
     with db() as conn:
         conn.execute(
-            "UPDATE users SET password_hash = ?, token_version = token_version + 1 WHERE id = ?",
+            "UPDATE users SET password_hash = ? WHERE id = ?",
             (hash_password(password), account["id"]),
         )
+    revoke_user_sessions(int(account["id"]))
     audit("account_password_reset", account["email"])
     return account_redirect(cid, ok="password reset", secret=stash_secret(password))
 
@@ -1532,9 +1682,9 @@ def account_toggle(request: Request, cid: int, csrf_token: str = Form(...)):
     enabled = 0 if account["enabled"] else 1
     with db() as conn:
         conn.execute(
-            "UPDATE users SET enabled = ?, token_version = token_version + 1 WHERE id = ?",
-            (enabled, account["id"]),
+            "UPDATE users SET enabled = ? WHERE id = ?", (enabled, account["id"])
         )
+    revoke_user_sessions(int(account["id"]))
     audit("account_toggle", f"{account['email']} -> {enabled}")
     return account_redirect(cid, ok="account enabled" if enabled else "account disabled")
 
@@ -1548,6 +1698,7 @@ def account_delete(request: Request, cid: int, csrf_token: str = Form(...)):
     if not account:
         raise HTTPException(status_code=404)
     with db() as conn:
+        conn.execute("UPDATE sessions SET revoked = 1 WHERE uid = ?", (account["id"],))
         conn.execute("DELETE FROM users WHERE id = ?", (account["id"],))
     audit("account_deleted", account["email"])
     return account_redirect(cid, ok="account deleted")
@@ -1648,18 +1799,33 @@ def me_password(
         return RedirectResponse("/me?err=" + quote(problem), status_code=303)
     with db() as conn:
         conn.execute(
-            "UPDATE users SET password_hash = ?, token_version = token_version + 1 WHERE id = ?",
+            "UPDATE users SET password_hash = ? WHERE id = ?",
             (hash_password(new_password), row["uid"]),
         )
+    # Every other session of this account dies with the password change.
+    revoke_user_sessions(int(row["uid"]))
+    with db() as conn:
         tv = conn.execute(
             "SELECT token_version FROM users WHERE id = ?", (row["uid"],)
         ).fetchone()[0]
     audit("user_password_changed", row["email"])
     response = RedirectResponse("/me?ok=password+changed", status_code=303)
     response.set_cookie(
-        COOKIE, make_session("user", int(row["uid"]), int(tv)),
+        COOKIE, start_session("user", int(row["uid"]), int(tv)),
         httponly=True, secure=True, samesite="strict", max_age=SESSION_TTL,
     )
+    return response
+
+
+@app.post("/me/logout-all")
+def me_logout_all(request: Request, csrf_token: str = Form(...)):
+    token, row = require_user(request)
+    if not hmac.compare_digest(csrf_token, csrf(token)):
+        raise HTTPException(status_code=400, detail="csrf")
+    revoke_user_sessions(int(row["uid"]))
+    audit("user_sessions_revoked", row["email"])
+    response = RedirectResponse("/login", status_code=303)
+    response.delete_cookie(COOKIE)
     return response
 
 

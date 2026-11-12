@@ -175,6 +175,18 @@ The administrator manages clients (create, change class and access, account,
 download the config, QR, enable/disable, delete), exits (add, enable/disable,
 delete, manual switch), service status and the action journal.
 
+Sign-in limits: five failed attempts for the same email from the same address
+block that pair for five minutes, twenty failures from one address block the
+address, and repeated guesses against one email only add a growing delay — so
+nobody can lock the administrator out by guessing his address from elsewhere.
+Sessions are stored server-side: signing out revokes the cookie, changing the
+password or resetting it kills every session of that account, and a client can
+press "sign out everywhere" on `/me`.
+
+`/healthz` answers without authentication and returns
+`{"ok": true, "version": ..., "active": ...}`; it is meant for monitoring and
+returns 503 when the database cannot be read.
+
 Internet exits are granted per client: the administrator ticks the exits a
 client may use, and the client puts them in their own order on `/me`.
 Traffic uses the first granted exit that is alive; if none of them is up the

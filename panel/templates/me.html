@@ -167,6 +167,10 @@
         </p>
         <button class="oc-btn oc-btn--contrast oc-btn--sm" style="margin-top:12px">change password</button>
       </form>
+      <form method="post" action="/me/logout-all" style="margin-top:16px">
+        <input type="hidden" name="csrf_token" value="{{ csrf }}">
+        <button class="oc-btn oc-btn--ghost oc-btn--sm">sign out everywhere</button>
+      </form>
     </div>
   </section>
 </div>
