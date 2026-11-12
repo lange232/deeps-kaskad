@@ -528,16 +528,29 @@ def services() -> dict:
 
 
 def render_page(request: Request, template: str, nav: str, **ctx):
+    c = cfg()
     ctx.setdefault("hide_nav", False)
+    ctx.setdefault("version", c.get("version", "dev"))
+    ctx.setdefault("commit", c.get("commit", ""))
     ctx["nav"] = nav
     return templates.TemplateResponse(request, template, ctx)
 
 
 # ---------------------------------------------------------------- auth
 
+def login_context(error=None):
+    c = cfg()
+    return {
+        "error": error,
+        "hide_nav": True,
+        "version": c.get("version", "dev"),
+        "commit": c.get("commit", ""),
+    }
+
+
 @app.get("/login", response_class=HTMLResponse)
 def login_page(request: Request):
-    return templates.TemplateResponse(request, "login.html", {"error": None, "hide_nav": True})
+    return templates.TemplateResponse(request, "login.html", login_context())
 
 
 @app.post("/login")
@@ -546,14 +559,14 @@ def login(request: Request, password: str = Form(...)):
     if rate_limited(ip):
         return templates.TemplateResponse(
             request, "login.html",
-            {"error": "too many attempts, wait 5 minutes", "hide_nav": True},
+            login_context("too many attempts, wait 5 minutes"),
             status_code=429,
         )
     if not verify_password(password):
         note_failure(ip)
         audit("login_failed", ip)
         return templates.TemplateResponse(
-            request, "login.html", {"error": "wrong password", "hide_nav": True}, status_code=401
+            request, "login.html", login_context("wrong password"), status_code=401
         )
     token = make_session()
     response = RedirectResponse("/", status_code=303)

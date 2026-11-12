@@ -12,6 +12,7 @@
     <div class="oc-panel">
       <table class="oc-table">
         <tbody>
+          <tr><td class="oc-muted" style="width:220px">version</td><td class="oc-mono">v{{ version }}{% if commit %} · {{ commit }}{% endif %}</td></tr>
           <tr><td class="oc-muted" style="width:220px">address</td><td class="oc-mono">https://{{ cfg.listen.host }}:{{ cfg.listen.port }}</td></tr>
           <tr><td class="oc-muted">client subnet</td><td class="oc-mono">{{ cfg.net }}</td></tr>
           <tr><td class="oc-muted">entry address</td><td class="oc-mono">{{ cfg.address }}</td></tr>

@@ -61,6 +61,20 @@
              background: var(--ui-bg-deep); border: 1px solid var(--ui-border-base);
              font: 12px/1.45 var(--ui-font-mono, ui-monospace, monospace); color: var(--ui-text-muted); }
   .toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+  .site-footer {
+    display: flex; flex-wrap: wrap; gap: 10px 24px;
+    justify-content: space-between; align-items: center;
+    max-width: 1160px; margin: 0 auto; padding: 16px 16px 24px;
+    border-top: 1px solid var(--ui-border-base);
+    font-size: 12px;
+  }
+  .site-footer__left, .site-footer__right { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+  .site-footer a { color: var(--ui-text-muted); text-decoration: none; }
+  .site-footer a:hover { color: var(--ui-text-base); }
+  .site-footer .oc-brand { font-size: 12px; letter-spacing: .1em; }
+  @media (max-width: 760px) {
+    .site-footer { flex-direction: column; align-items: flex-start; }
+  }
   @media (max-width: 760px) {
     .app { grid-template-columns: minmax(0, 1fr); gap: 8px; }
     .side { position: static; flex-direction: row; overflow-x: auto; padding-top: 8px; }
@@ -100,6 +114,18 @@
     {% block body %}{% endblock %}
   </main>
 </div>
+
+<footer class="site-footer">
+  <div class="site-footer__left">
+    <span class="oc-brand"><span class="oc-brand__dim">deeps</span><span class="oc-brand__mark">kaskad</span></span>
+    <span class="oc-mono oc-muted">v{{ version }}{% if commit %} · {{ commit }}{% endif %}</span>
+  </div>
+  <div class="site-footer__right">
+    <span class="oc-muted">© 2026 deffhost inc</span>
+    <a href="https://github.com/lange232/deeps-kaskad">github</a>
+    <span class="oc-muted">MIT</span>
+  </div>
+</footer>
 
 <script>
   const root = document.documentElement;
