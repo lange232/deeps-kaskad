@@ -66,6 +66,10 @@
     virtualenv_command: python3 -m venv
   notify: Restart panel
 
+- name: Public TLS certificate
+  ansible.builtin.include_tasks: tls.yml
+  when: kaskad_tls_mode == 'letsencrypt'
+
 - name: Current certificate SAN
   ansible.builtin.shell: |
     set -o pipefail
@@ -90,9 +94,10 @@
   args:
     executable: /bin/bash
   when: >-
-    kaskad_panel_tls_regen == 'always'
-    or kaskad_tls_san.rc != 0
-    or (kaskad_tls_san.stdout | trim) != (kaskad_panel_san_list | trim)
+    kaskad_tls_mode == 'selfsigned'
+    and (kaskad_panel_tls_regen == 'always'
+         or kaskad_tls_san.rc != 0
+         or (kaskad_tls_san.stdout | trim) != (kaskad_panel_san_list | trim))
   notify: Restart panel
 
 - name: Password and session secret

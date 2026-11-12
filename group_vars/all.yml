@@ -21,6 +21,12 @@ kaskad_panel_port: 8080
 # lan — port open to the network; clients — only through awg0
 kaskad_panel_expose: lan
 kaskad_panel_tls_regen: auto
+# TLS for the panel: selfsigned — built-in certificate, letsencrypt —
+# a public certificate issued by certbot over HTTP-01 (port 80).
+kaskad_tls_mode: selfsigned
+kaskad_le_domain: ""
+kaskad_le_email: ""
+kaskad_le_staging: false
 kaskad_panel_san: "DNS:{{ ansible_host }},IP:{{ ansible_default_ipv4.address }},IP:{{ kaskad_s1_clients_ip }}"
 kaskad_panel_san_list: "{{ kaskad_panel_san | regex_replace('(IP Address:|IP:|DNS:)', '') | split(',') | map('trim') | sort | join(' ') }}"
 

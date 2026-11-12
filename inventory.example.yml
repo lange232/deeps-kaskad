@@ -6,3 +6,8 @@ all:
     s1:
       ansible_host: vpn.example.com
       kaskad_role: entry
+      # Public certificate instead of the built-in self-signed one.
+      # Requires a DNS A record pointing here and port 80 open.
+      # kaskad_tls_mode: letsencrypt
+      # kaskad_le_domain: vpn.example.com
+      # kaskad_le_email: admin@example.com

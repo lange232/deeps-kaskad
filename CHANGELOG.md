@@ -5,6 +5,18 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.3] - 2026-11-12
+
+### Added
+
+- Optional Let's Encrypt certificate for the panel: set
+  `kaskad_tls_mode: letsencrypt` with `kaskad_le_domain` and
+  `kaskad_le_email`. Certbot issues over HTTP-01 on port 80, the panel keeps
+  serving during issuance, and a renewal hook restarts it after a new
+  certificate.
+- The setup fails early with a clear message when the DNS record does not
+  point at the host or port 80 is unreachable.
+
 ## [0.2.2] - 2026-11-12
 
 ### Added
