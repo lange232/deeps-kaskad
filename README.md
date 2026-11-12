@@ -142,6 +142,14 @@ scripts/check.sh demo
 
 Tags: `base`, `amneziawg`, `panel`, `entry`.
 
+Tests:
+
+```bash
+python3 -m unittest discover -s tests          # logic only, no extra deps
+/opt/kaskad/venv/bin/pip install -r panel/requirements-dev.txt
+/opt/kaskad/venv/bin/python -m unittest discover -s tests   # + panel HTTP tests
+```
+
 `kaskad_awg_packages_mode` is `ppa` by default; switch it to `local` for hosts
 without access to Launchpad.
 

@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- HTTP and database tests (`tests/test_http.py`): login and rate limiting,
+  role separation, client creation with an account, duplicate emails, grants
+  and their order, delete with grants, user pages, key reissue and password
+  change with session invalidation, plus the rollback when the tunnel cannot
+  be configured. They run with `fastapi.testclient`; `panel/requirements-dev.txt`
+  adds the one extra dependency (`httpx`).
 - Daily backups: `kaskad-backup.timer` writes one root-only archive with a
   consistent copy of `panel.db`, `/etc/kaskad`, the tunnel configs and the TLS
   certificates to `/var/backups/kaskad`, keeping 14 days by default. The

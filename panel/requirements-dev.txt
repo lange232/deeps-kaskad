@@ -1,0 +1,4 @@
+-r requirements.txt
+
+# Only for tests: fastapi.testclient needs httpx.
+httpx
