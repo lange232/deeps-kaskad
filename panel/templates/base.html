@@ -7,8 +7,8 @@
 <link rel="stylesheet" href="/static/theme.css">
 <link rel="stylesheet" href="/static/components.css">
 <style>
-  body { min-height: 100vh; }
-  .app {
+  body { min-height: 100vh; display: flex; flex-direction: column; }
+  .app { flex: 1 0 auto;
     display: grid; grid-template-columns: 200px minmax(0, 1fr);
     gap: 28px; max-width: 1160px; margin: 0 auto; padding: 0 16px 56px;
   }
@@ -64,7 +64,7 @@
   .site-footer {
     display: flex; flex-wrap: wrap; gap: 10px 24px;
     justify-content: space-between; align-items: center;
-    max-width: 1160px; margin: 0 auto; padding: 16px 16px 24px;
+    width: 100%; max-width: 1160px; margin: 0 auto; padding: 16px 16px 24px; box-sizing: border-box;
     border-top: 1px solid var(--ui-border-base);
     font-size: 12px;
   }
