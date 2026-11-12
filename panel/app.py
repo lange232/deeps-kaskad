@@ -1035,6 +1035,8 @@ def client_page(
 def create_client(
     request: Request,
     name: str = Form(...),
+    email: str = Form(...),
+    password: str = Form(""),
     internet: str = Form(""),
     exits: list[int] = Form([]),
     csrf_token: str = Form(...),
@@ -1050,6 +1052,18 @@ def create_client(
     if not NAME_RE.match(name):
         return fail("name: latin letters, digits, dot, dash; up to 32 characters")
 
+    email = normalize_email(email)
+    problem = email_error(email)
+    if problem:
+        return fail(problem)
+    password = password or secrets.token_urlsafe(12)
+    problem = password_error(password)
+    if problem:
+        return fail(problem)
+    with db() as conn:
+        if conn.execute("SELECT 1 FROM users WHERE email = ?", (email,)).fetchone():
+            return fail("email is already used by another account")
+
     c = cfg()
     rows = client_rows()
     if any(r["name"] == name for r in rows):
@@ -1060,21 +1074,29 @@ def create_client(
         return fail(str(exc))
 
     private = genkey()
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
     with db() as conn:
         cur = conn.execute(
             "INSERT INTO clients (name, ip, public_key, private_key, preshared_key, enabled, created_at, internet) "
             "VALUES (?, ?, ?, ?, ?, 1, ?, ?)",
-            (name, ip, pubkey(private), private, genpsk(),
-             datetime.now(timezone.utc).isoformat(timespec="seconds"),
-             1 if internet else 0),
+            (name, ip, pubkey(private), private, genpsk(), now, 1 if internet else 0),
         )
         cid = cur.lastrowid
         for eid in exits:
             conn.execute("INSERT OR IGNORE INTO client_exits (client_id, exit_id) VALUES (?, ?)", (cid, eid))
+        conn.execute(
+            "INSERT INTO users (client_id, email, password_hash, enabled, token_version, created_at) "
+            "VALUES (?, ?, ?, 1, 1, ?)",
+            (cid, email, hash_password(password), now),
+        )
     audit("client_added", f"{name} {ip}")
+    audit("account_created", f"{name} {email}")
     apply_conf(c)
     apply_routing()
-    return RedirectResponse(f"/clients/{cid}?ok=client+created", status_code=303)
+    return RedirectResponse(
+        f"/clients/{cid}?ok=client+created&newpw={quote(stash_secret(password))}",
+        status_code=303,
+    )
 
 
 @app.post("/clients/{cid}/access")

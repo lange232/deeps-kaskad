@@ -4,7 +4,9 @@
 <div class="crumbs"><a href="/clients">Clients</a><span>/</span><span>new</span></div>
 <div class="page-head">
   <h1>New client</h1>
-  <p class="oc-muted">the address is assigned automatically</p>
+  <p class="oc-muted">
+    the address is assigned automatically; the account password is shown once after creation
+  </p>
 </div>
 
 {% if err %}<div class="oc-alert oc-alert--danger" style="margin-bottom:16px"><span class="oc-dot" style="margin-top:7px"></span><div class="oc-alert__body">{{ err }}</div></div>{% endif %}
@@ -12,19 +14,34 @@
 <div class="oc-panel" style="padding:16px; max-width:640px">
   <form method="post" action="/clients">
     <input type="hidden" name="csrf_token" value="{{ csrf }}">
+
+    <p class="oc-section__title" style="margin:0 0 12px">client</p>
     <label class="oc-field">
       <span class="oc-field__label">name</span>
       <input class="oc-input" type="text" name="name" placeholder="phone-alice" required maxlength="32" spellcheck="false">
-      <span class="oc-hint">latin letters, digits, dot, dash</span>
+      <span class="oc-hint">latin letters, digits, dot, dash; used in the config file name</span>
     </label>
 
-    <div style="margin-top:18px">
-      <label class="oc-switch">
-        <input type="checkbox" name="internet" value="1" checked>
-        <span class="oc-switch__track"><span class="oc-switch__thumb"></span></span>
-        internet access
-      </label>
-    </div>
+    <p class="oc-section__title" style="margin:24px 0 12px">account</p>
+    <label class="oc-field">
+      <span class="oc-field__label">email</span>
+      <input class="oc-input" type="email" name="email" placeholder="alice@example.com" required
+             autocapitalize="none" spellcheck="false">
+      <span class="oc-hint">the login for the panel; the client signs in and manages their own config</span>
+    </label>
+    <label class="oc-field" style="margin-top:12px">
+      <span class="oc-field__label">password</span>
+      <input class="oc-input" type="text" name="password" autocomplete="off"
+             placeholder="leave empty to generate">
+      <span class="oc-hint">at least 12 characters; generated passwords are shown once</span>
+    </label>
+
+    <p class="oc-section__title" style="margin:24px 0 12px">access</p>
+    <label class="oc-switch">
+      <input type="checkbox" name="internet" value="1" checked>
+      <span class="oc-switch__track"><span class="oc-switch__thumb"></span></span>
+      internet access
+    </label>
 
     {% if routed %}
     <p class="oc-section__title" style="margin:20px 0 10px">subnet access</p>
@@ -39,7 +56,7 @@
     </div>
     {% endif %}
 
-    <div class="actions" style="margin-top:20px">
+    <div class="actions" style="margin-top:24px">
       <button class="oc-btn oc-btn--contrast">create</button>
       <a class="oc-btn oc-btn--ghost" href="/clients">cancel</a>
     </div>
