@@ -40,8 +40,7 @@
       </p>
       {% if current_exit %}
       <p style="margin:0 0 12px">
-        in use now: <span class="oc-badge oc-badge--accent">{{ current_exit.name }}</span>
-        <span class="oc-mono oc-muted">{{ current_exit.iface }}</span>
+        in use now: <span class="oc-badge oc-badge--accent">{{ current_exit.comment or current_exit.name }}</span>
       </p>
       {% else %}
       <p style="margin:0 0 12px">
@@ -51,17 +50,16 @@
       {% endif %}
       <table class="oc-table">
         <thead>
-          <tr><th>#</th><th>exit</th><th>interface</th><th>state</th><th></th></tr>
+          <tr><th>#</th><th>exit</th><th>state</th><th></th></tr>
         </thead>
         <tbody>
         {% for e in internet_exits %}
           <tr>
             <td class="oc-num">{{ loop.index }}</td>
             <td>
-              {{ e.name }}
+              {{ e.comment or e.name }}
               {% if current_exit and current_exit.id == e.id %}<span class="oc-badge oc-badge--accent">in use</span>{% endif %}
             </td>
-            <td class="oc-mono">{{ e.iface }}</td>
             <td>
               {% if alive.get(e.iface) %}<span class="oc-badge oc-badge--success">up</span>
               {% else %}<span class="oc-badge oc-badge--subtle">down</span>{% endif %}
