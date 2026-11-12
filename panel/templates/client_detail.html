@@ -108,7 +108,7 @@
           {% if account.enabled %}<span class="oc-badge oc-badge--success">enabled</span>
           {% else %}<span class="oc-badge oc-badge--subtle">disabled</span>{% endif %}
         </div></div>
-        <div><div class="k">last login</div><div class="v">{{ account.last_login or 'never' }}</div></div>
+        <div><div class="k">last login</div><div class="v">{{ account.last_login | ts }}</div></div>
       </div>
       <div class="actions" style="margin-top:16px">
         <form method="post" action="/clients/{{ cl.id }}/account/password">

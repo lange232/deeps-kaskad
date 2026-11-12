@@ -47,7 +47,15 @@ COOKIE = "kaskad_session"
 SESSION_TTL = auth.SESSION_TTL
 NAME_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,31}$")
 
+def human_ts(value) -> str:
+    if not value:
+        return "never"
+    text = str(value).replace("T", " ").replace("+00:00", "")
+    return text[:16] + " UTC"
+
+
 templates = Jinja2Templates(directory=str(BASE / "templates"))
+templates.env.filters["ts"] = human_ts
 app = FastAPI(title="deeps kaskad", docs_url=None, redoc_url=None, openapi_url=None)
 app.mount("/static", StaticFiles(directory=str(BASE / "static")), name="static")
 
@@ -1309,7 +1317,7 @@ def me_page(request: Request, err: str | None = None, ok: str | None = None):
     return render_page(
         request, "me.html", "me", role="user",
         csrf=csrf(token), err=err, ok=ok, cl=client_view(cl, live),
-        email=row["email"], last_login=row["last_login"], conf=conf,
+        email=row["email"], last_login=human_ts(row["last_login"]), conf=conf,
     )
 
 

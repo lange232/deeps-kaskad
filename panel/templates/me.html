@@ -26,7 +26,7 @@
       <div><div class="k">handshake</div><div class="v" data-hs="{{ cl.handshake }}">—</div></div>
       <div><div class="k">received</div><div class="v oc-num">{{ (cl.rx / 1048576) | round(1) }} MiB</div></div>
       <div><div class="k">sent</div><div class="v oc-num">{{ (cl.tx / 1048576) | round(1) }} MiB</div></div>
-      <div><div class="k">last login</div><div class="v">{{ last_login or 'never' }}</div></div>
+      <div><div class="k">last login</div><div class="v">{{ last_login | ts }}</div></div>
     </div>
   </div>
 
@@ -40,7 +40,7 @@
           <summary class="oc-btn oc-btn--ghost oc-btn--sm" style="display:inline-flex">show qr</summary>
         </details>
       </div>
-      <div id="qr-box" hidden style="margin-top:14px; background:var(--ui-bg-deep); padding:12px; border-radius:6px; display:inline-block">
+      <div id="qr-box" style="margin-top:14px; background:var(--ui-bg-deep); padding:12px; border-radius:6px; display:none">
         <img src="/me/qr.png" alt="qr" style="width:240px; height:240px; image-rendering:pixelated">
       </div>
       <details style="margin-top:14px">
@@ -124,9 +124,10 @@ function rel(ts) {
 }
 for (const el of document.querySelectorAll('[data-hs]')) el.textContent = rel(el.dataset.hs);
 const qrDetails = document.getElementById('qr');
-if (qrDetails) {
+const qrBox = document.getElementById('qr-box');
+if (qrDetails && qrBox) {
   qrDetails.addEventListener('toggle', () => {
-    document.getElementById('qr-box').hidden = !qrDetails.open;
+    qrBox.style.display = qrDetails.open ? 'inline-block' : 'none';
   });
 }
 setTimeout(() => location.reload(), 15000);
