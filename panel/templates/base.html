@@ -7,11 +7,20 @@
 <link rel="stylesheet" href="/static/theme.css">
 <link rel="stylesheet" href="/static/components.css">
 <style>
+  html { scrollbar-gutter: stable; }
+  @supports not (scrollbar-gutter: stable) {
+    html { overflow-y: scroll; }
+  }
   body { min-height: 100vh; display: flex; flex-direction: column; }
-  .app { flex: 1 0 auto;
+  .app {
+    flex: 1 0 auto; width: 100%; box-sizing: border-box;
     display: grid; grid-template-columns: 200px minmax(0, 1fr);
     gap: 28px; max-width: 1160px; margin: 0 auto; padding: 0 16px 56px;
   }
+  /* Table cells keep their width when status text changes; otherwise the
+     columns jump on every auto-refresh. */
+  .oc-table td { vertical-align: middle; }
+  .oc-table td .oc-badge { white-space: nowrap; }
   .app--centered { grid-template-columns: minmax(0, 1fr); }
   .app--centered .main { max-width: 380px; margin: 12vh auto 0; }
   .main { min-width: 0; }
