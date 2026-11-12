@@ -96,7 +96,10 @@
         <div class="oc-alert__body">
           password for <span class="oc-mono">{{ account.email if account else '' }}</span> —
           shown once, save it now:
-          <pre class="conf" style="margin-top:8px">{{ newpw }}</pre>
+          <pre class="conf" id="newpw-value" style="margin-top:8px">{{ newpw }}</pre>
+          <div class="actions" style="margin-top:8px">
+            <button type="button" class="oc-btn oc-btn--outline oc-btn--sm" id="copy-newpw">copy password</button>
+          </div>
         </div>
       </div>
       {% endif %}
@@ -169,6 +172,32 @@
 </div>
 
 <script>
+const copyBtn = document.getElementById('copy-newpw');
+if (copyBtn) {
+  copyBtn.addEventListener('click', async () => {
+    const value = document.getElementById('newpw-value').textContent.trim();
+    let copied = false;
+    try {
+      if (navigator.clipboard && window.isSecureContext) {
+        await navigator.clipboard.writeText(value);
+        copied = true;
+      }
+    } catch (e) {}
+    if (!copied) {
+      const area = document.createElement('textarea');
+      area.value = value;
+      area.style.position = 'fixed';
+      area.style.opacity = '0';
+      document.body.appendChild(area);
+      area.select();
+      try { copied = document.execCommand('copy'); } catch (e) {}
+      area.remove();
+    }
+    copyBtn.textContent = copied ? 'copied' : 'copy failed';
+    setTimeout(() => { copyBtn.textContent = 'copy password'; }, 1500);
+  });
+}
+
 function rel(ts) {
   if (!ts || Number(ts) <= 0) return 'no data';
   const d = Math.floor(Date.now() / 1000 - Number(ts));
