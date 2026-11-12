@@ -5,6 +5,7 @@ __pycache__/
 # agent and local editor files
 AGENTS.md
 CLAUDE.md
+todo.md
 .opencode/
 .cursor/
 .cursorrules
