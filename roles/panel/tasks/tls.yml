@@ -1,0 +1,91 @@
+---
+# Public TLS certificate through Let's Encrypt.
+#
+# HTTP-01 validation needs a DNS A record pointing at this host and port 80
+# reachable from the internet for a few seconds. The panel keeps listening on
+# its own port the whole time, so issuance does not interrupt it.
+
+- name: Let's Encrypt settings
+  ansible.builtin.assert:
+    that:
+      - kaskad_le_domain | length > 0
+      - kaskad_le_email | length > 0
+    fail_msg: >-
+      set kaskad_le_domain and kaskad_le_email when
+      kaskad_tls_mode=letsencrypt
+    quiet: true
+
+- name: Certbot
+  ansible.builtin.apt:
+    name: certbot
+    state: present
+  when: not ansible_check_mode
+
+- name: Resolve the ACME domain
+  ansible.builtin.command: getent ahostsv4 {{ kaskad_le_domain }}
+  register: kaskad_le_domain_lookup
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: Resolve this host
+  ansible.builtin.command: getent ahostsv4 {{ ansible_host }}
+  register: kaskad_le_host_lookup
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: DNS points at this host
+  ansible.builtin.assert:
+    that:
+      - kaskad_le_domain_lookup.rc == 0
+      - kaskad_le_host_lookup.rc == 0
+      - (kaskad_le_domain_lookup.stdout_lines[0] | split())[0]
+        == (kaskad_le_host_lookup.stdout_lines[0] | split())[0]
+    fail_msg: >-
+      {{ kaskad_le_domain }} and {{ ansible_host }} must resolve to the same
+      address; Let's Encrypt would fail the HTTP-01 challenge
+    quiet: true
+
+- name: Port 80 is free on the host
+  ansible.builtin.command: ss -ltnH "sport = :80"
+  register: kaskad_le_port80
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: Check port 80
+  ansible.builtin.assert:
+    that:
+      - kaskad_le_port80.stdout | trim == ""
+    fail_msg: >-
+      something already listens on port 80: {{ kaskad_le_port80.stdout | trim }};
+      certbot standalone needs it for the HTTP-01 challenge
+    quiet: true
+
+- name: Obtain the certificate
+  ansible.builtin.command:
+    argv: >-
+      {{ ['certbot', 'certonly', '--standalone', '--non-interactive',
+          '--agree-tos', '--keep-until-expiring',
+          '-d', kaskad_le_domain, '--email', kaskad_le_email]
+         + (['--staging'] if kaskad_le_staging | bool else []) }}
+  register: kaskad_le_issue
+  changed_when: "'Certificate not yet due for renewal' not in kaskad_le_issue.stdout"
+  when: not ansible_check_mode
+
+- name: Renewal hook directory
+  ansible.builtin.file:
+    path: /etc/letsencrypt/renewal-hooks/deploy
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Restart the panel after a renewal
+  ansible.builtin.template:
+    src: certbot-deploy-hook.sh.j2
+    dest: /etc/letsencrypt/renewal-hooks/deploy/kaskad-panel.sh
+    owner: root
+    group: root
+    mode: "0755"

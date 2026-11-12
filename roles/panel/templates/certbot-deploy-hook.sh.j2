@@ -1,0 +1,4 @@
+#!/bin/sh
+# Managed by Ansible. Runs after certbot renews the certificate.
+set -e
+systemctl restart kaskad-panel

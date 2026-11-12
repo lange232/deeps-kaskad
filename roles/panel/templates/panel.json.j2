@@ -1,8 +1,12 @@
 {{ {
   "listen": {"host": "0.0.0.0", "port": kaskad_panel_port | int},
   "tls": {
-    "cert": "/etc/kaskad/tls/panel.crt",
-    "key": "/etc/kaskad/tls/panel.key"
+    "cert": ("/etc/letsencrypt/live/" ~ kaskad_le_domain ~ "/fullchain.pem")
+            if kaskad_tls_mode == "letsencrypt"
+            else "/etc/kaskad/tls/panel.crt",
+    "key": ("/etc/letsencrypt/live/" ~ kaskad_le_domain ~ "/privkey.pem")
+           if kaskad_tls_mode == "letsencrypt"
+           else "/etc/kaskad/tls/panel.key"
   },
   "version": kaskad_version,
   "commit": kaskad_commit,
