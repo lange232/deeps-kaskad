@@ -142,7 +142,8 @@ without access to Launchpad.
 
 ## Panel
 
-`https://<host>:8080`, FastAPI + SQLite with a self-signed certificate.
+`https://<host>:8080`, FastAPI + SQLite. The certificate is self-signed by
+default; see [TLS](#tls) to use Let's Encrypt.
 
 The panel has two kinds of sign-in:
 
@@ -167,6 +168,31 @@ active exit selected by the failover daemon.
 
 Access mode is controlled by `kaskad_panel_expose`: `lan` keeps the port open,
 `clients` exposes it only through the tunnel at `https://10.80.0.1:8080`.
+
+## TLS
+
+By default the panel generates a self-signed certificate valid for the host
+name, its public IP and the tunnel address. Browsers will warn about it.
+
+For a publicly trusted certificate, point a DNS A record at the host, leave
+port 80 reachable from the internet and set:
+
+```yaml
+kaskad_tls_mode: letsencrypt
+kaskad_le_domain: vpn.example.com
+kaskad_le_email: admin@example.com
+kaskad_le_staging: false   # true while testing: avoids Let's Encrypt limits
+```
+
+Then run `ansible-playbook -i inventory.yml playbooks/site.yml --tags panel`.
+Certbot validates over HTTP-01 on port 80, which is free while the panel
+listens on its own port; issuance does not interrupt the panel. Renewal is
+handled by `certbot.timer`, and a deploy hook in
+`/etc/letsencrypt/renewal-hooks/deploy/` restarts `kaskad-panel` after a new
+certificate is issued.
+
+The certificate is issued for the domain only, so clients opening the panel by
+IP will still see the self-signed warning; use the domain name.
 
 ## Layout
 
@@ -204,7 +230,8 @@ a client.
   public key from two endpoints and roams the session between them. The panel
   rejects such configs.
 - Client tunnels are IPv4 only; on dual-stack devices IPv6 bypasses the tunnel.
-- The panel is exposed over a self-signed certificate and a password.
+- The panel is exposed over a self-signed certificate (or a Let's Encrypt one,
+  which covers the domain, not the IP) and a password.
 - Client sessions are invalidated when the account is disabled or its client
   is disabled; the account and the client are a one-to-one pair.
 
