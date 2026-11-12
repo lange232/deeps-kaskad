@@ -28,6 +28,8 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
+import routing
+
 
 CONFIG_PATH = Path(os.environ.get("KASKAD_CONFIG", "/etc/kaskad/panel.json"))
 DB_PATH = Path(os.environ.get("KASKAD_DB", "/var/lib/kaskad/panel.db"))
@@ -43,6 +45,15 @@ FAILBACK_STABLE = 60
 PROBE_TARGET = "1.1.1.1"
 
 state: dict[str, dict] = {}
+# Tunnels that were present on the previous tick. A change means old routes
+# may be stale and new ones were never created: routing is re-applied then,
+# because kaskad-routing.service only runs once at boot and cannot know that
+# an exit came up later.
+known_ifaces: set[str] | None = None
+routing_pending = False
+routing_retry_at = 0.0
+routing_backoff = 10
+routing_last_error = ""
 
 
 def log(msg: str) -> None:
@@ -171,6 +182,55 @@ def iface_exists(iface: str) -> bool:
     return Path(f"/sys/class/net/{iface}").exists()
 
 
+def awg_ifaces() -> set[str]:
+    try:
+        return {p.name for p in Path("/sys/class/net").glob("awg*") if p.is_dir()}
+    except OSError:
+        return set()
+
+
+def sync_routing(c: dict) -> None:
+    """Re-applies routing when tunnels appeared or disappeared."""
+    global known_ifaces, routing_pending, routing_retry_at
+    global routing_backoff, routing_last_error
+    current = awg_ifaces()
+    if known_ifaces is None:
+        # The routing unit runs once at boot and may have failed or raced
+        # with the exits; a first sync costs one diff and fixes that.
+        log(f"initial routing sync: {sorted(current)}")
+        routing_pending = True
+        routing_retry_at = 0.0
+    elif known_ifaces != current:
+        appeared = sorted(current - known_ifaces)
+        vanished = sorted(known_ifaces - current)
+        log(f"interfaces changed: +{appeared or '-'} -{vanished or '-'}")
+        routing_pending = True
+        routing_retry_at = 0.0
+        routing_backoff = 10
+    known_ifaces = current
+    if not routing_pending or time.time() < routing_retry_at:
+        return
+    # awg-quick creates the interface before it finishes configuring it, so
+    # give it a moment.
+    time.sleep(1)
+    result = routing.apply()
+    errors = result.get("errors", [])
+    if errors:
+        message = "; ".join(errors)
+        if message != routing_last_error:
+            # A permanent error must not flood the journal every tick.
+            log(f"routing: {message}")
+            routing_last_error = message
+        routing_backoff = min(max(routing_backoff * 2, 10), 300)
+        routing_retry_at = time.time() + routing_backoff
+        routing_pending = True
+        return
+    routing_backoff = 10
+    routing_last_error = ""
+    routing_pending = False
+    log(f"routing re-applied: tables {result.get('tables')}")
+
+
 def probe(exit: dict) -> bool:
     iface = exit["iface"]
     if not iface_exists(iface):
@@ -196,9 +256,16 @@ def probe(exit: dict) -> bool:
 
 def read_active() -> str | None:
     try:
-        return ACTIVE_FILE.read_text().strip() or None
+        value = ACTIVE_FILE.read_text().strip()
     except OSError:
         return None
+    # "none" is an explicit "no exit is alive" marker, not an interface.
+    return value if value and value != "none" else None
+
+
+def should_clear_active(desired, active) -> bool:
+    """The file is stale when nothing is alive but it still names an exit."""
+    return desired is None and bool(active) and active != "none"
 
 
 def write_atomic(path: Path, text: str) -> None:
@@ -296,6 +363,10 @@ def tick(c: dict) -> None:
         if e["enabled"]:
             update_state(e, probe(e))
 
+    # Exits can come up after kaskad-routing.service already ran; only this
+    # loop notices, so it re-applies the tables and rules.
+    sync_routing(c)
+
     alive_rows = [
         e for e in rows
         if e["enabled"] and e.get("mode") == "internet" and state.get(e["iface"], {}).get("alive")
@@ -320,6 +391,10 @@ def tick(c: dict) -> None:
     if desired and (desired != active or current_default(c["route_table"]) != desired):
         log(f"switching to {desired}")
         switch(desired, c)
+    elif should_clear_active(desired, active):
+        # The panel must not show a dead exit as active.
+        write_atomic(ACTIVE_FILE, "none\n")
+        log(f"no alive internet exit: {active} is no longer active")
 
     choices: dict[tuple[int, str], list[str]] = {}
     for grant in client_grants():

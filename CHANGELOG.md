@@ -5,6 +5,94 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.6] - 2026-11-12
+
+### Added
+
+- `/healthz`: an unauthenticated liveness endpoint that reports the database
+  state, version and active exit (503 when the database is unreadable).
+- "sign out everywhere" on `/me`: revokes every session of the account.
+- `check.yml` verifies the panel certificate has at least two weeks left,
+  that both fail2ban jails are active, and that table numbers are unique and
+  client links point at existing rows.
+- HTTP and database tests (`tests/test_http.py`): login and throttling, role
+  separation, client creation with an account, duplicate emails, grants and
+  their order, delete with grants, user pages, key reissue and password change
+  with session invalidation, plus the rollback when the tunnel cannot be
+  configured. They run with `fastapi.testclient`; `panel/requirements-dev.txt`
+  adds the one extra dependency (`httpx`).
+- Daily backups: `kaskad-backup.timer` writes one root-only archive with a
+  consistent copy of `panel.db`, `/etc/kaskad`, the tunnel configs and the TLS
+  certificates to `/var/backups/kaskad`, keeping 14 days by default. The
+  database copy is verified with `PRAGMA integrity_check` before packing, and
+  the README documents the restore steps.
+- `check.yml` warns when the newest backup is older than two days.
+
+### Changed
+
+- Sign-in limits are split: a wrong password blocks only that email from that
+  address (5 attempts) and an address after 20 failures, while repeated
+  guesses against one email add a growing delay instead of a hard block. The
+  administrator can no longer be locked out from the whole internet by
+  guessing his address.
+- Sessions are stored server-side, so signing out really invalidates the
+  cookie; a password change, reset or disabling an account revokes every
+  session of that user. Sessions from before this release need one new
+  sign-in.
+
+### Fixed
+
+- The snapshot used to restore a running device that had no config file is
+  kept (`0600`, path in the error message) when the restore or the peer check
+  fails, so a manual recovery is possible; it is removed only after the
+  device has been restored and verified.
+- When `awg0.conf` is missing but the interface is running, the live device
+  configuration is snapshotted with `awg showconf` before anything changes. A
+  failed apply restores the device from that snapshot through a temporary
+  config file and leaves no file behind (the dump has no Address/MTU/Table,
+  so it must not replace `awg0.conf`); a failed snapshot aborts the change
+  before the device is touched.
+- A failed device rollback is reported as such in the panel: the affected
+  pages say the live tunnel could not be rolled back and that `awg0` needs
+  inspection, instead of claiming that nothing changed.
+- A failed post-apply verification now rolls the **device** back as well:
+  the previous `awg0.conf` is restored, `syncconf` is applied again and the
+  peer set is compared with the old file; an interface that was started for
+  the change is stopped. If the live state cannot be restored the error says
+  `rollback failed` instead of looking like a normal apply failure.
+- Routing table numbers are reserved in a `table_numbers` registry inside the
+  same transaction as the client or exit, so a client and a routed exit can
+  no longer receive the same number concurrently. The registry is rebuilt
+  from live rows on startup and repairs cross-type duplicates left by older
+  databases (the moved object is logged).
+- Expired entries are pruned from the login limiter and from the one-time
+  password stash instead of growing forever.
+- The panel reports the commit from `git describe --always --dirty`, so a
+  deploy from an unclean tree no longer claims to run the previous commit.
+- When no internet exit is alive, `/run/kaskad/active-exit` is set to `none`
+  instead of keeping the last dead interface; `check.yml` accepts that value,
+  so the panel and the checks no longer show a dead exit as active.
+- `check.yml` also verifies the certificate has at least two weeks left, that
+  both fail2ban jails are active, and that table numbers are unique with no
+  orphan client links.
+- Routing is re-applied when an `awg*` interface appears or disappears, so
+  subnet routes of exits that came up after `kaskad-routing.service` are
+  created without a restart. A failed apply is retried on the next tick.
+- `check.yml` verifies that the subnets of routed exits are present in their
+  routing tables.
+- Database changes and the WireGuard config are applied in one transaction:
+  the config is rendered from the uncommitted rows and `syncconf` runs before
+  the commit. A failed apply rolls the client, its account, its keys and its
+  grants back and shows an error instead of a 500.
+- The result of an apply is verified against `awg show <iface> dump`, so a
+  `syncconf` that reports success without changing the device is treated as a
+  failure.
+- The device line of `awg show dump` is no longer parsed as a peer:
+  AmneziaWG prints extra device fields, and the phantom peer inflated peer
+  counts and made the verification fail.
+- Changing a client's subnet access no longer rewrites and re-applies
+  `awg0.conf`, because it does not change the tunnel.
+
 ## [0.3.5] - 2026-11-12
 
 ### Fixed

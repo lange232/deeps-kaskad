@@ -2,7 +2,10 @@
 - name: Product version
   ansible.builtin.set_fact:
     kaskad_version: "{{ lookup('file', kaskad_repo_dir ~ '/VERSION') | trim }}"
-    kaskad_commit: "{{ lookup('pipe', 'git -C ' ~ kaskad_repo_dir ~ ' rev-parse --short HEAD 2>/dev/null || true') | trim }}"
+    kaskad_commit: >-
+      {{ (lookup('pipe', 'git -C ' ~ kaskad_repo_dir ~ ' rev-parse --short=8 HEAD 2>/dev/null || true') | trim)
+         ~ ('' if (lookup('pipe', 'git -C ' ~ kaskad_repo_dir ~ ' status --porcelain --untracked-files=no 2>/dev/null || true') | trim) == ''
+            else '-dirty') }}
 
 - name: Panel packages
   ansible.builtin.apt:
@@ -57,6 +60,7 @@
     - { path: /etc/kaskad, mode: "0700" }
     - { path: /etc/kaskad/tls, mode: "0700" }
     - { path: /var/lib/kaskad, mode: "0700" }
+    - { path: "{{ kaskad_backup_dir }}", mode: "0700" }
 
 - name: awg-quick drop-in directory
   ansible.builtin.file:
@@ -253,3 +257,56 @@
     state: started
     daemon_reload: true
   when: not ansible_check_mode
+
+- name: Backup script
+  ansible.builtin.template:
+    src: kaskad-backup.sh.j2
+    dest: /usr/local/sbin/kaskad-backup
+    owner: root
+    group: root
+    mode: "0750"
+
+- name: Backup service
+  ansible.builtin.template:
+    src: kaskad-backup.service.j2
+    dest: /etc/systemd/system/kaskad-backup.service
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Backup timer
+  ansible.builtin.template:
+    src: kaskad-backup.timer.j2
+    dest: /etc/systemd/system/kaskad-backup.timer
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Backup timer enabled
+  ansible.builtin.systemd:
+    name: kaskad-backup.timer
+    enabled: true
+    state: started
+    daemon_reload: true
+  when: not ansible_check_mode
+
+- name: Backup directory exists?
+  ansible.builtin.stat:
+    path: "{{ kaskad_backup_dir }}"
+  register: kaskad_backup_dir_stat
+
+- name: Existing backups
+  ansible.builtin.find:
+    paths: "{{ kaskad_backup_dir }}"
+    patterns: "kaskad-*.tar.gz"
+    file_type: file
+  register: kaskad_backup_files
+  when: kaskad_backup_dir_stat.stat.exists
+
+- name: First backup
+  ansible.builtin.command: /usr/local/sbin/kaskad-backup
+  changed_when: true
+  when:
+    - not ansible_check_mode
+    - kaskad_backup_dir_stat.stat.exists
+    - (kaskad_backup_files.matched | default(0)) == 0

@@ -110,6 +110,11 @@ to auto" clears it. State lives in `/run/kaskad/status.json` and
 
 Routed exits are not part of the selection: a subnet has a single owner.
 
+The daemon also watches the set of `awg*` interfaces. Tunnels can come up
+after `kaskad-routing.service` has already run (or be restarted by hand), so
+when one appears or disappears the daemon re-applies the routing — with a
+retry on the next tick if the apply reported errors.
+
 ## Firewall
 
 `kaskad-firewall.service` installs iptables rules rather than a separate nft
@@ -137,10 +142,29 @@ scripts/check.sh demo
 
 Tags: `base`, `amneziawg`, `panel`, `entry`.
 
+Tests:
+
+```bash
+python3 -m unittest discover -s tests          # logic only, no extra deps
+/opt/kaskad/venv/bin/pip install -r panel/requirements-dev.txt
+/opt/kaskad/venv/bin/python -m unittest discover -s tests   # + panel HTTP tests
+```
+
 `kaskad_awg_packages_mode` is `ppa` by default; switch it to `local` for hosts
 without access to Launchpad.
 
 `state/` is gitignored: provider configs, client keys and migration seeds.
+
+## Versioning
+
+`VERSION` in `develop` announces the upcoming release; its notes live under
+`Unreleased`. The heading gets the number and the date, and the tag is
+created, when the branch is merged into `main`. A patch release is for an
+urgent fix, not for every commit.
+
+The panel shows the version and the commit it runs; the commit comes from
+`git rev-parse --short` with a `-dirty` suffix when the tree has uncommitted
+changes, so a deploy from an unclean tree is visible.
 
 ## Panel
 
@@ -161,6 +185,18 @@ The panel has two kinds of sign-in:
 The administrator manages clients (create, change class and access, account,
 download the config, QR, enable/disable, delete), exits (add, enable/disable,
 delete, manual switch), service status and the action journal.
+
+Sign-in limits: five failed attempts for the same email from the same address
+block that pair for five minutes, twenty failures from one address block the
+address, and repeated guesses against one email only add a growing delay — so
+nobody can lock the administrator out by guessing his address from elsewhere.
+Sessions are stored server-side: signing out revokes the cookie, changing the
+password or resetting it kills every session of that account, and a client can
+press "sign out everywhere" on `/me`.
+
+`/healthz` answers without authentication and returns
+`{"ok": true, "version": ..., "active": ...}`; it is meant for monitoring and
+returns 503 when the database cannot be read.
 
 Internet exits are granted per client: the administrator ticks the exits a
 client may use, and the client puts them in their own order on `/me`.
@@ -219,6 +255,40 @@ IP will still see the self-signed warning; use the domain name.
 - `kaskad-panel.service`: the panel. Runs as root (netlink is required) with
   `ProtectSystem=strict` and `ReadWritePaths` limited to two directories.
 - `/run/kaskad` is created by `tmpfiles.d`; the units do not remove it.
+
+## Backups
+
+`kaskad-backup.timer` runs `/usr/local/sbin/kaskad-backup` daily at 03:30
+(configurable with `kaskad_backup_oncalendar`) and keeps
+`kaskad_backup_keep_days` days. Each run writes one root-only archive to
+`/var/backups/kaskad`:
+
+- `panel.db` — a consistent copy made with the SQLite backup API and verified
+  with `PRAGMA integrity_check` (the panel keeps running);
+- `/etc/kaskad` — panel config, admin password hash, session secret, TLS keys;
+- `/etc/amnezia/amneziawg` — tunnel configs and server keys;
+- `/etc/letsencrypt` — public certificates and their private keys.
+
+```bash
+/usr/local/sbin/kaskad-backup          # run now
+systemctl list-timers kaskad-backup.timer
+tar -tzf /var/backups/kaskad/kaskad-*.tar.gz | head
+```
+
+Restore:
+
+```bash
+systemctl stop kaskad-panel kaskad-failover
+mkdir -p /root/kaskad-restore
+tar -xzf /var/backups/kaskad/kaskad-<stamp>.tar.gz -C /root/kaskad-restore panel.db
+rm -f /var/lib/kaskad/panel.db-wal /var/lib/kaskad/panel.db-shm
+install -o root -m 0600 /root/kaskad-restore/panel.db /var/lib/kaskad/panel.db
+tar -xzf /var/backups/kaskad/kaskad-<stamp>.tar.gz -C / --exclude panel.db
+systemctl start kaskad-panel kaskad-failover
+```
+
+The archive lives on the same host, so it survives a bad deploy or a deleted
+row, but not the loss of the machine. Copy it off-site if that matters.
 
 ## Diagnostics
 

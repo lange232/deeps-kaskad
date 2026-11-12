@@ -109,6 +109,117 @@
         executable: /bin/bash
       changed_when: false
 
+    - name: Routing tables and client links are consistent
+      ansible.builtin.shell: |
+        set -o pipefail
+        python3 - <<'PY'
+        import sqlite3, sys
+
+        conn = sqlite3.connect("/var/lib/kaskad/panel.db")
+        problems = []
+
+        tables = [
+            r[0] for r in conn.execute(
+                "SELECT table_num FROM exits WHERE table_num > 0 "
+                "UNION ALL SELECT table_num FROM clients WHERE table_num > 0"
+            )
+        ]
+        duplicates = {t for t in tables if tables.count(t) > 1}
+        if duplicates:
+            problems.append(f"table numbers used twice: {sorted(duplicates)}")
+        low = [t for t in tables if t < 1001]
+        if low:
+            problems.append(f"table numbers below 1001: {sorted(low)}")
+
+        for name, sql in (
+            ("client_exits",
+             "SELECT count(*) FROM client_exits ce WHERE "
+             "ce.client_id NOT IN (SELECT id FROM clients) "
+             "OR ce.exit_id NOT IN (SELECT id FROM exits)"),
+            ("client_internet_exits",
+             "SELECT count(*) FROM client_internet_exits ce WHERE "
+             "ce.client_id NOT IN (SELECT id FROM clients) "
+             "OR ce.exit_id NOT IN (SELECT id FROM exits)"),
+        ):
+            orphans = conn.execute(sql).fetchone()[0]
+            if orphans:
+                problems.append(f"{name}: {orphans} rows point at missing objects")
+
+        if problems:
+            print("inconsistent database: " + "; ".join(problems))
+            sys.exit(1)
+        PY
+      args:
+        executable: /bin/bash
+      changed_when: false
+
+    - name: Panel certificate is valid for two more weeks
+      ansible.builtin.shell: |
+        set -o pipefail
+        cert=$(python3 -c 'import json; print(json.load(open("/etc/kaskad/panel.json"))["tls"]["cert"])')
+        openssl x509 -in "$cert" -noout -checkend 1209600
+      args:
+        executable: /bin/bash
+      changed_when: false
+
+    - name: fail2ban jails are active
+      ansible.builtin.shell: |
+        set -o pipefail
+        for jail in kaskad-panel sshd; do
+            fail2ban-client status "$jail" > /dev/null
+        done
+      args:
+        executable: /bin/bash
+      changed_when: false
+
+    - name: Routed exit subnets are installed
+      ansible.builtin.shell: |
+        set -o pipefail
+        python3 - <<'PY'
+        import os, sqlite3, subprocess, sys
+        import ipaddress
+
+        def kernel_form(cidr):
+            net = ipaddress.ip_network(cidr, strict=False)
+            if net.prefixlen == net.max_prefixlen:
+                return str(net.network_address)
+            return str(net)
+
+        missing = []
+        conn = sqlite3.connect("/var/lib/kaskad/panel.db")
+        conn.row_factory = sqlite3.Row
+        for row in conn.execute(
+            "SELECT iface, routes, table_num FROM exits "
+            "WHERE enabled = 1 AND mode = 'routes' AND table_num > 0"
+        ):
+            # An exit that is not up yet has no routes; the failover daemon
+            # adds them as soon as the interface appears.
+            if not os.path.exists(f"/sys/class/net/{row['iface']}"):
+                continue
+            res = subprocess.run(
+                ["ip", "route", "show", "table", str(row["table_num"])],
+                capture_output=True, text=True,
+            )
+            if res.returncode != 0:
+                missing.append(f"table {row['table_num']} for {row['iface']}")
+                continue
+            shown_routes = [line.split() for line in res.stdout.splitlines() if line.split()]
+            for cidr in [x.strip() for x in (row["routes"] or "").split(",") if x.strip()]:
+                prefix = kernel_form(cidr)
+                if not any(
+                    parts[0] == prefix and f"dev {row['iface']}" in " ".join(parts)
+                    for parts in shown_routes
+                ):
+                    missing.append(f"{cidr} via {row['iface']} in table {row['table_num']}")
+
+        if missing:
+            print("missing subnet routes: " + "; ".join(missing))
+            sys.exit(1)
+        PY
+      args:
+        executable: /bin/bash
+      changed_when: false
+
     - name: Active internet route present when exits exist
       ansible.builtin.shell: |
         set -o pipefail
@@ -130,12 +241,33 @@
     - name: Active exit recorded
       ansible.builtin.shell: |
         set -o pipefail
-        [ -s /run/kaskad/active-exit ]
-        [ -e "/sys/class/net/$(tr -d '[:space:]' < /run/kaskad/active-exit)" ]
+        iface=$(tr -d '[:space:]' < /run/kaskad/active-exit)
+        [ "$iface" = "none" ] && exit 0
+        [ -n "$iface" ] && [ -e "/sys/class/net/$iface" ]
       args:
         executable: /bin/bash
       changed_when: false
       when: kaskad_has_internet.rc == 0
+
+    - name: Recent backup
+      ansible.builtin.shell: |
+        set -o pipefail
+        dir={{ kaskad_backup_dir }}
+        newest=$(find "$dir" -maxdepth 1 -type f -name 'kaskad-*.tar.gz' \
+            -printf '%T@\n' 2>/dev/null | sort -n | tail -1)
+        if [ -z "$newest" ]; then
+            echo "no backups yet: kaskad-backup.timer has produced nothing"
+            exit 1
+        fi
+        age=$(( $(date +%s) - ${newest%.*} ))
+        echo "newest backup is $((age / 3600))h old"
+        if [ "$age" -gt $(( 2 * 86400 )) ]; then
+            echo "backup is stale: the timer is not working"
+            exit 1
+        fi
+      args:
+        executable: /bin/bash
+      changed_when: false
 
     - name: NAT towards the upstream
       ansible.builtin.shell: |

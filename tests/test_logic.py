@@ -93,6 +93,10 @@ class ClientTableTests(unittest.TestCase):
             "CREATE TABLE clients (id INTEGER PRIMARY KEY, "
             "table_num INTEGER NOT NULL DEFAULT 0)"
         )
+        self.conn.execute(
+            "CREATE TABLE table_numbers (table_num INTEGER PRIMARY KEY, "
+            "kind TEXT NOT NULL, owner_id INTEGER NOT NULL)"
+        )
 
     def test_pool_starts_above_the_system_tables(self):
         self.assertGreaterEqual(routing.allocate_table(self.conn),
@@ -110,6 +114,39 @@ class ClientTableTests(unittest.TestCase):
     def test_never_returns_a_reserved_table(self):
         number = routing.allocate_table(self.conn)
         self.assertNotIn(number, routing.RESERVED_TABLES)
+
+    def test_claim_reserves_the_number_for_both_kinds(self):
+        client = routing.claim_table(self.conn, "client", 1)
+        exit_table = routing.claim_table(self.conn, "exit", 1)
+        self.assertNotEqual(client, exit_table)
+        self.assertEqual(routing.allocate_table(self.conn), exit_table + 1)
+
+    def test_release_frees_the_number(self):
+        number = routing.claim_table(self.conn, "client", 7)
+        routing.release_table(self.conn, "client", 7)
+        self.assertEqual(routing.claim_table(self.conn, "client", 8), number)
+
+    def test_registry_repairs_a_cross_type_duplicate(self):
+        self.conn.execute("INSERT INTO exits (id, table_num, mode) VALUES (1, 1001, 'routes')")
+        self.conn.execute("INSERT INTO clients (id, table_num) VALUES (1, 1001)")
+        routing.sync_registry(self.conn)
+        exit_table = self.conn.execute(
+            "SELECT table_num FROM exits WHERE id = 1").fetchone()[0]
+        client_table = self.conn.execute(
+            "SELECT table_num FROM clients WHERE id = 1").fetchone()[0]
+        self.assertNotEqual(exit_table, client_table)
+        claims = self.conn.execute(
+            "SELECT count(*) FROM table_numbers").fetchone()[0]
+        self.assertEqual(claims, 2)
+
+    def test_registry_rebuild_drops_stale_claims(self):
+        self.conn.execute(
+            "INSERT INTO table_numbers (table_num, kind, owner_id) VALUES (1001, 'client', 9)"
+        )
+        routing.sync_registry(self.conn)
+        self.assertEqual(
+            self.conn.execute("SELECT count(*) FROM table_numbers").fetchone()[0], 0
+        )
 
 
 class ParseTests(unittest.TestCase):
@@ -221,6 +258,90 @@ class FailoverStatusTests(unittest.TestCase):
         self.assertEqual(used, {})
 
 
+class SyncRoutingTests(unittest.TestCase):
+    def setUp(self):
+        failover.known_ifaces = None
+        failover.routing_pending = False
+        failover.routing_retry_at = 0.0
+        failover.routing_backoff = 10
+        failover.routing_last_error = ""
+
+    def tearDown(self):
+        failover.known_ifaces = None
+        failover.routing_pending = False
+        failover.routing_retry_at = 0.0
+        failover.routing_backoff = 10
+        failover.routing_last_error = ""
+
+    def sync(self, ifaces, apply=None):
+        apply = apply or mock.Mock(return_value={"errors": [], "tables": []})
+        with mock.patch.object(failover, "awg_ifaces", return_value=set(ifaces)), \
+             mock.patch.object(failover.routing, "apply", apply), \
+             mock.patch.object(failover.time, "sleep"):
+            failover.sync_routing({"route_table": 100})
+        return apply
+
+    def test_first_sync_applies_routing(self):
+        apply = self.sync({"awg0", "awg1"})
+        apply.assert_called_once()
+        self.assertFalse(failover.routing_pending)
+        self.assertEqual(failover.known_ifaces, {"awg0", "awg1"})
+
+    def test_unchanged_interfaces_do_not_apply(self):
+        self.sync({"awg0"})
+        apply = self.sync({"awg0"})
+        apply.assert_not_called()
+
+    def test_appeared_exit_triggers_apply(self):
+        self.sync({"awg0"})
+        apply = self.sync({"awg0", "awg2"})
+        apply.assert_called_once()
+
+    def test_vanished_exit_triggers_apply(self):
+        self.sync({"awg0", "awg2"})
+        apply = self.sync({"awg0"})
+        apply.assert_called_once()
+
+    def test_failed_apply_is_retried_until_clean(self):
+        self.sync({"awg0"})
+        failing = mock.Mock(return_value={"errors": ["boom"], "tables": []})
+        self.sync({"awg0", "awg2"}, failing)
+        self.assertTrue(failover.routing_pending)
+        self.assertGreater(failover.routing_backoff, 10)
+        # Within the backoff window the daemon does not hammer the kernel.
+        skipped = self.sync({"awg0", "awg2"})
+        skipped.assert_not_called()
+        # After the window it retries and, on success, clears the state.
+        failover.routing_retry_at = 0.0
+        apply = self.sync({"awg0", "awg2"})
+        apply.assert_called_once()
+        self.assertFalse(failover.routing_pending)
+        self.assertEqual(failover.routing_backoff, 10)
+
+
+class ActiveMarkerTests(unittest.TestCase):
+    def test_stale_active_is_cleared(self):
+        self.assertTrue(failover.should_clear_active(None, "awg1"))
+        self.assertFalse(failover.should_clear_active(None, None))
+        self.assertFalse(failover.should_clear_active(None, "none"))
+        self.assertFalse(failover.should_clear_active("awg1", "awg1"))
+
+    def test_none_marker_reads_as_no_active_exit(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "active-exit"
+            old = failover.ACTIVE_FILE
+            failover.ACTIVE_FILE = path
+            try:
+                self.assertIsNone(failover.read_active())
+                path.write_text("none\n")
+                self.assertIsNone(failover.read_active())
+                path.write_text("awg2\n")
+                self.assertEqual(failover.read_active(), "awg2")
+            finally:
+                failover.ACTIVE_FILE = old
+
+
 class PasswordTests(unittest.TestCase):
     def test_round_trip(self):
         stored = auth.hash_password("correct horse battery")
@@ -288,6 +409,12 @@ class SessionTests(unittest.TestCase):
     def test_other_secret_is_rejected(self):
         token = auth.make_session(self.secret, "admin")
         self.assertIsNone(auth.session_data("another-secret", token))
+
+    def test_jti_is_present_and_unique(self):
+        one = auth.session_data(self.secret, auth.make_session(self.secret, "admin"))
+        two = auth.session_data(self.secret, auth.make_session(self.secret, "admin"))
+        self.assertTrue(one["jti"])
+        self.assertNotEqual(one["jti"], two["jti"])
 
     def test_expired_is_rejected(self):
         token = auth.make_session(self.secret, "admin", ttl=-1)
