@@ -123,6 +123,21 @@
     color 85ms ease-out;
 }
 
+/* Touch targets on phones: 28 px is fine for a mouse, not for a finger. */
+@media (pointer: coarse) {
+  .oc-btn {
+    min-height: 44px;
+  }
+
+  .oc-btn--sm {
+    min-height: 40px;
+  }
+
+  .side a {
+    min-height: 40px;
+  }
+}
+
 .oc-btn > * {
   pointer-events: none;
 }

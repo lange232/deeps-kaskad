@@ -17,6 +17,7 @@
 
 {% if clients %}
 <div class="oc-panel">
+  <div class="table-scroll">
   <table class="oc-table">
     <thead>
       <tr><th>name</th><th>address</th><th>account</th><th>access</th><th>handshake</th><th>rx / tx</th><th>state</th><th></th></tr>
@@ -50,6 +51,7 @@
     {% endfor %}
     </tbody>
   </table>
+  </div>
 </div>
 {% else %}
 <div class="oc-empty">{% if q %}nothing found{% else %}no clients yet{% endif %}</div>

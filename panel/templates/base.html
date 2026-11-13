@@ -22,6 +22,9 @@
      columns jump on every auto-refresh. */
   .oc-table td { vertical-align: middle; }
   .oc-table td .oc-badge { white-space: nowrap; }
+  /* Wide tables scroll inside their panel instead of stretching the page
+     on a phone. */
+  .table-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
   .app--centered { grid-template-columns: minmax(0, 1fr); }
   .app--centered .main { max-width: 380px; margin: 12vh auto 0; }
   .main { min-width: 0; }
@@ -90,6 +93,12 @@
     .side { position: static; flex-direction: row; overflow-x: auto; padding-top: 8px; }
     .side__sep { display: none; }
     .side a { white-space: nowrap; }
+    /* The brand, the badge and the two buttons do not fit 360 px in one
+       row; wrap instead of clipping the actions. */
+    .oc-topbar { flex-wrap: wrap; row-gap: 8px; padding: 8px 12px; }
+    .oc-topbar__spacer { min-width: 8px; }
+    .oc-topbar .oc-badge--subtle { display: none; }
+    .oc-panel__head { flex-wrap: wrap; }
   }
 </style>
 <script>
