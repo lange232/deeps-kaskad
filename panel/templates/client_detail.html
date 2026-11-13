@@ -131,9 +131,25 @@
         <div class="oc-alert__body">
           password for <span class="oc-mono">{{ account.email if account else '' }}</span> —
           shown once, save it now:
-          <pre class="conf" id="newpw-value" style="margin-top:8px">{{ newpw }}</pre>
-          <div class="actions" style="margin-top:8px">
-            <button type="button" class="oc-btn oc-btn--outline oc-btn--sm" id="copy-newpw">copy password</button>
+          <div class="oc-input-affix" style="margin-top:8px">
+            <input class="oc-input oc-mono" id="newpw-value" value="{{ newpw }}"
+                   readonly autocomplete="off" spellcheck="false"
+                   aria-label="generated password">
+            <button type="button" class="oc-icon-btn" id="copy-newpw"
+                    title="copy password" aria-label="copy password">
+              <svg id="copy-icon" width="16" height="16" viewBox="0 0 16 16"
+                   fill="none" stroke="currentColor" stroke-width="1.5"
+                   stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <rect x="5.5" y="5.5" width="8" height="8" rx="1.5"></rect>
+                <path d="M10.5 5.5V4a1.5 1.5 0 0 0-1.5-1.5H4A1.5 1.5 0 0 0 2.5 4v5A1.5 1.5 0 0 0 4 10.5h1.5"></path>
+              </svg>
+              <svg id="copied-icon" width="16" height="16" viewBox="0 0 16 16"
+                   fill="none" stroke="currentColor" stroke-width="1.5"
+                   stroke-linecap="round" stroke-linejoin="round"
+                   aria-hidden="true" hidden>
+                <path d="M3 8.5l3 3 7-7"></path>
+              </svg>
+            </button>
           </div>
         </div>
       </div>
@@ -209,8 +225,26 @@
 <script>
 const copyBtn = document.getElementById('copy-newpw');
 if (copyBtn) {
+  const field = document.getElementById('newpw-value');
+  const copyIcon = document.getElementById('copy-icon');
+  const copiedIcon = document.getElementById('copied-icon');
+
+  function mark(copied) {
+    copyIcon.hidden = copied;
+    copiedIcon.hidden = !copied;
+    copyBtn.title = copied ? 'copied' : 'copy password';
+    copyBtn.setAttribute('aria-label', copyBtn.title);
+    if (!copied) return;
+    setTimeout(() => {
+      copyIcon.hidden = false;
+      copiedIcon.hidden = true;
+      copyBtn.title = 'copy password';
+      copyBtn.setAttribute('aria-label', 'copy password');
+    }, 1500);
+  }
+
   copyBtn.addEventListener('click', async () => {
-    const value = document.getElementById('newpw-value').textContent.trim();
+    const value = field.value;
     let copied = false;
     try {
       if (navigator.clipboard && window.isSecureContext) {
@@ -219,17 +253,10 @@ if (copyBtn) {
       }
     } catch (e) {}
     if (!copied) {
-      const area = document.createElement('textarea');
-      area.value = value;
-      area.style.position = 'fixed';
-      area.style.opacity = '0';
-      document.body.appendChild(area);
-      area.select();
+      field.select();
       try { copied = document.execCommand('copy'); } catch (e) {}
-      area.remove();
     }
-    copyBtn.textContent = copied ? 'copied' : 'copy failed';
-    setTimeout(() => { copyBtn.textContent = 'copy password'; }, 1500);
+    mark(copied);
   });
 }
 
