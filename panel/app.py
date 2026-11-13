@@ -1317,6 +1317,10 @@ def create_exit(
 
     if mode not in ("internet", "routes"):
         return fail("unknown exit mode")
+    if mode == "routes" and not routes.strip():
+        # The provider config names the networks this peer can reach; when
+        # AllowedIPs is the default route, the Address network is the guess.
+        routes = ", ".join(awgconf.guess_routes(conf))
     try:
         nets = parse_routes(routes) if mode == "routes" else []
     except ValueError as exc:

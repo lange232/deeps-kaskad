@@ -74,6 +74,7 @@ class PanelTestCase(unittest.TestCase):
         self.patches = [
             mock.patch.object(app, "apply_conf", mock.Mock()),
             mock.patch.object(app, "apply_routing", mock.Mock()),
+            mock.patch.object(app, "apply_exit", mock.Mock(return_value="")),
             mock.patch.object(app, "run", side_effect=self.fake_run),
         ]
         for patch in self.patches:
@@ -404,6 +405,53 @@ class NatHttpTests(PanelTestCase):
         with app.db() as conn:
             self.assertEqual(conn.execute(
                 "SELECT nat FROM exits WHERE id = ?", (exit_id,)).fetchone()[0], 1)
+
+
+class ExitCreationTests(PanelTestCase):
+    conf = (
+        "[Interface]\nAddress = 10.90.0.2/30\nPrivateKey = exit-private\n\n"
+        "[Peer]\nPublicKey = exit-public\nEndpoint = host:51820\n"
+        "AllowedIPs = 10.90.0.0/30\n"
+    )
+
+    def create(self, mode="routes", routes="", conf=None):
+        self.login_admin()
+        csrf = self.csrf("/exits/new")
+        return self.client.post("/exits", data={
+            "name": "routed1", "mode": mode, "priority": "20",
+            "routes": routes, "dns": "", "comment": "", "nat": "on",
+            "conf": conf or self.conf, "csrf_token": csrf,
+        })
+
+    def stored_exit(self):
+        with app.db() as conn:
+            return conn.execute("SELECT * FROM exits").fetchone()
+
+    def test_subnets_are_taken_from_allowed_ips(self):
+        response = self.create(routes="")
+        self.assertEqual(response.status_code, 303)
+        self.assertIn("ok=exit+added", response.headers["location"])
+        row = self.stored_exit()
+        self.assertEqual(row["mode"], "routes")
+        self.assertEqual(row["routes"], "10.90.0.0/30")
+        self.assertGreater(row["table_num"], 0)
+
+    def test_subnets_fall_back_to_the_address_network(self):
+        conf = self.conf.replace("AllowedIPs = 10.90.0.0/30",
+                                 "AllowedIPs = 0.0.0.0/0")
+        response = self.create(routes="", conf=conf)
+        self.assertEqual(response.status_code, 303)
+        self.assertEqual(self.stored_exit()["routes"], "10.90.0.0/30")
+
+    def test_manual_subnets_win(self):
+        response = self.create(routes="192.168.77.0/24")
+        self.assertEqual(response.status_code, 303)
+        self.assertEqual(self.stored_exit()["routes"], "192.168.77.0/24")
+
+    def test_internet_exit_ignores_allowed_ips(self):
+        response = self.create(mode="internet")
+        self.assertEqual(response.status_code, 303)
+        self.assertEqual(self.stored_exit()["routes"], "")
 
 
 class ClientTests(PanelTestCase):

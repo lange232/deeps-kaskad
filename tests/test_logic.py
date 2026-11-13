@@ -14,6 +14,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "panel"))
 
 import auth  # noqa: E402
+import awgconf  # noqa: E402
 import failover  # noqa: E402
 import routing  # noqa: E402
 
@@ -413,6 +414,41 @@ class ActiveMarkerTests(unittest.TestCase):
                 self.assertEqual(failover.read_active(), "awg2")
             finally:
                 failover.ACTIVE_FILE = old
+
+
+class AllowedNetworksTests(unittest.TestCase):
+    conf = (
+        "[Interface]\nAddress = 10.90.0.2/30\nPrivateKey = priv\n\n"
+        "[Peer]\nPublicKey = pub\nEndpoint = host:51820\n"
+        "AllowedIPs = 10.90.0.0/30, 192.168.50.0/24\n"
+    )
+
+    def test_ipv4_networks_are_collected(self):
+        self.assertEqual(awgconf.allowed_networks(self.conf),
+                         ["10.90.0.0/30", "192.168.50.0/24"])
+
+    def test_default_route_and_ipv6_are_dropped(self):
+        conf = self.conf.replace(
+            "AllowedIPs = 10.90.0.0/30, 192.168.50.0/24",
+            "AllowedIPs = 0.0.0.0/0, fd00::/8",
+        )
+        self.assertEqual(awgconf.allowed_networks(conf), [])
+
+    def test_guess_prefers_allowed_ips(self):
+        self.assertEqual(awgconf.guess_routes(self.conf),
+                         ["10.90.0.0/30", "192.168.50.0/24"])
+
+    def test_guess_falls_back_to_the_address_network(self):
+        conf = self.conf.replace(
+            "AllowedIPs = 10.90.0.0/30, 192.168.50.0/24",
+            "AllowedIPs = 0.0.0.0/0",
+        )
+        self.assertEqual(awgconf.guess_routes(conf), ["10.90.0.0/30"])
+
+    def test_guess_without_address(self):
+        self.assertEqual(
+            awgconf.guess_routes("[Interface]\nPrivateKey = k\n"), []
+        )
 
 
 class NatTests(unittest.TestCase):

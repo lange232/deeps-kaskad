@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- The new-exit form fills `subnets` from the provider config: the peers'
+  IPv4 `AllowedIPs` (the default route is ignored), and when those are only
+  `0.0.0.0/0`, the network of the `[Interface] Address`. The field is only
+  filled while it is empty or still holds the previous suggestion, so manual
+  input is never overwritten. The server applies the same fallback when the
+  field arrives empty.
 - NAT is configured per exit. Internet exits always masquerade; a routed
   exit can opt out when the far side has a route back to the client network.
   The rules live in the `KASKAD-NAT` chain, rebuilt by the panel on every

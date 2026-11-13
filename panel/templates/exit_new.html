@@ -41,8 +41,13 @@
       </label>
       <label class="oc-field" id="exit-routes-row">
         <span class="oc-field__label">subnets</span>
-        <input class="oc-input" type="text" name="routes" value="{{ form.routes }}"
+        <input class="oc-input" type="text" name="routes" id="exit-routes"
+               value="{{ form.routes }}"
                placeholder="192.168.50.0/24, 10.20.0.0/24">
+        <span class="oc-hint">
+          filled from AllowedIPs in the provider config, or from the Address
+          network when AllowedIPs is 0.0.0.0/0; edit if needed
+        </span>
       </label>
       <label class="oc-field" id="exit-dns-row">
         <span class="oc-field__label">DNS from the subnet</span>
@@ -78,13 +83,63 @@
 <script>
 const mode = document.getElementById('exit-mode');
 const routesRow = document.getElementById('exit-routes-row');
+const routesInput = document.getElementById('exit-routes');
 const dnsRow = document.getElementById('exit-dns-row');
 const natRow = document.getElementById('exit-nat-row');
+const confInput = document.querySelector('textarea[name="conf"]');
+let autoRoutes = null;
+
+function allowedNets(conf) {
+  const nets = [];
+  for (const line of conf.split('\n')) {
+    const match = line.match(/^\s*AllowedIPs\s*=\s*(.*)$/i);
+    if (!match) continue;
+    for (let item of match[1].split(',')) {
+      item = item.trim();
+      if (!item || item.includes(':') || item.startsWith('0.0.0.0/0')) continue;
+      if (!nets.includes(item)) nets.push(item);
+    }
+  }
+  return nets;
+}
+
+// Network part of [Interface] Address, used when AllowedIPs is the default
+// route: the provider still gives an address from the routed subnet.
+function addressNet(conf) {
+  const match = conf.match(/^\s*Address\s*=\s*([^\s,]+)/mi);
+  if (!match || match[1].includes(':')) return '';
+  const [ip, rawLength] = match[1].split('/');
+  const parts = ip.split('.').map(Number);
+  if (parts.length !== 4 || parts.some((n) => !Number.isInteger(n) || n < 0 || n > 255)) return '';
+  const length = rawLength === undefined ? 32 : Number(rawLength);
+  if (!Number.isInteger(length) || length < 1 || length > 32) return '';
+  const value = ((parts[0] << 24) | (parts[1] << 16) | (parts[2] << 8) | parts[3]) >>> 0;
+  const mask = length === 0 ? 0 : (0xFFFFFFFF << (32 - length)) >>> 0;
+  const net = (value & mask) >>> 0;
+  return [net >>> 24, (net >>> 16) & 255, (net >>> 8) & 255, net & 255].join('.')
+    + '/' + length;
+}
+
+function syncRoutes() {
+  if (!routesInput || !confInput || mode.value !== 'routes') return;
+  if (routesInput.value.trim() !== '' && routesInput.value !== autoRoutes) return;
+  const nets = allowedNets(confInput.value);
+  const value = nets.length ? nets.join(', ') : addressNet(confInput.value);
+  routesInput.value = value;
+  autoRoutes = value;
+}
+
+confInput.addEventListener('input', syncRoutes);
+routesInput.addEventListener('input', () => {
+  if (routesInput.value !== autoRoutes) autoRoutes = null;
+});
+
 function syncMode() {
   const routes = mode.value === 'routes';
   routesRow.style.display = routes ? '' : 'none';
   dnsRow.style.display = routes ? '' : 'none';
   natRow.style.display = routes ? '' : 'none';
+  if (routes) syncRoutes();
 }
 mode.addEventListener('change', syncMode);
 syncMode();

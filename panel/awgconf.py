@@ -6,6 +6,8 @@ turns them into something suitable for awg-quick with Table = off.
 """
 from __future__ import annotations
 
+import ipaddress
+
 DROP_INTERFACE = {
     "dns", "postup", "predown", "postdown", "saveconfig",
     "table", "mtu", "listenport", "fwmark",
@@ -101,6 +103,48 @@ def endpoint(text: str) -> str:
             if key.lower() == "endpoint":
                 return value
     return ""
+
+
+def allowed_networks(text: str) -> list[str]:
+    """IPv4 networks from the peers' AllowedIPs, without the default route."""
+    nets: list[str] = []
+    for raw in text.splitlines():
+        key, _, value = raw.strip().partition("=")
+        if key.strip().lower() != "allowedips":
+            continue
+        for item in value.split(","):
+            item = item.strip()
+            if not item or ":" in item:
+                continue
+            try:
+                net = ipaddress.ip_network(item, strict=False)
+            except ValueError:
+                continue
+            if net.prefixlen == 0:
+                continue
+            shown = str(net)
+            if shown not in nets:
+                nets.append(shown)
+    return nets
+
+
+def guess_routes(text: str) -> list[str]:
+    """Subnets for a routed exit: AllowedIPs, or the Address network."""
+    nets = allowed_networks(text)
+    if nets:
+        return nets
+    data = parse_text(text)
+    for item in str(data["iface"].get("Address", "")).split(","):
+        item = item.strip()
+        if not item or ":" in item:
+            continue
+        try:
+            net = ipaddress.ip_network(item, strict=False)
+        except ValueError:
+            continue
+        if net.prefixlen > 0:
+            return [str(net)]
+    return []
 
 
 def is_plain(text: str) -> bool:
