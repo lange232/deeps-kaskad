@@ -456,6 +456,25 @@ class ExitCreationTests(PanelTestCase):
         self.assertEqual(self.stored_exit()["routes"], "")
 
 
+class AdminPingTests(PanelTestCase):
+    def test_overview_offers_the_device_round_trip(self):
+        self.seed_exit("e1", "awg1", mode="internet")
+        status = {"exits": {"awg1": {"alive": True, "rtt_ms": 40}},
+                  "active": "awg1", "clients": {}}
+        self.login_admin()
+        with mock.patch.object(app, "read_status", return_value=status):
+            response = self.client.get("/")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('data-exit-ping="40"', response.text)
+        self.assertIn('id="client-rtt"', response.text)
+
+    def test_pages_have_the_auto_refresh_helper(self):
+        self.login_admin()
+        response = self.client.get("/")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("kaskadAutoRefresh = function", response.text)
+
+
 class ClientTests(PanelTestCase):
     def test_create_client_with_account(self):
         self.login_admin()

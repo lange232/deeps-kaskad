@@ -4,6 +4,7 @@
 <div class="page-head">
   <h1>Overview</h1>
   <p class="oc-muted">cascade state and recent events</p>
+  <p class="oc-muted">your device to panel: <span class="oc-mono" id="client-rtt">measuring…</span></p>
 </div>
 
 {% if err %}<div class="oc-alert oc-alert--danger" style="margin-bottom:16px"><span class="oc-dot" style="margin-top:7px"></span><div class="oc-alert__body">{{ err }}</div></div>{% endif %}
@@ -83,7 +84,10 @@
               {% else %}<span class="oc-badge oc-badge--danger"><span class="oc-dot"></span>down</span>{% endif %}
             </td>
             <td class="oc-mono oc-muted">
-              {% if e.alive and e.rtt_ms %}{{ e.rtt_ms }} ms{% else %}—{% endif %}
+              {% if e.alive and e.rtt_ms %}
+              <span data-exit-ping="{{ e.rtt_ms }}" title="panel to exit {{ e.rtt_ms }} ms">{{ e.rtt_ms }} ms</span>
+              <div class="cell-sub" data-ping-parts>exit {{ e.rtt_ms }} ms</div>
+              {% else %}—{% endif %}
             </td>
             <td><a class="oc-btn oc-btn--ghost oc-btn--sm" href="/exits/{{ e.id }}">open</a></td>
           </tr>
@@ -127,6 +131,7 @@ function rel(ts) {
   if (d < 86400) return Math.floor(d / 3600) + 'h ago';
   return Math.floor(d / 86400) + 'd ago';
 }
+kaskadMeasureRtt(kaskadShowTotals);
 kaskadAutoRefresh(15);
 </script>
 {% endblock %}
