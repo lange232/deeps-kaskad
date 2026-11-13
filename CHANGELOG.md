@@ -40,6 +40,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the document head, because page scripts run before the body-end script —
   previously the call threw `ReferenceError` and pages never refreshed.
 
+### Changed
+
+- The footer no longer repeats the project name; it still shows the version
+  and commit.
+
 ### Fixed
 
 - On `/me` the exit ping no longer looks like a finished total before the
