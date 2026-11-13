@@ -5,6 +5,17 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- Mobile API for the WireGuard Android fork: `POST /api/login` (the same
+  client email/password as `/me`; the administrator login is rejected),
+  `GET /api/me`, `GET /api/me/conf` (the awg0 client config) and
+  `POST /api/logout`. Bearer tokens live 30 days, are stored server-side
+  like web sessions, die with a password change or "sign out everywhere",
+  and share the web login's rate limits and fail2ban logging.
+
 ## [0.3.7] - 2026-11-13
 
 ### Added
