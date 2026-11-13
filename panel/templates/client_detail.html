@@ -145,10 +145,10 @@
                   <path d="M1.5 8s2.5-4.5 6.5-4.5S14.5 8 14.5 8s-2.5 4.5-6.5 4.5S1.5 8 1.5 8z"></path>
                   <circle cx="8" cy="8" r="2"></circle>
                 </svg>
-                <svg id="hide-icon" width="16" height="16" viewBox="0 0 16 16"
+                <svg id="hide-icon" class="is-hidden" width="16" height="16" viewBox="0 0 16 16"
                      fill="none" stroke="currentColor" stroke-width="1.5"
                      stroke-linecap="round" stroke-linejoin="round"
-                     aria-hidden="true" hidden>
+                     aria-hidden="true">
                   <path d="M1.5 8s2.5-4.5 6.5-4.5S14.5 8 14.5 8s-2.5 4.5-6.5 4.5S1.5 8 1.5 8z"></path>
                   <circle cx="8" cy="8" r="2"></circle>
                   <path d="M2 14L14 2"></path>
@@ -162,10 +162,10 @@
                   <rect x="5.5" y="5.5" width="8" height="8" rx="1.5"></rect>
                   <path d="M10.5 5.5V4a1.5 1.5 0 0 0-1.5-1.5H4A1.5 1.5 0 0 0 2.5 4v5A1.5 1.5 0 0 0 4 10.5h1.5"></path>
                 </svg>
-                <svg id="copied-icon" width="16" height="16" viewBox="0 0 16 16"
+                <svg id="copied-icon" class="is-hidden" width="16" height="16" viewBox="0 0 16 16"
                      fill="none" stroke="currentColor" stroke-width="1.5"
                      stroke-linecap="round" stroke-linejoin="round"
-                     aria-hidden="true" hidden>
+                     aria-hidden="true">
                   <path d="M3 8.5l3 3 7-7"></path>
                 </svg>
               </button>
@@ -251,8 +251,8 @@ if (revealBtn && newpwField) {
   revealBtn.addEventListener('click', () => {
     const shown = newpwField.type === 'text';
     newpwField.type = shown ? 'password' : 'text';
-    showIcon.hidden = !shown;
-    hideIcon.hidden = shown;
+    showIcon.classList.toggle('is-hidden', shown);
+    hideIcon.classList.toggle('is-hidden', !shown);
     revealBtn.title = shown ? 'show password' : 'hide password';
     revealBtn.setAttribute('aria-label', revealBtn.title);
     revealBtn.setAttribute('aria-pressed', shown ? 'false' : 'true');
@@ -266,14 +266,14 @@ if (copyBtn) {
   const copiedIcon = document.getElementById('copied-icon');
 
   function mark(copied) {
-    copyIcon.hidden = copied;
-    copiedIcon.hidden = !copied;
+    copyIcon.classList.toggle('is-hidden', copied);
+    copiedIcon.classList.toggle('is-hidden', !copied);
     copyBtn.title = copied ? 'copied' : 'copy password';
     copyBtn.setAttribute('aria-label', copyBtn.title);
     if (!copied) return;
     setTimeout(() => {
-      copyIcon.hidden = false;
-      copiedIcon.hidden = true;
+      copyIcon.classList.remove('is-hidden');
+      copiedIcon.classList.add('is-hidden');
       copyBtn.title = 'copy password';
       copyBtn.setAttribute('aria-label', 'copy password');
     }, 1500);

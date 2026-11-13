@@ -362,6 +362,10 @@
   gap: 2px;
 }
 
+.is-hidden {
+  display: none !important;
+}
+
 .oc-textarea {
   min-height: 72px;
   padding: 6px 8px;
