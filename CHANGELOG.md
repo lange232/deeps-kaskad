@@ -5,6 +5,18 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.9] - 2026-11-14
+
+### Changed
+
+- The Android client APK is taken from the client's GitHub release instead
+  of a local build: `scripts/fetch-apk.sh` resolves the release, downloads the
+  arm64 asset together with its `SHA256SUMS.txt`, and replaces
+  `files/app/app.apk` only when the checksum matches, so a broken download
+  never reaches the panel.
+- The panel role compares the APK copied to `/var/lib/kaskad/app.apk` with
+  the local file and fails the run when they differ.
+
 ## [0.3.8] - 2026-11-13
 
 ### Added
