@@ -395,12 +395,6 @@ class ProbeTests(unittest.TestCase):
 
 
 class ClientPingTests(unittest.TestCase):
-    def setUp(self):
-        failover.client_rtt.clear()
-
-    def tearDown(self):
-        failover.client_rtt.clear()
-
     def test_client_probe_returns_the_latency(self):
         answered = subprocess.CompletedProcess([], 0, "time=8.4 ms", "")
         with mock.patch.object(failover, "iface_exists", return_value=True), \
@@ -423,7 +417,6 @@ class ClientPingTests(unittest.TestCase):
         rows = [{"ip": "10.80.0.2"}, {"ip": "10.80.0.3"}]
         values = {"10.80.0.2": 8.4, "10.80.0.3": None}
         with mock.patch.object(failover, "client_rows", return_value=rows), \
-             mock.patch.object(failover, "iface_exists", return_value=True), \
              mock.patch.object(failover, "probe_client",
                                side_effect=lambda ip: values[ip]):
             self.assertEqual(failover.client_pings(),
@@ -432,38 +425,6 @@ class ClientPingTests(unittest.TestCase):
     def test_no_clients_means_no_pings(self):
         with mock.patch.object(failover, "client_rows", return_value=[]):
             self.assertEqual(failover.client_pings(), {})
-
-    def test_a_recent_value_survives_a_missed_probe(self):
-        failover.client_rtt.clear()
-        with mock.patch.object(failover, "client_rows",
-                               return_value=[{"ip": "10.80.0.2"}]), \
-             mock.patch.object(failover, "iface_exists", return_value=True), \
-             mock.patch.object(failover, "probe_client", return_value=7.6):
-            self.assertEqual(failover.client_pings(), {"10.80.0.2": 8})
-        with mock.patch.object(failover, "client_rows",
-                               return_value=[{"ip": "10.80.0.2"}]), \
-             mock.patch.object(failover, "iface_exists", return_value=True), \
-             mock.patch.object(failover, "probe_client", return_value=None):
-            self.assertEqual(failover.client_pings(), {"10.80.0.2": 8})
-
-    def test_an_old_value_expires(self):
-        failover.client_rtt.clear()
-        failover.client_rtt["10.80.0.2"] = (8, int(time.time()) - 31)
-        with mock.patch.object(failover, "client_rows",
-                               return_value=[{"ip": "10.80.0.2"}]), \
-             mock.patch.object(failover, "iface_exists", return_value=True), \
-             mock.patch.object(failover, "probe_client", return_value=None):
-            self.assertEqual(failover.client_pings(), {"10.80.0.2": None})
-
-    def test_removed_clients_are_dropped_from_the_cache(self):
-        failover.client_rtt.clear()
-        failover.client_rtt["10.80.0.9"] = (8, int(time.time()))
-        with mock.patch.object(failover, "client_rows",
-                               return_value=[{"ip": "10.80.0.2"}]), \
-             mock.patch.object(failover, "iface_exists", return_value=True), \
-             mock.patch.object(failover, "probe_client", return_value=5.0):
-            self.assertEqual(failover.client_pings(), {"10.80.0.2": 5})
-        self.assertNotIn("10.80.0.9", failover.client_rtt)
 
 
 class ActiveMarkerTests(unittest.TestCase):

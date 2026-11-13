@@ -57,9 +57,6 @@ routing_pending = False
 routing_retry_at = 0.0
 routing_backoff = 10
 routing_last_error = ""
-# Last successful client probe: ip -> (rtt_ms, timestamp). Phones answer
-# ICMP intermittently, so a single miss must not blank the card.
-client_rtt: dict[str, tuple[int, int]] = {}
 
 
 def log(msg: str) -> None:
@@ -297,27 +294,14 @@ def probe_client(ip: str) -> float | None:
 
 def client_pings() -> dict[str, float | None]:
     ips = [row["ip"] for row in client_rows()]
-    if not ips or not iface_exists("awg0"):
+    if not ips:
         return {}
     with ThreadPoolExecutor(max_workers=8) as pool:
         values = list(pool.map(probe_client, ips))
-
-    now = int(time.time())
-    result: dict[str, float | None] = {}
-    for ip, rtt in zip(ips, values):
-        if rtt is not None:
-            client_rtt[ip] = (round(rtt), now)
-            result[ip] = round(rtt)
-            continue
-        previous = client_rtt.get(ip)
-        if previous and now - previous[1] <= 30:
-            result[ip] = previous[0]
-        else:
-            result[ip] = None
-    stale = set(client_rtt) - set(ips)
-    for ip in stale:
-        del client_rtt[ip]
-    return result
+    return {
+        ip: (round(rtt) if rtt is not None else None)
+        for ip, rtt in zip(ips, values)
+    }
 
 
 def read_active() -> str | None:
