@@ -83,7 +83,7 @@
             <span class="oc-check__box"></span>
             {{ e.name }}
             <span class="oc-mono oc-muted" style="margin-left:8px">{{ e.iface }}</span>
-            {% if latency.get(e.iface) %}<span class="oc-mono oc-muted" style="margin-left:6px">{{ latency.get(e.iface) }} ms</span>{% endif %}
+            {% if latency.get(e.iface) %}<span class="oc-mono oc-muted" style="margin-left:6px" title="panel to exit">{{ latency.get(e.iface) }} ms</span>{% endif %}
           </label>
           {% endfor %}
         </div>

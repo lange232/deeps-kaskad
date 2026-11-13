@@ -70,7 +70,9 @@
             </td>
             <td class="oc-mono oc-muted">
               {% if alive.get(e.iface) and latency.get(e.iface) %}
-              <span data-exit-ping="{{ latency.get(e.iface) }}">≈ {{ latency.get(e.iface) }} ms</span>
+              <span data-exit-ping="{{ latency.get(e.iface) }}"
+                    title="panel to exit only; measuring your device...">{{ latency.get(e.iface) }} ms</span>
+              <div class="cell-sub" data-ping-parts="{{ latency.get(e.iface) }}">exit {{ latency.get(e.iface) }} ms</div>
               {% else %}—{% endif %}
             </td>
             <td>
@@ -209,12 +211,26 @@ for (const el of document.querySelectorAll('[data-hs]')) el.textContent = rel(el
       if (!Number.isFinite(exitMs)) continue;
       el.textContent = '≈ ' + (clientMs + exitMs) + ' ms';
       el.title = 'device to panel ' + clientMs + ' ms + panel to exit ' + exitMs + ' ms';
+      const parts = el.parentElement.querySelector('[data-ping-parts]');
+      if (parts) parts.textContent = 'exit ' + exitMs + ' + device ' + clientMs + ' ms';
+    }
+  }
+
+  function unavailable() {
+    const label = document.getElementById('client-rtt');
+    if (label) label.textContent = 'unavailable';
+    for (const el of targets) {
+      el.textContent = Number(el.dataset.exitPing) + ' ms';
+      el.title = 'panel to exit only; the device round-trip could not be measured';
     }
   }
 
   function sample(left, values) {
     if (left <= 0) {
-      if (!values.length) return;
+      if (!values.length) {
+        unavailable();
+        return;
+      }
       values.sort((a, b) => a - b);
       apply(Math.round(values[Math.floor(values.length / 2)]));
       return;
