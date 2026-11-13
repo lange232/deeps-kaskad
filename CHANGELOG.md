@@ -5,15 +5,6 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
-
-### Fixed
-
-- On `/me` the exit ping no longer looks like a finished total before the
-  browser measures its own round-trip: the server value is labelled as
-  `panel to exit`, the parts are shown under the number, and a failed
-  measurement says `unavailable` instead of silently leaving half of the sum.
-
 ## [0.3.7] - 2026-11-13
 
 ### Added
@@ -35,6 +26,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   shows the number a client actually feels: the browser measures its own
   round-trip to the panel through `/ping` (median of four samples) and adds
   the panel-to-exit part; both pages refresh every 30 s.
+
+### Fixed
+
+- On `/me` the exit ping no longer looks like a finished total before the
+  browser measures its own round-trip: the server value is labelled as
+  `panel to exit`, the parts are shown under the number, and a failed
+  measurement says `unavailable` instead of silently leaving half of the sum.
 
 ## [0.3.6] - 2026-11-12
 
