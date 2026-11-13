@@ -14,7 +14,6 @@
     {% else %}<span class="oc-badge oc-badge--danger"><span class="oc-dot"></span>down</span>{% endif %}
   </div>
   <p class="oc-muted" style="margin-top:6px">{{ exit.endpoint }}</p>
-  <p class="oc-muted" style="margin-top:4px">your device to panel: <span class="oc-mono" id="client-rtt">measuring…</span></p>
 </div>
 
 {% if err %}<div class="oc-alert oc-alert--danger" style="margin-bottom:16px"><span class="oc-dot" style="margin-top:7px"></span><div class="oc-alert__body">{{ err }}</div></div>{% endif %}
@@ -30,9 +29,7 @@
       <div><div class="k">comment</div><div class="v">{{ exit.comment or '—' }}</div></div>
       <div><div class="k">priority</div><div class="v oc-num">{{ exit.priority }}</div></div>
       <div><div class="k">ping</div><div class="v">
-        {% if exit.alive and exit.rtt_ms %}
-          <span data-exit-ping="{{ exit.rtt_ms }}" title="panel to exit {{ exit.rtt_ms }} ms">{{ exit.rtt_ms }} ms</span>
-          <div class="cell-sub" data-ping-parts>exit {{ exit.rtt_ms }} ms</div>
+        {% if exit.alive and exit.rtt_ms %}{{ exit.rtt_ms }} ms
           {% if exit.rtt_ts %}<span class="cell-sub" data-hs="{{ exit.rtt_ts }}"></span>{% endif %}
         {% elif exit.mode == 'routes' %}<span class="oc-muted">n/a (handshake only)</span>
         {% else %}<span class="oc-muted">—</span>{% endif %}
@@ -145,7 +142,6 @@ function rel(ts) {
   return Math.floor(d / 86400) + 'd ago';
 }
 for (const el of document.querySelectorAll('[data-hs]')) el.textContent = rel(el.dataset.hs);
-kaskadMeasureRtt(kaskadShowTotals);
 kaskadAutoRefresh(15);
 </script>
 {% endblock %}

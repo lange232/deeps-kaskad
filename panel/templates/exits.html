@@ -19,7 +19,6 @@
 <div class="oc-panel">
   <div class="oc-panel__head">
     <span>health-check every 10 s</span>
-    <span>your device to panel: <span class="oc-mono" id="client-rtt">measuring…</span></span>
     <span style="flex:1"></span>
     <span class="oc-badge oc-badge--subtle">{{ exits | selectattr('enabled') | list | length }} of {{ exits | length }} enabled</span>
   </div>
@@ -51,10 +50,7 @@
           {% if e.last_ok %}<div class="cell-sub" data-hs="{{ e.last_ok }}"></div>{% endif %}
         </td>
         <td class="oc-mono oc-muted">
-          {% if e.alive and e.rtt_ms %}
-          <span data-exit-ping="{{ e.rtt_ms }}" title="panel to exit {{ e.rtt_ms }} ms">{{ e.rtt_ms }} ms</span>
-          <div class="cell-sub" data-ping-parts>exit {{ e.rtt_ms }} ms</div>
-          {% else %}—{% endif %}
+          {% if e.alive and e.rtt_ms %}{{ e.rtt_ms }} ms{% else %}—{% endif %}
         </td>
         <td><a class="oc-btn oc-btn--outline oc-btn--sm" href="/exits/{{ e.id }}">open</a></td>
       </tr>
@@ -79,7 +75,6 @@ function rel(ts) {
   return Math.floor(d / 86400) + 'd ago';
 }
 for (const el of document.querySelectorAll('[data-hs]')) el.textContent = rel(el.dataset.hs);
-kaskadMeasureRtt(kaskadShowTotals);
 kaskadAutoRefresh(15);
 </script>
 {% endblock %}

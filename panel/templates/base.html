@@ -157,63 +157,6 @@
     syncTheme();
   });
   syncTheme();
-
-  // Reload only when nobody is typing and the tab is visible.
-  window.kaskadAutoRefresh = function (seconds) {
-    var dirty = false;
-    document.addEventListener('input', function () { dirty = true; });
-    document.addEventListener('change', function () { dirty = true; });
-    function tick() {
-      var el = document.activeElement;
-      var typing = el && el.matches && el.matches('input, textarea, select');
-      if (!dirty && !typing && document.visibilityState === 'visible') {
-        location.reload();
-        return;
-      }
-      setTimeout(tick, seconds * 1000);
-    }
-    setTimeout(tick, seconds * 1000);
-  };
-
-  // Round-trip from this device to the panel, median of a few samples.
-  window.kaskadMeasureRtt = function (done) {
-    var values = [];
-    function sample(left) {
-      if (left <= 0) {
-        if (!values.length) { done(null); return; }
-        values.sort(function (a, b) { return a - b; });
-        done(Math.round(values[Math.floor(values.length / 2)]));
-        return;
-      }
-      var started = performance.now();
-      fetch('/ping', {cache: 'no-store'})
-        .then(function (r) { return r.text(); })
-        .then(function () { values.push(performance.now() - started); })
-        .catch(function () {})
-        .finally(function () { sample(left - 1); });
-    }
-    sample(4);
-  };
-
-  // Fills [data-exit-ping] cells with the total for this device; ms === null
-  // means the measurement failed and only the exit part must be shown.
-  window.kaskadShowTotals = function (ms) {
-    var label = document.getElementById('client-rtt');
-    if (label) label.textContent = ms === null ? 'unavailable' : ms + ' ms';
-    document.querySelectorAll('[data-exit-ping]').forEach(function (el) {
-      var exitMs = Number(el.dataset.exitPing);
-      if (!Number.isFinite(exitMs)) return;
-      if (ms === null) {
-        el.textContent = 'exit ' + exitMs + ' ms';
-        el.title = 'panel to exit only; the device round-trip could not be measured';
-        return;
-      }
-      el.textContent = '≈ ' + (ms + exitMs) + ' ms';
-      el.title = 'your device ' + ms + ' ms + exit ' + exitMs + ' ms';
-      var parts = el.parentElement.querySelector('[data-ping-parts]');
-      if (parts) parts.textContent = 'exit ' + exitMs + ' + device ' + ms + ' ms';
-    });
-  };
 </script>
 </body>
 </html>

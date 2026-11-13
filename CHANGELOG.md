@@ -32,9 +32,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   part, e.g. `≈ 50 ms` with `client 10 + exit 40 ms` underneath. When the
   client does not answer ICMP the card shows `exit N ms` and says so in the
   tooltip.
-- Admin pages (`overview`, `exits`, the exit card) show the latency this
-  device feels: the browser measures its own round-trip to the panel and adds
-  the server-to-exit part, labelled `your device N + exit M ms`.
 
 ### Fixed
 
