@@ -2218,6 +2218,48 @@ def api_logout(request: Request):
     return {"ok": True}
 
 
+@app.get("/api/me/exits")
+def api_exits(request: Request):
+    """Internet exits granted to the client, in the user's order.
+
+    An empty list means the administrator granted none: the client then rides
+    the automatic active exit and has nothing to switch.
+    """
+    _, row = api_user(request)
+    status = read_status().get("exits", {})
+    return [
+        {
+            "id": e["id"],
+            "name": e["name"],
+            "comment": e["comment"],
+            "alive": bool(status.get(e["iface"], {}).get("alive")),
+            "rtt_ms": status.get(e["iface"], {}).get("rtt_ms"),
+        }
+        for e in client_internet_exits(user_client(row))
+    ]
+
+
+@app.post("/api/me/exits/order")
+def api_exits_order(request: Request, exit_id: list[int] = Form(...)):
+    """Sets the client's exit order in one call; every granted exit must be
+    present exactly once, so a partial or foreign list is rejected."""
+    _, row = api_user(request)
+    granted = [e["id"] for e in client_internet_exits(user_client(row))]
+    if sorted(exit_id) != sorted(granted):
+        raise HTTPException(
+            status_code=400, detail="the order must list every granted exit once"
+        )
+    with db() as conn:
+        for position, eid in enumerate(exit_id):
+            conn.execute(
+                "UPDATE client_internet_exits SET priority = ? "
+                "WHERE client_id = ? AND exit_id = ?",
+                ((position + 1) * 10, row["client_id"], eid),
+            )
+    audit("user_exit_order", f"{row['email']} {' '.join(str(e) for e in exit_id)} via=api")
+    return {"ok": True}
+
+
 # ---------------------------------------------------------------- journal
 
 @app.get("/journal", response_class=HTMLResponse)

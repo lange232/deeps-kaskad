@@ -15,6 +15,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `POST /api/logout`. Bearer tokens live 30 days, are stored server-side
   like web sessions, die with a password change or "sign out everywhere",
   and share the web login's rate limits and fail2ban logging.
+- Exit switching for the mobile app: `GET /api/me/exits` lists the granted
+  internet exits in the user's order with `alive`/`rtt_ms`, and
+  `POST /api/me/exits/order` replaces the order in one call (it must list
+  every granted exit exactly once).
 
 ## [0.3.7] - 2026-11-13
 

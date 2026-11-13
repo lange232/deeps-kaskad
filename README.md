@@ -229,6 +229,11 @@ fail2ban logging as the web login (`via=api` in the journal line).
 POST /api/login            email, password -> {token, expires_at, email, client}
 GET  /api/me               Authorization: Bearer <token> -> account and client info
 GET  /api/me/conf          Authorization: Bearer <token> -> the awg0 client config
+GET  /api/me/exits         Authorization: Bearer <token> -> granted internet exits
+                             in the user's order (id, name, comment, alive, rtt_ms);
+                             an empty list means the client rides the automatic exit
+POST /api/me/exits/order   exit_id (repeated) -> sets the exit order; the list
+                             must contain every granted exit exactly once
 POST /api/logout           revokes the token
 ```
 
