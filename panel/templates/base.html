@@ -92,6 +92,25 @@
     .side a { white-space: nowrap; }
   }
 </style>
+<script>
+  // Reload only when nobody is typing and the tab is visible. Defined in the
+  // head because page scripts run before the body-end script.
+  window.kaskadAutoRefresh = function (seconds) {
+    var dirty = false;
+    document.addEventListener('input', function () { dirty = true; });
+    document.addEventListener('change', function () { dirty = true; });
+    function tick() {
+      var el = document.activeElement;
+      var typing = el && el.matches && el.matches('input, textarea, select');
+      if (!dirty && !typing && document.visibilityState === 'visible') {
+        location.reload();
+        return;
+      }
+      setTimeout(tick, seconds * 1000);
+    }
+    setTimeout(tick, seconds * 1000);
+  };
+</script>
 </head>
 <body class="oc-shell">
 <header class="oc-topbar">

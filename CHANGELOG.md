@@ -33,6 +33,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   client does not answer ICMP the card shows `exit N ms` and says so in the
   tooltip.
 
+- Admin pages (`overview`, `exits`, the exit card) show the latency this
+  device feels: a self-contained script, same as on `/me`, measures the
+  browser's round-trip to the panel and adds the server-to-exit part,
+  labelled `your device N + exit M ms`. `kaskadAutoRefresh` is defined in
+  the document head, because page scripts run before the body-end script —
+  previously the call threw `ReferenceError` and pages never refreshed.
+
 ### Fixed
 
 - On `/me` the exit ping no longer looks like a finished total before the

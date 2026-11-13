@@ -4,6 +4,7 @@
 <div class="page-head">
   <h1>Overview</h1>
   <p class="oc-muted">cascade state and recent events</p>
+  <p class="oc-muted">your device to panel: <span class="oc-mono" id="client-rtt">measuring…</span></p>
 </div>
 
 {% if err %}<div class="oc-alert oc-alert--danger" style="margin-bottom:16px"><span class="oc-dot" style="margin-top:7px"></span><div class="oc-alert__body">{{ err }}</div></div>{% endif %}
@@ -83,7 +84,10 @@
               {% else %}<span class="oc-badge oc-badge--danger"><span class="oc-dot"></span>down</span>{% endif %}
             </td>
             <td class="oc-mono oc-muted">
-              {% if e.alive and e.rtt_ms %}{{ e.rtt_ms }} ms{% else %}—{% endif %}
+              {% if e.alive and e.rtt_ms %}
+              <span data-exit-ping="{{ e.rtt_ms }}" title="panel to exit {{ e.rtt_ms }} ms">{{ e.rtt_ms }} ms</span>
+              <div class="cell-sub" data-ping-parts>exit {{ e.rtt_ms }} ms</div>
+              {% else %}—{% endif %}
             </td>
             <td><a class="oc-btn oc-btn--ghost oc-btn--sm" href="/exits/{{ e.id }}">open</a></td>
           </tr>
@@ -127,6 +131,48 @@ function rel(ts) {
   if (d < 86400) return Math.floor(d / 3600) + 'h ago';
   return Math.floor(d / 86400) + 'd ago';
 }
+// Same measurement as /me, inline on purpose: page scripts run before the
+// script at the end of base.html, so external helpers are not available yet.
+(function () {
+  const targets = document.querySelectorAll('[data-exit-ping]');
+  const label = document.getElementById('client-rtt');
+  if (!targets.length && !label) return;
+
+  function apply(clientMs) {
+    if (label) label.textContent = clientMs === null ? 'unavailable' : clientMs + ' ms';
+    for (const el of targets) {
+      const exitMs = Number(el.dataset.exitPing);
+      if (!Number.isFinite(exitMs)) continue;
+      if (clientMs === null) {
+        el.textContent = 'exit ' + exitMs + ' ms';
+        el.title = 'panel to exit only; the device round-trip could not be measured';
+        continue;
+      }
+      el.textContent = '≈ ' + (clientMs + exitMs) + ' ms';
+      el.title = 'your device ' + clientMs + ' ms + exit ' + exitMs + ' ms';
+      const parts = el.parentElement.querySelector('[data-ping-parts]');
+      if (parts) parts.textContent = 'exit ' + exitMs + ' + device ' + clientMs + ' ms';
+    }
+  }
+
+  function sample(left, values) {
+    if (left <= 0) {
+      if (!values.length) { apply(null); return; }
+      values.sort((a, b) => a - b);
+      apply(Math.round(values[Math.floor(values.length / 2)]));
+      return;
+    }
+    const started = performance.now();
+    fetch('/ping', {cache: 'no-store'})
+      .then((r) => r.text())
+      .then(() => values.push(performance.now() - started))
+      .catch(() => {})
+      .finally(() => sample(left - 1, values));
+  }
+
+  sample(4, []);
+})();
+
 kaskadAutoRefresh(15);
 </script>
 {% endblock %}
