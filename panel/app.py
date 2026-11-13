@@ -35,6 +35,7 @@ from urllib.parse import quote
 
 from fastapi import FastAPI, Form, HTTPException, Request
 from fastapi.responses import (
+    FileResponse,
     HTMLResponse,
     JSONResponse,
     PlainTextResponse,
@@ -51,6 +52,7 @@ import routing
 BASE = Path(__file__).resolve().parent
 CONFIG_PATH = Path(os.environ.get("KASKAD_CONFIG", "/etc/kaskad/panel.json"))
 DB_PATH = Path(os.environ.get("KASKAD_DB", "/var/lib/kaskad/panel.db"))
+ANDROID_APK = Path(os.environ.get("KASKAD_ANDROID_APK", "/var/lib/kaskad/app.apk"))
 COOKIE = "kaskad_session"
 SESSION_TTL = auth.SESSION_TTL
 NAME_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,31}$")
@@ -1985,7 +1987,20 @@ def me_page(request: Request, err: str | None = None, ok: str | None = None):
         csrf=csrf(token), err=err, ok=ok, cl=client_view(cl, live),
         email=row["email"], last_login=human_ts(row["last_login"]), conf=conf,
         internet_exits=granted, current_exit=current, alive=alive,
-        latency=latency,
+        latency=latency, has_app=ANDROID_APK.exists(),
+    )
+
+
+@app.get("/download/android")
+def download_android():
+    """The Android client APK, served from a file the deploy drops next to
+    the database; 404 until the administrator uploads one."""
+    if not ANDROID_APK.exists():
+        raise HTTPException(status_code=404, detail="no app uploaded yet")
+    return FileResponse(
+        ANDROID_APK,
+        media_type="application/vnd.android.package-archive",
+        filename="deepskaskad.apk",
     )
 
 

@@ -105,6 +105,9 @@
       {% if conf %}
       <div class="actions">
         <a class="oc-btn oc-btn--outline oc-btn--sm" href="/me/conf">download .conf</a>
+        {% if has_app %}
+        <a class="oc-btn oc-btn--outline oc-btn--sm" href="/download/android">android app</a>
+        {% endif %}
         <details id="qr" style="display:inline-flex">
           <summary class="oc-btn oc-btn--ghost oc-btn--sm" style="display:inline-flex">show qr</summary>
         </details>
