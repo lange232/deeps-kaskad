@@ -21,3 +21,4 @@ host_vars/*.yml
 !host_vars/example.yml
 internal/
 files/awg/*.deb
+files/app/

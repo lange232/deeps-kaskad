@@ -35,6 +35,7 @@ from urllib.parse import quote
 
 from fastapi import FastAPI, Form, HTTPException, Request
 from fastapi.responses import (
+    FileResponse,
     HTMLResponse,
     JSONResponse,
     PlainTextResponse,
@@ -51,6 +52,7 @@ import routing
 BASE = Path(__file__).resolve().parent
 CONFIG_PATH = Path(os.environ.get("KASKAD_CONFIG", "/etc/kaskad/panel.json"))
 DB_PATH = Path(os.environ.get("KASKAD_DB", "/var/lib/kaskad/panel.db"))
+ANDROID_APK = Path(os.environ.get("KASKAD_ANDROID_APK", "/var/lib/kaskad/app.apk"))
 COOKIE = "kaskad_session"
 SESSION_TTL = auth.SESSION_TTL
 NAME_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,31}$")
@@ -595,7 +597,9 @@ def _session_secret() -> str:
     return os.environ["KASKAD_SESSION_SECRET"]
 
 
-def make_session(role: str, uid: int = 0, tv: int = 0) -> str:
+def make_session(role: str, uid: int = 0, tv: int = 0, ttl: int = 0) -> str:
+    if ttl:
+        return auth.make_session(_session_secret(), role, uid, tv, ttl)
     return auth.make_session(_session_secret(), role, uid, tv)
 
 
@@ -607,9 +611,9 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
-def start_session(role: str, uid: int = 0, tv: int = 0) -> str:
+def start_session(role: str, uid: int = 0, tv: int = 0, ttl: int = 0) -> str:
     """Creates a session that can be revoked server-side on logout."""
-    token = make_session(role, uid, tv)
+    token = make_session(role, uid, tv, ttl)
     data = session_data(token)
     with db() as conn:
         conn.execute(
@@ -1983,7 +1987,20 @@ def me_page(request: Request, err: str | None = None, ok: str | None = None):
         csrf=csrf(token), err=err, ok=ok, cl=client_view(cl, live),
         email=row["email"], last_login=human_ts(row["last_login"]), conf=conf,
         internet_exits=granted, current_exit=current, alive=alive,
-        latency=latency,
+        latency=latency, has_app=ANDROID_APK.exists(),
+    )
+
+
+@app.get("/download/android")
+def download_android():
+    """The Android client APK, served from a file the deploy drops next to
+    the database; 404 until the administrator uploads one."""
+    if not ANDROID_APK.exists():
+        raise HTTPException(status_code=404, detail="no app uploaded yet")
+    return FileResponse(
+        ANDROID_APK,
+        media_type="application/vnd.android.package-archive",
+        filename="deepskaskad.apk",
     )
 
 
@@ -2107,6 +2124,155 @@ def me_reissue(request: Request, csrf_token: str = Form(...)):
     apply_routing()
     audit("user_key_reissued", row["email"])
     return RedirectResponse("/me?ok=key+reissued", status_code=303)
+
+
+# ------------------------------------------------------------- mobile API
+#
+# Bearer-token API for the mobile app (a WireGuard Android fork). The app
+# signs in with the same email/password as the /me page, gets a long-lived
+# token, and downloads its awg0 client config with it. Admin accounts are
+# not accepted here: the app only ever needs a client config.
+
+API_SESSION_TTL = 30 * 86400
+
+
+def api_user(request: Request):
+    """Bearer auth for the app: the user row or a JSON 401, never a redirect."""
+    header = request.headers.get("authorization", "")
+    token = header[7:].strip() if header.lower().startswith("bearer ") else ""
+    data = session_data(token)
+    if not data or data["role"] != "user" or not session_alive(data):
+        raise HTTPException(status_code=401, detail="sign in again")
+    row = user_row(int(data.get("uid", 0)))
+    if (
+        not row
+        or not row["account_enabled"]
+        or not row["client_enabled"]
+        or row["token_version"] != data.get("tv")
+    ):
+        raise HTTPException(status_code=401, detail="account disabled")
+    return token, row
+
+
+@app.post("/api/login")
+def api_login(request: Request, email: str = Form(""), password: str = Form(...)):
+    ip = request.client.host if request.client else "?"
+    ip_key = rate_key(ip)
+    email = normalize_email(email)
+    if rate_limited(ip_key, email):
+        raise HTTPException(status_code=429, detail="too many attempts, wait 5 minutes")
+
+    row = None
+    if email and email != ADMIN_LOGIN:
+        with db() as conn:
+            row = conn.execute(
+                "SELECT u.*, c.name AS client_name, c.enabled AS client_enabled "
+                "FROM users u "
+                "JOIN clients c ON c.id = u.client_id WHERE u.email = ?",
+                (email,),
+            ).fetchone()
+    ok = bool(
+        row
+        and check_password(password, row["password_hash"])
+        and row["enabled"]
+        and row["client_enabled"]
+    )
+    if not row:
+        _burn_hash(password)
+    if not ok:
+        delay = login_delay(email)
+        if delay:
+            time.sleep(delay)
+        note_failure(ip_key, email)
+        safe_email = re.sub(r"[\x00-\x1f\x7f]", "", email)[:254] or "-"
+        print(f"KASKAD_AUTH_FAIL ip={ip} email={safe_email} via=api", flush=True)
+        audit("api_login_failed", f"{ip} {safe_email}")
+        raise HTTPException(status_code=401, detail="wrong email or password")
+
+    uid, tv = int(row["id"]), int(row["token_version"])
+    token = start_session("user", uid, tv, ttl=API_SESSION_TTL)
+    with db() as conn:
+        conn.execute("UPDATE users SET last_login = ? WHERE id = ?", (_now_iso(), uid))
+    clear_failures(ip_key, email)
+    prune_sessions()
+    audit("api_login", f"{email} {ip}")
+    return {
+        "token": token,
+        "expires_at": session_data(token)["exp"],
+        "email": email,
+        "client": {"id": int(row["client_id"]), "name": row["client_name"]},
+    }
+
+
+@app.get("/api/me")
+def api_me(request: Request):
+    _, row = api_user(request)
+    return {
+        "email": row["email"],
+        "client": {
+            "id": row["client_id"],
+            "name": row["client_name"],
+            "ip": row["client_ip"],
+            "internet": bool(row["internet"]),
+        },
+    }
+
+
+@app.get("/api/me/conf")
+def api_conf(request: Request):
+    """The awg0 client config, ready to import into a WireGuard client."""
+    _, row = api_user(request)
+    return conf_response(user_client(row))
+
+
+@app.post("/api/logout")
+def api_logout(request: Request):
+    header = request.headers.get("authorization", "")
+    token = header[7:].strip() if header.lower().startswith("bearer ") else ""
+    revoke_session(token)
+    return {"ok": True}
+
+
+@app.get("/api/me/exits")
+def api_exits(request: Request):
+    """Internet exits granted to the client, in the user's order.
+
+    An empty list means the administrator granted none: the client then rides
+    the automatic active exit and has nothing to switch.
+    """
+    _, row = api_user(request)
+    status = read_status().get("exits", {})
+    return [
+        {
+            "id": e["id"],
+            "name": e["name"],
+            "comment": e["comment"],
+            "alive": bool(status.get(e["iface"], {}).get("alive")),
+            "rtt_ms": status.get(e["iface"], {}).get("rtt_ms"),
+        }
+        for e in client_internet_exits(user_client(row))
+    ]
+
+
+@app.post("/api/me/exits/order")
+def api_exits_order(request: Request, exit_id: list[int] = Form(...)):
+    """Sets the client's exit order in one call; every granted exit must be
+    present exactly once, so a partial or foreign list is rejected."""
+    _, row = api_user(request)
+    granted = [e["id"] for e in client_internet_exits(user_client(row))]
+    if sorted(exit_id) != sorted(granted):
+        raise HTTPException(
+            status_code=400, detail="the order must list every granted exit once"
+        )
+    with db() as conn:
+        for position, eid in enumerate(exit_id):
+            conn.execute(
+                "UPDATE client_internet_exits SET priority = ? "
+                "WHERE client_id = ? AND exit_id = ?",
+                ((position + 1) * 10, row["client_id"], eid),
+            )
+    audit("user_exit_order", f"{row['email']} {' '.join(str(e) for e in exit_id)} via=api")
+    return {"ok": True}
 
 
 # ---------------------------------------------------------------- journal

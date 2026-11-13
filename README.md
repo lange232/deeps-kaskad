@@ -218,6 +218,37 @@ active exit selected by the failover daemon.
 Access mode is controlled by `kaskad_panel_expose`: `lan` keeps the port open,
 `clients` exposes it only through the tunnel at `https://10.80.0.1:8080`.
 
+### Mobile API
+
+A small bearer-token API for the mobile app (a WireGuard Android fork). It
+uses the same client accounts as `/me`; the administrator login is not
+accepted. Form-encoded requests, JSON responses, the same sign-in limits and
+fail2ban logging as the web login (`via=api` in the journal line).
+
+```
+POST /api/login            email, password -> {token, expires_at, email, client}
+GET  /api/me               Authorization: Bearer <token> -> account and client info
+GET  /api/me/conf          Authorization: Bearer <token> -> the awg0 client config
+GET  /api/me/exits         Authorization: Bearer <token> -> granted internet exits
+                             in the user's order (id, name, comment, alive, rtt_ms);
+                             an empty list means the client rides the automatic exit
+POST /api/me/exits/order   exit_id (repeated) -> sets the exit order; the list
+                             must contain every granted exit exactly once
+POST /api/logout           revokes the token
+```
+
+API tokens live 30 days, are stored server-side like web sessions, and die
+with a password change or "sign out everywhere".
+
+### Android client
+
+The panel can distribute the companion Android app (the
+[deeps-kaskad-client](https://github.com/lange232/deeps-kaskad-client) fork
+of WG Tunnel): drop the APK into `files/app/app.apk` and run
+`--tags panel`; the file lands in `/var/lib/kaskad/app.apk` and is served at
+`/download/android` without authentication. The client's `/me` page shows an
+"android app" button once the file is uploaded. `files/app/` is gitignored.
+
 ## Fail2ban
 
 `fail2ban` is installed by the panel role. A rejected sign-in writes

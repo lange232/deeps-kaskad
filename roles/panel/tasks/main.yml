@@ -315,3 +315,18 @@
     - not ansible_check_mode
     - kaskad_backup_dir_stat.stat.exists
     - (kaskad_backup_files.matched | default(0)) == 0
+
+- name: Android APK present in the repo?
+  ansible.builtin.stat:
+    path: "{{ playbook_dir }}/../files/app/app.apk"
+  delegate_to: localhost
+  become: false
+  run_once: true
+  register: kaskad_app_apk_stat
+
+- name: Android client APK (optional, from files/app/app.apk)
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../files/app/app.apk"
+    dest: /var/lib/kaskad/app.apk
+    mode: "0644"
+  when: kaskad_app_apk_stat.stat.exists
