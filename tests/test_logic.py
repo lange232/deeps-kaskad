@@ -383,14 +383,48 @@ class ProbeTests(unittest.TestCase):
                 failover.write_status("awg1", [{
                     "iface": "awg1", "name": "e", "enabled": 1,
                     "priority": 10, "mode": "internet",
-                }])
+                }], client_ping={"10.80.0.2": 7})
                 payload = json.loads(failover.STATUS_FILE.read_text())
                 self.assertEqual(payload["exits"]["awg1"]["rtt_ms"], 9)
                 self.assertGreater(payload["exits"]["awg1"]["rtt_ts"], 0)
+                self.assertEqual(payload["client_ping"], {"10.80.0.2": 7})
             finally:
                 failover.STATUS_FILE = old_file
                 failover.state.clear()
                 failover.state.update(old_state)
+
+
+class ClientPingTests(unittest.TestCase):
+    def test_client_probe_returns_the_latency(self):
+        answered = subprocess.CompletedProcess([], 0, "time=8.4 ms", "")
+        with mock.patch.object(failover, "iface_exists", return_value=True), \
+             mock.patch.object(failover, "run", return_value=answered):
+            self.assertEqual(failover.probe_client("10.80.0.2"), 8.4)
+
+    def test_failed_client_probe_is_none(self):
+        failed = subprocess.CompletedProcess([], 1, "", "timeout")
+        with mock.patch.object(failover, "iface_exists", return_value=True), \
+             mock.patch.object(failover, "run", return_value=failed):
+            self.assertIsNone(failover.probe_client("10.80.0.2"))
+
+    def test_client_probe_timeout_is_none(self):
+        with mock.patch.object(failover, "iface_exists", return_value=True), \
+             mock.patch.object(failover, "run",
+                               side_effect=subprocess.TimeoutExpired("ping", 3)):
+            self.assertIsNone(failover.probe_client("10.80.0.2"))
+
+    def test_client_pings_are_rounded(self):
+        rows = [{"ip": "10.80.0.2"}, {"ip": "10.80.0.3"}]
+        values = {"10.80.0.2": 8.4, "10.80.0.3": None}
+        with mock.patch.object(failover, "client_rows", return_value=rows), \
+             mock.patch.object(failover, "probe_client",
+                               side_effect=lambda ip: values[ip]):
+            self.assertEqual(failover.client_pings(),
+                             {"10.80.0.2": 8, "10.80.0.3": None})
+
+    def test_no_clients_means_no_pings(self):
+        with mock.patch.object(failover, "client_rows", return_value=[]):
+            self.assertEqual(failover.client_pings(), {})
 
 
 class ActiveMarkerTests(unittest.TestCase):

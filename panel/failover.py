@@ -26,6 +26,7 @@ import sqlite3
 import subprocess
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -266,6 +267,43 @@ def probe(exit: dict) -> tuple[bool, float | None]:
     return True, ping_rtt(res.stdout)
 
 
+def client_rows() -> list[dict]:
+    conn = sqlite3.connect(DB_PATH, timeout=5)
+    conn.row_factory = sqlite3.Row
+    try:
+        return [
+            dict(r)
+            for r in conn.execute("SELECT ip FROM clients WHERE enabled = 1")
+        ]
+    finally:
+        conn.close()
+
+
+def probe_client(ip: str) -> float | None:
+    """Round-trip from S1 to a client through awg0; None when it does not answer."""
+    if not iface_exists("awg0"):
+        return None
+    try:
+        res = run(["ping", "-c1", "-W1", "-I", "awg0", ip], timeout=3)
+    except subprocess.TimeoutExpired:
+        return None
+    if res.returncode != 0:
+        return None
+    return ping_rtt(res.stdout)
+
+
+def client_pings() -> dict[str, float | None]:
+    ips = [row["ip"] for row in client_rows()]
+    if not ips:
+        return {}
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        values = list(pool.map(probe_client, ips))
+    return {
+        ip: (round(rtt) if rtt is not None else None)
+        for ip, rtt in zip(ips, values)
+    }
+
+
 def read_active() -> str | None:
     try:
         value = ACTIVE_FILE.read_text().strip()
@@ -325,12 +363,14 @@ def update_state(exit: dict, ok: bool, rtt: float | None = None) -> None:
             st["alive_since"] = 0
 
 
-def write_status(active, rows: list[dict], manual: str = "", clients=None) -> None:
+def write_status(active, rows: list[dict], manual: str = "", clients=None,
+                 client_ping=None) -> None:
     payload = {
         "ts": int(time.time()),
         "active": active,
         "manual": manual,
         "clients": clients or {},
+        "client_ping": client_ping or {},
         "exits": {
             e["iface"]: {
                 "name": e["name"],
@@ -424,7 +464,8 @@ def tick(c: dict) -> None:
         choices.setdefault(key, []).append(grant["iface"])
     client_routes = apply_client_routes(choices, alive)
 
-    write_status(read_active(), rows, manual, client_routes)
+    pings = client_pings()
+    write_status(read_active(), rows, manual, client_routes, client_ping=pings)
 
 
 def main() -> None:
