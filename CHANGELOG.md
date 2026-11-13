@@ -26,6 +26,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   shows the number a client actually feels: the browser measures its own
   round-trip to the panel through `/ping` (median of four samples) and adds
   the panel-to-exit part; both pages refresh every 30 s.
+- The administrator's client card shows the total latency for that client:
+  the failover daemon pings every enabled client through `awg0` every 10 s
+  (`client_ping` in `/run/kaskad/status.json`) and the card adds the exit
+  part, e.g. `≈ 50 ms` with `client 10 + exit 40 ms` underneath. When the
+  client does not answer ICMP the card shows `exit N ms` and says so in the
+  tooltip.
 
 ### Fixed
 

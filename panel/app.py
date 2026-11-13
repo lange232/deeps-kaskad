@@ -1558,6 +1558,7 @@ def client_page(
     live = iface_dump(c["iface"])["peers"]
     view = client_view(cl, live, list(assigned.values()))
     status = read_status()
+    client_rtt = (status.get("client_ping") or {}).get(cl["ip"])
     latency = {
         iface: info.get("rtt_ms")
         for iface, info in (status.get("exits") or {}).items()
@@ -1571,7 +1572,7 @@ def client_page(
         csrf=csrf(token), err=err, ok=ok, cl=view, raw=cl,
         routed=routed, assigned=set(assigned.keys()), conf=conf,
         internet_exits=internet_exits_rows(), granted=granted,
-        latency=latency,
+        latency=latency, client_rtt=client_rtt,
         account=client_account(cid), newpw=pop_secret(newpw),
     )
 

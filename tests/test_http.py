@@ -541,6 +541,33 @@ class ClientTests(PanelTestCase):
         self.assertEqual(self.client_count(), 1)
 
 
+class ClientPingTests(PanelTestCase):
+    def card(self, status):
+        cid = self.seed_client()
+        self.seed_exit("e1", "awg1")
+        self.login_admin()
+        with mock.patch.object(app, "read_status", return_value=status):
+            response = self.client.get(f"/clients/{cid}")
+        self.assertEqual(response.status_code, 200)
+        return response.text
+
+    def test_card_shows_the_total_latency(self):
+        text = self.card({
+            "exits": {"awg1": {"alive": True, "rtt_ms": 40}},
+            "client_ping": {"10.80.0.2": 10},
+        })
+        self.assertIn("≈ 50 ms", text)
+        self.assertIn("client 10 + exit 40 ms", text)
+
+    def test_card_falls_back_to_the_exit_latency(self):
+        text = self.card({
+            "exits": {"awg1": {"alive": True, "rtt_ms": 40}},
+            "client_ping": {},
+        })
+        self.assertIn("exit 40 ms", text)
+        self.assertIn("S1 to exit only", text)
+
+
 class GrantTests(PanelTestCase):
     def test_grants_are_saved_in_order(self):
         cid = self.seed_client()
