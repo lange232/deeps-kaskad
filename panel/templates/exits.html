@@ -24,7 +24,7 @@
   </div>
   <table class="oc-table">
     <thead>
-      <tr><th>name</th><th>mode</th><th>interface</th><th>address</th><th>state</th><th></th></tr>
+      <tr><th>name</th><th>mode</th><th>interface</th><th>address</th><th>state</th><th>ping</th><th></th></tr>
     </thead>
     <tbody>
     {% for e in exits %}
@@ -47,6 +47,9 @@
           {% elif e.alive is none %}<span class="oc-badge">no data</span>
           {% else %}<span class="oc-badge oc-badge--danger"><span class="oc-dot"></span>down</span>{% endif %}
           {% if e.last_ok %}<div class="cell-sub" data-hs="{{ e.last_ok }}"></div>{% endif %}
+        </td>
+        <td class="oc-mono oc-muted">
+          {% if e.alive and e.rtt_ms %}{{ e.rtt_ms }} ms{% else %}—{% endif %}
         </td>
         <td><a class="oc-btn oc-btn--outline oc-btn--sm" href="/exits/{{ e.id }}">open</a></td>
       </tr>

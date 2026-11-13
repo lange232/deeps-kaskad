@@ -108,6 +108,10 @@ the `manual_exit` setting and stays pinned while that exit is alive; "return
 to auto" clears it. State lives in `/run/kaskad/status.json` and
 `/run/kaskad/active-exit`.
 
+Wrong or slow exit: the latency column is the ping the failover probe makes
+from the server to each exit; `/me` adds the client's own round-trip to the
+panel, measured in the browser, so the number there is what the client feels.
+
 Routed exits are not part of the selection: a subnet has a single owner.
 
 The daemon also watches the set of `awg*` interfaces. Tunnels can come up

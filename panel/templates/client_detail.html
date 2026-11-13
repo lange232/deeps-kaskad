@@ -83,6 +83,7 @@
             <span class="oc-check__box"></span>
             {{ e.name }}
             <span class="oc-mono oc-muted" style="margin-left:8px">{{ e.iface }}</span>
+            {% if latency.get(e.iface) %}<span class="oc-mono oc-muted" style="margin-left:6px">{{ latency.get(e.iface) }} ms</span>{% endif %}
           </label>
           {% endfor %}
         </div>
@@ -241,6 +242,6 @@ function rel(ts) {
   return Math.floor(d / 86400) + 'd ago';
 }
 for (const el of document.querySelectorAll('[data-hs]')) el.textContent = rel(el.dataset.hs);
-kaskadAutoRefresh(15);
+kaskadAutoRefresh(30);
 </script>
 {% endblock %}

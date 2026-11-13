@@ -301,6 +301,12 @@ class SessionTests(PanelTestCase):
         self.assertEqual(response.status_code, 200)
         self.assertTrue(response.json()["ok"])
 
+    def test_ping_is_a_tiny_public_target(self):
+        response = self.client.get("/ping")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.text, "pong")
+        self.assertEqual(response.headers["cache-control"], "no-store")
+
     def test_healthz_reports_a_stale_failover(self):
         old = {"ts": int(time.time()) - 600}
         with mock.patch.object(app, "read_status", return_value=old):

@@ -5,6 +5,17 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- Exit latency: the failover probe records the ping round-trip to every
+  internet exit (`rtt_ms`, refreshed every 10 s). It is shown in the overview,
+  the exit list, the exit card and on the administrator's client card. `/me`
+  shows the number a client actually feels: the browser measures its own
+  round-trip to the panel through `/ping` (median of four samples) and adds
+  the panel-to-exit part; both pages refresh every 30 s.
+
 ## [0.3.6] - 2026-11-12
 
 ### Added

@@ -27,8 +27,13 @@
       </div></div>
       <div><div class="k">interface</div><div class="v oc-mono">{{ exit.iface }}</div></div>
       <div><div class="k">comment</div><div class="v">{{ exit.comment or '—' }}</div></div>
-      <div><div class="k">comment</div><div class="v">{{ exit.comment or '—' }}</div></div>
       <div><div class="k">priority</div><div class="v oc-num">{{ exit.priority }}</div></div>
+      <div><div class="k">ping</div><div class="v">
+        {% if exit.alive and exit.rtt_ms %}{{ exit.rtt_ms }} ms
+          {% if exit.rtt_ts %}<span class="cell-sub" data-hs="{{ exit.rtt_ts }}"></span>{% endif %}
+        {% elif exit.mode == 'routes' %}<span class="oc-muted">n/a (handshake only)</span>
+        {% else %}<span class="oc-muted">—</span>{% endif %}
+      </div></div>
       <div><div class="k">endpoint</div><div class="v oc-mono">{{ exit.endpoint }}</div></div>
       {% if exit.mode == 'routes' %}
       <div><div class="k">subnets</div><div class="v oc-mono">{{ exit.routes }}</div></div>

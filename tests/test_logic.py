@@ -2,9 +2,11 @@
 
 Run with: python3 -m unittest discover -s tests
 """
+import json
 import sqlite3
 import subprocess
 import sys
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -317,6 +319,77 @@ class SyncRoutingTests(unittest.TestCase):
         apply.assert_called_once()
         self.assertFalse(failover.routing_pending)
         self.assertEqual(failover.routing_backoff, 10)
+
+
+class ProbeTests(unittest.TestCase):
+    def test_ping_rtt_is_parsed(self):
+        line = "64 bytes from 1.1.1.1: icmp_seq=1 ttl=57 time=12.3 ms"
+        self.assertEqual(failover.ping_rtt(line), 12.3)
+        self.assertIsNone(failover.ping_rtt("Request timeout for icmp_seq 0"))
+        self.assertIsNone(failover.ping_rtt(""))
+
+    def test_internet_probe_returns_the_latency(self):
+        answered = subprocess.CompletedProcess([], 0, "time=7.9 ms", "")
+        with mock.patch.object(failover, "iface_exists", return_value=True), \
+             mock.patch.object(failover, "run", return_value=answered):
+            self.assertEqual(failover.probe({"iface": "awg1", "mode": "internet"}),
+                             (True, 7.9))
+
+    def test_failed_probe_has_no_latency(self):
+        failed = subprocess.CompletedProcess([], 1, "", "timeout")
+        with mock.patch.object(failover, "iface_exists", return_value=True), \
+             mock.patch.object(failover, "run", return_value=failed):
+            self.assertEqual(failover.probe({"iface": "awg1", "mode": "internet"}),
+                             (False, None))
+
+    def test_routed_probe_has_no_icmp_latency(self):
+        handshake = subprocess.CompletedProcess(
+            [], 0, f"peerkey {int(time.time())}\n", "")
+        with mock.patch.object(failover, "iface_exists", return_value=True), \
+             mock.patch.object(failover, "run", return_value=handshake):
+            self.assertEqual(failover.probe({"iface": "awg2", "mode": "routes"}),
+                             (True, None))
+
+    def test_missing_interface_has_no_latency(self):
+        with mock.patch.object(failover, "iface_exists", return_value=False):
+            self.assertEqual(failover.probe({"iface": "awg9", "mode": "internet"}),
+                             (False, None))
+
+    def test_state_keeps_the_last_latency(self):
+        old = failover.state.copy()
+        try:
+            failover.state.clear()
+            failover.update_state({"iface": "awg1"}, True, 12.6)
+            failover.update_state({"iface": "awg1"}, True, 11.4)
+            st = failover.state["awg1"]
+            self.assertEqual(st["rtt_ms"], 11)
+            self.assertTrue(st["alive"])
+            self.assertGreater(st["rtt_ts"], 0)
+        finally:
+            failover.state.clear()
+            failover.state.update(old)
+
+    def test_status_carries_the_latency(self):
+        import tempfile
+        old_file = failover.STATUS_FILE
+        old_state = failover.state.copy()
+        with tempfile.TemporaryDirectory() as tmp:
+            failover.STATUS_FILE = Path(tmp) / "status.json"
+            try:
+                failover.state.clear()
+                failover.update_state({"iface": "awg1"}, True, 9.6)
+                failover.update_state({"iface": "awg1"}, True, 9.4)
+                failover.write_status("awg1", [{
+                    "iface": "awg1", "name": "e", "enabled": 1,
+                    "priority": 10, "mode": "internet",
+                }])
+                payload = json.loads(failover.STATUS_FILE.read_text())
+                self.assertEqual(payload["exits"]["awg1"]["rtt_ms"], 9)
+                self.assertGreater(payload["exits"]["awg1"]["rtt_ts"], 0)
+            finally:
+                failover.STATUS_FILE = old_file
+                failover.state.clear()
+                failover.state.update(old_state)
 
 
 class ActiveMarkerTests(unittest.TestCase):

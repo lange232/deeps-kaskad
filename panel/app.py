@@ -1012,6 +1012,8 @@ def exit_view(e, status: dict, active, manual: str = "") -> dict:
         "endpoint": awgconf.endpoint(e["conf"]),
         "alive": st.get("alive"),
         "last_ok": st.get("last_ok", 0),
+        "rtt_ms": st.get("rtt_ms"),
+        "rtt_ts": st.get("rtt_ts", 0),
         "active": e["iface"] == active,
         "pinned": bool(manual) and e["iface"] == manual,
     }
@@ -1134,6 +1136,14 @@ def logout(request: Request):
     response = RedirectResponse("/login", status_code=303)
     response.delete_cookie(COOKIE)
     return response
+
+
+@app.get("/ping")
+def ping():
+    """Tiny target for the browser to measure its round-trip to the panel."""
+    return PlainTextResponse(
+        "pong", headers={"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"}
+    )
 
 
 @app.get("/healthz")
@@ -1503,6 +1513,11 @@ def client_page(
     granted = {e["id"] for e in client_internet_exits(cl)}
     live = iface_dump(c["iface"])["peers"]
     view = client_view(cl, live, list(assigned.values()))
+    status = read_status()
+    latency = {
+        iface: info.get("rtt_ms")
+        for iface, info in (status.get("exits") or {}).items()
+    }
     try:
         conf = mask_conf(client_conf(c, cl))
     except ValueError:
@@ -1512,6 +1527,7 @@ def client_page(
         csrf=csrf(token), err=err, ok=ok, cl=view, raw=cl,
         routed=routed, assigned=set(assigned.keys()), conf=conf,
         internet_exits=internet_exits_rows(), granted=granted,
+        latency=latency,
         account=client_account(cid), newpw=pop_secret(newpw),
     )
 
@@ -1913,11 +1929,16 @@ def me_page(request: Request, err: str | None = None, ok: str | None = None):
         iface: bool(info.get("alive"))
         for iface, info in (status.get("exits") or {}).items()
     }
+    latency = {
+        iface: info.get("rtt_ms")
+        for iface, info in (status.get("exits") or {}).items()
+    }
     return render_page(
         request, "me.html", "me", role="user",
         csrf=csrf(token), err=err, ok=ok, cl=client_view(cl, live),
         email=row["email"], last_login=human_ts(row["last_login"]), conf=conf,
         internet_exits=granted, current_exit=current, alive=alive,
+        latency=latency,
     )
 
 
