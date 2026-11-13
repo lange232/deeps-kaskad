@@ -240,6 +240,15 @@ POST /api/logout           revokes the token
 API tokens live 30 days, are stored server-side like web sessions, and die
 with a password change or "sign out everywhere".
 
+### Android client
+
+The panel can distribute the companion Android app (the
+[deeps-kaskad-client](https://github.com/lange232/deeps-kaskad-client) fork
+of WG Tunnel): drop the APK into `files/app/app.apk` and run
+`--tags panel`; the file lands in `/var/lib/kaskad/app.apk` and is served at
+`/download/android` without authentication. The client's `/me` page shows an
+"android app" button once the file is uploaded. `files/app/` is gitignored.
+
 ## Fail2ban
 
 `fail2ban` is installed by the panel role. A rejected sign-in writes
