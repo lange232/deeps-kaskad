@@ -31,9 +31,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`client_ping` in `/run/kaskad/status.json`) and the card adds the exit
   part, e.g. `≈ 50 ms` with `client 10 + exit 40 ms` underneath. When the
   client does not answer ICMP the card shows `exit N ms` and says so in the
-  tooltip. A phone that misses one ICMP probe keeps its last successful
-  value for 30 seconds, so the card does not flip between the total and the
-  exit-only number.
+  tooltip.
 
 ### Fixed
 
