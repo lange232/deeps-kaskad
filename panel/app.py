@@ -1424,11 +1424,17 @@ def update_exit_nat(
                 f"/exits/{eid}?err={quote('internet exits always use NAT')}",
                 status_code=303,
             )
-        conn.execute(
-            "UPDATE exits SET nat = ? WHERE id = ?", (1 if nat else 0, eid)
-        )
-    audit("exit_nat", f"{row['name']} nat={1 if nat else 0}")
+        wanted = 1 if nat else 0
+        changed = int(row["nat"]) != wanted
+        conn.execute("UPDATE exits SET nat = ? WHERE id = ?", (wanted, eid))
+    audit("exit_nat", f"{row['name']} nat={wanted}")
     apply_routing()
+    if changed:
+        # Existing flows keep the old mapping until their conntrack entry
+        # expires; drop them only once the new rules are in place.
+        res = run(["conntrack", "-D", "-s", cfg()["clients_net"]], timeout=5)
+        if res.returncode != 0 and "0 flow entries" not in res.stderr.lower():
+            print(f"conntrack: {res.stderr.strip()}", flush=True)
     return RedirectResponse(f"/exits/{eid}?ok=nat+updated", status_code=303)
 
 

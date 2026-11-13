@@ -387,6 +387,8 @@ class NatHttpTests(PanelTestCase):
         with app.db() as conn:
             self.assertEqual(conn.execute(
                 "SELECT nat FROM exits WHERE id = ?", (exit_id,)).fetchone()[0], 0)
+        calls = [" ".join(call.args[0]) for call in app.run.call_args_list]
+        self.assertTrue(any("conntrack -D -s" in call for call in calls))
         response = self.client.post(f"/exits/{exit_id}/nat",
                                     data={"nat": "on", "csrf_token": csrf})
         self.assertEqual(response.status_code, 303)
