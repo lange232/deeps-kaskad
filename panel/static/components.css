@@ -341,7 +341,7 @@
   height: var(--ui-control-lg);
 }
 
-/* Input with an action button inside, e.g. copy a generated password. */
+/* Input with action buttons inside, e.g. show and copy a password. */
 .oc-input-affix {
   position: relative;
   display: flex;
@@ -349,14 +349,17 @@
 }
 
 .oc-input-affix .oc-input {
-  padding-right: 34px;
+  padding-right: 64px;
 }
 
-.oc-input-affix .oc-icon-btn {
+.oc-input-affix__actions {
   position: absolute;
   right: 4px;
   top: 50%;
   transform: translateY(-50%);
+  display: flex;
+  align-items: center;
+  gap: 2px;
 }
 
 .oc-textarea {
