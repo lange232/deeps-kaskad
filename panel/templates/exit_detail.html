@@ -34,6 +34,24 @@
         {% elif exit.mode == 'routes' %}<span class="oc-muted">n/a (handshake only)</span>
         {% else %}<span class="oc-muted">—</span>{% endif %}
       </div></div>
+      <div><div class="k">NAT</div><div class="v">
+        {% if exit.mode == 'internet' %}
+          on <span class="oc-muted">(required for internet exits)</span>
+        {% else %}
+          <form method="post" action="/exits/{{ exit.id }}/nat" style="margin:0">
+            <input type="hidden" name="csrf_token" value="{{ csrf }}">
+            <label class="oc-check">
+              <input type="checkbox" name="nat" value="on"
+                     {% if exit.nat %}checked{% endif %} onchange="this.form.submit()">
+              <span class="oc-check__box"></span>
+              masquerade client addresses
+            </label>
+          </form>
+          <div class="cell-sub" style="margin-top:4px">
+            off only when the far side routes {{ clients_net }} back here
+          </div>
+        {% endif %}
+      </div></div>
       <div><div class="k">endpoint</div><div class="v oc-mono">{{ exit.endpoint }}</div></div>
       {% if exit.mode == 'routes' %}
       <div><div class="k">subnets</div><div class="v oc-mono">{{ exit.routes }}</div></div>

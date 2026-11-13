@@ -375,6 +375,37 @@ class RollbackMessageTests(PanelTestCase):
                                            data={"csrf_token": csrf}))
 
 
+class NatHttpTests(PanelTestCase):
+    def test_routed_exit_nat_can_be_switched_off(self):
+        exit_id = self.seed_exit("sub", "awg2", mode="routes", routes="10.9.0.0/24")
+        self.login_admin()
+        csrf = self.csrf(f"/exits/{exit_id}")
+        response = self.client.post(f"/exits/{exit_id}/nat",
+                                    data={"csrf_token": csrf})
+        self.assertEqual(response.status_code, 303)
+        with app.db() as conn:
+            self.assertEqual(conn.execute(
+                "SELECT nat FROM exits WHERE id = ?", (exit_id,)).fetchone()[0], 0)
+        response = self.client.post(f"/exits/{exit_id}/nat",
+                                    data={"nat": "on", "csrf_token": csrf})
+        self.assertEqual(response.status_code, 303)
+        with app.db() as conn:
+            self.assertEqual(conn.execute(
+                "SELECT nat FROM exits WHERE id = ?", (exit_id,)).fetchone()[0], 1)
+
+    def test_internet_exit_nat_cannot_be_switched_off(self):
+        exit_id = self.seed_exit("net", "awg1", mode="internet")
+        self.login_admin()
+        csrf = self.csrf(f"/exits/{exit_id}")
+        response = self.client.post(f"/exits/{exit_id}/nat",
+                                    data={"csrf_token": csrf})
+        self.assertEqual(response.status_code, 303)
+        self.assertIn("err=", response.headers["location"])
+        with app.db() as conn:
+            self.assertEqual(conn.execute(
+                "SELECT nat FROM exits WHERE id = ?", (exit_id,)).fetchone()[0], 1)
+
+
 class ClientTests(PanelTestCase):
     def test_create_client_with_account(self):
         self.login_admin()

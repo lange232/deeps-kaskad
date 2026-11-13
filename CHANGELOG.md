@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- NAT is configured per exit. Internet exits always masquerade; a routed
+  exit can opt out when the far side has a route back to the client network.
+  The rules live in the `KASKAD-NAT` chain, rebuilt by the panel on every
+  apply, one rule per exit; the legacy catch-all `-o awg+` rule is removed.
+  `check.yml` compares the chain with the database.
 - Exit latency: the failover probe records the ping round-trip to every
   internet exit (`rtt_ms`, refreshed every 10 s). It is shown in the overview,
   the exit list, the exit card and on the administrator's client card. `/me`

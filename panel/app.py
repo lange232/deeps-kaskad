@@ -130,7 +130,8 @@ def init_db() -> None:
                 routes TEXT NOT NULL DEFAULT '',
                 dns TEXT NOT NULL DEFAULT '',
                 comment TEXT NOT NULL DEFAULT '',
-                table_num INTEGER NOT NULL DEFAULT 0
+                table_num INTEGER NOT NULL DEFAULT 0,
+                nat INTEGER NOT NULL DEFAULT 1
             );
             CREATE TABLE IF NOT EXISTS audit (
                 id INTEGER PRIMARY KEY,
@@ -175,6 +176,7 @@ def migrate(conn: sqlite3.Connection) -> None:
         ("dns", "ALTER TABLE exits ADD COLUMN dns TEXT NOT NULL DEFAULT ''"),
         ("comment", "ALTER TABLE exits ADD COLUMN comment TEXT NOT NULL DEFAULT ''"),
         ("table_num", "ALTER TABLE exits ADD COLUMN table_num INTEGER NOT NULL DEFAULT 0"),
+        ("nat", "ALTER TABLE exits ADD COLUMN nat INTEGER NOT NULL DEFAULT 1"),
     ):
         if name not in cols:
             conn.execute(ddl)
@@ -1009,6 +1011,7 @@ def exit_view(e, status: dict, active, manual: str = "") -> dict:
         "routes": e["routes"],
         "dns": e["dns"],
         "comment": e["comment"],
+        "nat": bool(e["nat"]) if "nat" in e.keys() else True,
         "endpoint": awgconf.endpoint(e["conf"]),
         "alive": st.get("alive"),
         "last_ok": st.get("last_ok", 0),
@@ -1231,6 +1234,7 @@ def exit_new_page(request: Request, err: str | None = None):
     return render_page(
         request, "exit_new.html", "exits",
         csrf=csrf(token), err=err, form=EXIT_DEFAULTS,
+        clients_net=cfg()["clients_net"],
     )
 
 
@@ -1256,6 +1260,7 @@ def exit_page(request: Request, eid: int, err: str | None = None, ok: str | None
         conf=mask_conf(awgconf.render(row["conf"], cfg()["exit_mtu"],
                                       [x.strip() for x in (row["routes"] or "").split(",") if x.strip()] or None)),
         clients=assigned,
+        clients_net=cfg()["clients_net"],
     )
 
 
@@ -1281,6 +1286,7 @@ def create_exit(
     routes: str = Form(""),
     dns: str = Form(""),
     comment: str = Form(""),
+    nat: str = Form(""),
     conf: str = Form(...),
     csrf_token: str = Form(...),
 ):
@@ -1350,10 +1356,11 @@ def create_exit(
             return fail("an exit with this name already exists")
         iface = free_iface(conn)
         cur = conn.execute(
-            "INSERT INTO exits (name, iface, priority, enabled, conf, created_at, mode, routes, dns, comment, table_num) "
-            "VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?, ?, 0)",
+            "INSERT INTO exits (name, iface, priority, enabled, conf, created_at, mode, routes, dns, comment, table_num, nat) "
+            "VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?, ?, 0, ?)",
             (name, iface, prio, conf, datetime.now(timezone.utc).isoformat(timespec="seconds"),
-             mode, ", ".join(nets), dns.strip(), comment),
+             mode, ", ".join(nets), dns.strip(), comment,
+             1 if mode == "internet" or nat else 0),
         )
         eid = cur.lastrowid
         if mode == "routes":
@@ -1392,6 +1399,33 @@ def update_exit_comment(
         conn.execute("UPDATE exits SET comment = ? WHERE id = ?", (comment, eid))
     audit("exit_comment", f"{row['name']}: {comment}")
     return RedirectResponse(f"/exits/{eid}?ok=comment+saved", status_code=303)
+
+
+@app.post("/exits/{eid}/nat")
+def update_exit_nat(
+    request: Request,
+    eid: int,
+    nat: str = Form(""),
+    csrf_token: str = Form(...),
+):
+    token = require_admin(request)
+    if not hmac.compare_digest(csrf_token, csrf(token)):
+        raise HTTPException(status_code=400, detail="csrf")
+    with db() as conn:
+        row = conn.execute("SELECT * FROM exits WHERE id = ?", (eid,)).fetchone()
+        if not row:
+            raise HTTPException(status_code=404)
+        if row["mode"] != "routes":
+            return RedirectResponse(
+                f"/exits/{eid}?err={quote('internet exits always use NAT')}",
+                status_code=303,
+            )
+        conn.execute(
+            "UPDATE exits SET nat = ? WHERE id = ?", (1 if nat else 0, eid)
+        )
+    audit("exit_nat", f"{row['name']} nat={1 if nat else 0}")
+    apply_routing()
+    return RedirectResponse(f"/exits/{eid}?ok=nat+updated", status_code=303)
 
 
 @app.post("/exits/{eid}/toggle")

@@ -269,10 +269,62 @@
         executable: /bin/bash
       changed_when: false
 
-    - name: NAT towards the upstream
+    - name: NAT rules match the database
       ansible.builtin.shell: |
         set -o pipefail
-        iptables -t nat -S POSTROUTING | grep -qE "10\.80\.0\.0/24.*-o awg\+.*MASQUERADE"
+        CLIENTS_NET={{ kaskad_clients_net }} python3 - <<'PY'
+        import os, sqlite3, subprocess, sys
+
+        problems = []
+        chain = subprocess.run(["iptables", "-t", "nat", "-S", "KASKAD-NAT"],
+                               capture_output=True, text=True)
+        rules = chain.stdout if chain.returncode == 0 else ""
+        if chain.returncode != 0:
+            problems.append("chain KASKAD-NAT is missing")
+        jump = subprocess.run(
+            ["iptables", "-t", "nat", "-C", "POSTROUTING", "-j", "KASKAD-NAT"],
+            capture_output=True,
+        )
+        if jump.returncode != 0:
+            problems.append("POSTROUTING does not jump to KASKAD-NAT")
+
+        nat_ifaces = set()
+        for line in rules.splitlines():
+            if "MASQUERADE" in line and "-o" in line:
+                parts = line.split()
+                nat_ifaces.add(parts[parts.index("-o") + 1])
+
+        conn = sqlite3.connect("/var/lib/kaskad/panel.db")
+        conn.row_factory = sqlite3.Row
+        known = set()
+        for row in conn.execute(
+            "SELECT name, iface, mode, nat, enabled FROM exits"
+        ):
+            known.add(row["iface"])
+            expected = bool(row["enabled"]) and (
+                row["mode"] == "internet" or int(row["nat"])
+            )
+            if expected != (row["iface"] in nat_ifaces):
+                problems.append(
+                    f"{row['name']} ({row['iface']}): expected NAT={expected}"
+                )
+        extra = nat_ifaces - known
+        if extra:
+            problems.append(f"NAT for unknown interfaces: {sorted(extra)}")
+
+        legacy = subprocess.run(
+            ["iptables", "-t", "nat", "-C", "POSTROUTING",
+             "-s", os.environ["CLIENTS_NET"], "-o", "awg+",
+             "!", "-d", os.environ["CLIENTS_NET"], "-j", "MASQUERADE"],
+            capture_output=True,
+        )
+        if legacy.returncode == 0:
+            problems.append("legacy awg+ masquerade rule is still present")
+
+        if problems:
+            print("NAT mismatch: " + "; ".join(problems))
+            sys.exit(1)
+        PY
       args:
         executable: /bin/bash
       changed_when: false

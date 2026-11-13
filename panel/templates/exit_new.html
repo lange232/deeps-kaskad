@@ -50,6 +50,17 @@
                placeholder="192.168.50.1">
         <span class="oc-hint">for clients without internet</span>
       </label>
+      <label class="oc-field" id="exit-nat-row">
+        <span class="oc-field__label">NAT</span>
+        <span class="oc-check" style="margin-top:2px">
+          <input type="checkbox" name="nat" value="on" checked>
+          <span class="oc-check__box"></span>
+          masquerade client addresses
+        </span>
+        <span class="oc-hint">
+          turn off when the far side has a route back to {{ clients_net }}
+        </span>
+      </label>
       <label class="oc-field full">
         <span class="oc-field__label">provider config</span>
         <textarea class="oc-input oc-textarea" name="conf" required
@@ -68,10 +79,12 @@
 const mode = document.getElementById('exit-mode');
 const routesRow = document.getElementById('exit-routes-row');
 const dnsRow = document.getElementById('exit-dns-row');
+const natRow = document.getElementById('exit-nat-row');
 function syncMode() {
   const routes = mode.value === 'routes';
   routesRow.style.display = routes ? '' : 'none';
   dnsRow.style.display = routes ? '' : 'none';
+  natRow.style.display = routes ? '' : 'none';
 }
 mode.addEventListener('change', syncMode);
 syncMode();

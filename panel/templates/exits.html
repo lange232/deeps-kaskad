@@ -34,6 +34,7 @@
         <td>
           {% if e.mode == 'routes' %}
             <span class="oc-badge oc-badge--info">subnets</span>
+            {% if not e.nat %}<span class="oc-badge oc-badge--warning">no NAT</span>{% endif %}
             <div class="cell-sub oc-mono">{{ e.routes }}</div>
           {% else %}
             <span class="oc-badge oc-badge--success">internet</span>

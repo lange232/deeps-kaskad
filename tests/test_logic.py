@@ -415,6 +415,52 @@ class ActiveMarkerTests(unittest.TestCase):
                 failover.ACTIVE_FILE = old
 
 
+class NatTests(unittest.TestCase):
+    def exit(self, iface, mode="internet", nat=1, enabled=1):
+        return {"iface": iface, "mode": mode, "nat": nat, "enabled": enabled}
+
+    def test_internet_exit_is_always_nated(self):
+        self.assertEqual(routing.nat_targets([self.exit("awg1", nat=0)]), ["awg1"])
+
+    def test_routed_exit_follows_the_flag(self):
+        exits = [self.exit("awg2", "routes", 1), self.exit("awg3", "routes", 0)]
+        self.assertEqual(routing.nat_targets(exits), ["awg2"])
+
+    def test_disabled_exit_is_not_nated(self):
+        self.assertEqual(routing.nat_targets([self.exit("awg1", enabled=0)]), [])
+
+    def fake_iptables(self, fail=None):
+        def fake(cmd):
+            # Legacy rule absent and the jump not installed yet: the first
+            # lookups must fail, otherwise the code skips the insert.
+            if "-C" in cmd and ("awg+" in cmd or "KASKAD-NAT" in cmd):
+                return subprocess.CompletedProcess(cmd, 1, "", "")
+            if fail and fail in cmd:
+                return subprocess.CompletedProcess(cmd, 1, "", "boom")
+            return subprocess.CompletedProcess(cmd, 0, "", "")
+        return fake
+
+    def test_apply_nat_rebuilds_the_chain(self):
+        calls = []
+        fake = self.fake_iptables()
+        with mock.patch.object(routing, "run", side_effect=lambda cmd: (
+                calls.append(cmd), fake(cmd))[1]):
+            added = routing.apply_nat(["awg1", "awg2"], "10.80.0.0/24", [])
+        self.assertEqual(added, 2)
+        text = [" ".join(cmd) for cmd in calls]
+        self.assertTrue(any(cmd.endswith("-N KASKAD-NAT") for cmd in text))
+        self.assertTrue(any("-I POSTROUTING 1 -j KASKAD-NAT" in cmd for cmd in text))
+        self.assertTrue(any(cmd.endswith("-F KASKAD-NAT") for cmd in text))
+        self.assertEqual(sum("-A KASKAD-NAT" in cmd for cmd in text), 2)
+
+    def test_apply_nat_reports_failures(self):
+        errors = []
+        with mock.patch.object(routing, "run", side_effect=self.fake_iptables("-A")):
+            added = routing.apply_nat(["awg1"], "10.80.0.0/24", errors)
+        self.assertEqual(added, 0)
+        self.assertTrue(any("-A KASKAD-NAT" in error for error in errors))
+
+
 class PasswordTests(unittest.TestCase):
     def test_round_trip(self):
         stored = auth.hash_password("correct horse battery")
