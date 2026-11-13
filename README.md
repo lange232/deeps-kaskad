@@ -108,6 +108,10 @@ the `manual_exit` setting and stays pinned while that exit is alive; "return
 to auto" clears it. State lives in `/run/kaskad/status.json` and
 `/run/kaskad/active-exit`.
 
+Wrong or slow exit: the latency column is the ping the failover probe makes
+from the server to each exit; `/me` adds the client's own round-trip to the
+panel, measured in the browser, so the number there is what the client feels.
+
 Routed exits are not part of the selection: a subnet has a single owner.
 
 The daemon also watches the set of `awg*` interfaces. Tunnels can come up
@@ -121,8 +125,15 @@ retry on the next tick if the apply reported errors.
 table: on hosts with Docker the `FORWARD` policy is `DROP`, and another inet
 table cannot override it. Only `-i awg0 -o awg+` is accepted; the rest of the
 traffic from `awg0` is dropped so a client without an internet exit cannot
-leak through `eth0`. NAT is `-s 10.80.0.0/24 -o awg+`; client-to-client
-traffic is untouched.
+leak through `eth0`.
+
+NAT lives in its own `KASKAD-NAT` chain, one masquerade rule per exit. Every
+internet exit always masquerades; a routed exit can keep the client address
+when the far side routes `10.80.0.0/24` back to this server (checkbox `NAT` on
+the exit, off by exception). The panel rebuilds the chain on every routing
+apply; the firewall unit only guarantees the chain and the `POSTROUTING` jump,
+so a restart of that unit does not wipe NAT. Client-to-client traffic is
+untouched.
 
 ## Requirements
 

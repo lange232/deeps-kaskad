@@ -5,6 +5,28 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.7] - 2026-11-13
+
+### Added
+
+- The new-exit form fills `subnets` from the provider config: the peers'
+  IPv4 `AllowedIPs` (the default route is ignored), and when those are only
+  `0.0.0.0/0`, the network of the `[Interface] Address`. The field is only
+  filled while it is empty or still holds the previous suggestion, so manual
+  input is never overwritten. The server applies the same fallback when the
+  field arrives empty.
+- NAT is configured per exit. Internet exits always masquerade; a routed
+  exit can opt out when the far side has a route back to the client network.
+  The rules live in the `KASKAD-NAT` chain, rebuilt by the panel on every
+  apply, one rule per exit; the legacy catch-all `-o awg+` rule is removed.
+  `check.yml` compares the chain with the database.
+- Exit latency: the failover probe records the ping round-trip to every
+  internet exit (`rtt_ms`, refreshed every 10 s). It is shown in the overview,
+  the exit list, the exit card and on the administrator's client card. `/me`
+  shows the number a client actually feels: the browser measures its own
+  round-trip to the panel through `/ping` (median of four samples) and adds
+  the panel-to-exit part; both pages refresh every 30 s.
+
 ## [0.3.6] - 2026-11-12
 
 ### Added

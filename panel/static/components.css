@@ -341,6 +341,31 @@
   height: var(--ui-control-lg);
 }
 
+/* Input with action buttons inside, e.g. show and copy a password. */
+.oc-input-affix {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.oc-input-affix .oc-input {
+  padding-right: 64px;
+}
+
+.oc-input-affix__actions {
+  position: absolute;
+  right: 4px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.is-hidden {
+  display: none !important;
+}
+
 .oc-textarea {
   min-height: 72px;
   padding: 6px 8px;

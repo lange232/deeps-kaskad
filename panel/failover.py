@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sqlite3
 import subprocess
 import sys
@@ -43,6 +44,7 @@ DEAD_AFTER = 3
 ALIVE_AFTER = 2
 FAILBACK_STABLE = 60
 PROBE_TARGET = "1.1.1.1"
+RTT_RE = re.compile(r"time=([0-9.]+)\s*ms")
 
 state: dict[str, dict] = {}
 # Tunnels that were present on the previous tick. A change means old routes
@@ -231,27 +233,37 @@ def sync_routing(c: dict) -> None:
     log(f"routing re-applied: tables {result.get('tables')}")
 
 
-def probe(exit: dict) -> bool:
+def ping_rtt(stdout: str) -> float | None:
+    """Round-trip time from ping output, in milliseconds."""
+    match = RTT_RE.search(stdout or "")
+    return float(match.group(1)) if match else None
+
+
+def probe(exit: dict) -> tuple[bool, float | None]:
+    """(alive, rtt_ms); routed exits have no ICMP latency."""
     iface = exit["iface"]
     if not iface_exists(iface):
-        return False
+        return False, None
     if exit.get("mode") == "routes":
         # A routed exit only allows its own subnets in AllowedIPs, so pinging
         # 1.1.1.1 is pointless: it is alive as long as its handshake is fresh.
         res = run(["awg", "show", iface, "latest-handshakes"])
         if res.returncode != 0:
-            return False
+            return False, None
         now = time.time()
         for line in res.stdout.splitlines():
             parts = line.split()
             if len(parts) >= 2 and parts[-1].isdigit():
                 if now - int(parts[-1]) < 180:
-                    return True
-        return False
+                    return True, None
+        return False, None
     try:
-        return run(["ping", "-c1", "-W2", "-I", iface, PROBE_TARGET], timeout=4).returncode == 0
+        res = run(["ping", "-c1", "-W2", "-I", iface, PROBE_TARGET], timeout=4)
     except subprocess.TimeoutExpired:
-        return False
+        return False, None
+    if res.returncode != 0:
+        return False, None
+    return True, ping_rtt(res.stdout)
 
 
 def read_active() -> str | None:
@@ -288,13 +300,20 @@ def switch(iface: str, c: dict) -> None:
     log(f"active exit: {iface}")
 
 
-def update_state(exit: dict, ok: bool) -> None:
+def update_state(exit: dict, ok: bool, rtt: float | None = None) -> None:
     iface = exit["iface"]
-    st = state.setdefault(iface, {"fails": 0, "oks": 0, "alive": False, "alive_since": 0, "last_ok": 0})
+    st = state.setdefault(
+        iface,
+        {"fails": 0, "oks": 0, "alive": False, "alive_since": 0,
+         "last_ok": 0, "rtt_ms": None, "rtt_ts": 0},
+    )
     if ok:
         st["fails"] = 0
         st["oks"] += 1
         st["last_ok"] = int(time.time())
+        if rtt is not None:
+            st["rtt_ms"] = round(rtt)
+            st["rtt_ts"] = int(time.time())
         if not st["alive"] and st["oks"] >= ALIVE_AFTER:
             st["alive"] = True
             st["alive_since"] = int(time.time())
@@ -321,6 +340,8 @@ def write_status(active, rows: list[dict], manual: str = "", clients=None) -> No
                 "alive": state.get(e["iface"], {}).get("alive", False),
                 "last_ok": state.get(e["iface"], {}).get("last_ok", 0),
                 "alive_since": state.get(e["iface"], {}).get("alive_since", 0),
+                "rtt_ms": state.get(e["iface"], {}).get("rtt_ms"),
+                "rtt_ts": state.get(e["iface"], {}).get("rtt_ts", 0),
             }
             for e in rows
         },
@@ -361,7 +382,8 @@ def tick(c: dict) -> None:
     rows = exits()
     for e in rows:
         if e["enabled"]:
-            update_state(e, probe(e))
+            ok, rtt = probe(e)
+            update_state(e, ok, rtt)
 
     # Exits can come up after kaskad-routing.service already ran; only this
     # loop notices, so it re-applies the tables and rules.

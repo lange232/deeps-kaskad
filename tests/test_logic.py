@@ -2,9 +2,11 @@
 
 Run with: python3 -m unittest discover -s tests
 """
+import json
 import sqlite3
 import subprocess
 import sys
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -12,6 +14,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "panel"))
 
 import auth  # noqa: E402
+import awgconf  # noqa: E402
 import failover  # noqa: E402
 import routing  # noqa: E402
 
@@ -319,6 +322,77 @@ class SyncRoutingTests(unittest.TestCase):
         self.assertEqual(failover.routing_backoff, 10)
 
 
+class ProbeTests(unittest.TestCase):
+    def test_ping_rtt_is_parsed(self):
+        line = "64 bytes from 1.1.1.1: icmp_seq=1 ttl=57 time=12.3 ms"
+        self.assertEqual(failover.ping_rtt(line), 12.3)
+        self.assertIsNone(failover.ping_rtt("Request timeout for icmp_seq 0"))
+        self.assertIsNone(failover.ping_rtt(""))
+
+    def test_internet_probe_returns_the_latency(self):
+        answered = subprocess.CompletedProcess([], 0, "time=7.9 ms", "")
+        with mock.patch.object(failover, "iface_exists", return_value=True), \
+             mock.patch.object(failover, "run", return_value=answered):
+            self.assertEqual(failover.probe({"iface": "awg1", "mode": "internet"}),
+                             (True, 7.9))
+
+    def test_failed_probe_has_no_latency(self):
+        failed = subprocess.CompletedProcess([], 1, "", "timeout")
+        with mock.patch.object(failover, "iface_exists", return_value=True), \
+             mock.patch.object(failover, "run", return_value=failed):
+            self.assertEqual(failover.probe({"iface": "awg1", "mode": "internet"}),
+                             (False, None))
+
+    def test_routed_probe_has_no_icmp_latency(self):
+        handshake = subprocess.CompletedProcess(
+            [], 0, f"peerkey {int(time.time())}\n", "")
+        with mock.patch.object(failover, "iface_exists", return_value=True), \
+             mock.patch.object(failover, "run", return_value=handshake):
+            self.assertEqual(failover.probe({"iface": "awg2", "mode": "routes"}),
+                             (True, None))
+
+    def test_missing_interface_has_no_latency(self):
+        with mock.patch.object(failover, "iface_exists", return_value=False):
+            self.assertEqual(failover.probe({"iface": "awg9", "mode": "internet"}),
+                             (False, None))
+
+    def test_state_keeps_the_last_latency(self):
+        old = failover.state.copy()
+        try:
+            failover.state.clear()
+            failover.update_state({"iface": "awg1"}, True, 12.6)
+            failover.update_state({"iface": "awg1"}, True, 11.4)
+            st = failover.state["awg1"]
+            self.assertEqual(st["rtt_ms"], 11)
+            self.assertTrue(st["alive"])
+            self.assertGreater(st["rtt_ts"], 0)
+        finally:
+            failover.state.clear()
+            failover.state.update(old)
+
+    def test_status_carries_the_latency(self):
+        import tempfile
+        old_file = failover.STATUS_FILE
+        old_state = failover.state.copy()
+        with tempfile.TemporaryDirectory() as tmp:
+            failover.STATUS_FILE = Path(tmp) / "status.json"
+            try:
+                failover.state.clear()
+                failover.update_state({"iface": "awg1"}, True, 9.6)
+                failover.update_state({"iface": "awg1"}, True, 9.4)
+                failover.write_status("awg1", [{
+                    "iface": "awg1", "name": "e", "enabled": 1,
+                    "priority": 10, "mode": "internet",
+                }])
+                payload = json.loads(failover.STATUS_FILE.read_text())
+                self.assertEqual(payload["exits"]["awg1"]["rtt_ms"], 9)
+                self.assertGreater(payload["exits"]["awg1"]["rtt_ts"], 0)
+            finally:
+                failover.STATUS_FILE = old_file
+                failover.state.clear()
+                failover.state.update(old_state)
+
+
 class ActiveMarkerTests(unittest.TestCase):
     def test_stale_active_is_cleared(self):
         self.assertTrue(failover.should_clear_active(None, "awg1"))
@@ -340,6 +414,87 @@ class ActiveMarkerTests(unittest.TestCase):
                 self.assertEqual(failover.read_active(), "awg2")
             finally:
                 failover.ACTIVE_FILE = old
+
+
+class AllowedNetworksTests(unittest.TestCase):
+    conf = (
+        "[Interface]\nAddress = 10.90.0.2/30\nPrivateKey = priv\n\n"
+        "[Peer]\nPublicKey = pub\nEndpoint = host:51820\n"
+        "AllowedIPs = 10.90.0.0/30, 192.168.50.0/24\n"
+    )
+
+    def test_ipv4_networks_are_collected(self):
+        self.assertEqual(awgconf.allowed_networks(self.conf),
+                         ["10.90.0.0/30", "192.168.50.0/24"])
+
+    def test_default_route_and_ipv6_are_dropped(self):
+        conf = self.conf.replace(
+            "AllowedIPs = 10.90.0.0/30, 192.168.50.0/24",
+            "AllowedIPs = 0.0.0.0/0, fd00::/8",
+        )
+        self.assertEqual(awgconf.allowed_networks(conf), [])
+
+    def test_guess_prefers_allowed_ips(self):
+        self.assertEqual(awgconf.guess_routes(self.conf),
+                         ["10.90.0.0/30", "192.168.50.0/24"])
+
+    def test_guess_falls_back_to_the_address_network(self):
+        conf = self.conf.replace(
+            "AllowedIPs = 10.90.0.0/30, 192.168.50.0/24",
+            "AllowedIPs = 0.0.0.0/0",
+        )
+        self.assertEqual(awgconf.guess_routes(conf), ["10.90.0.0/30"])
+
+    def test_guess_without_address(self):
+        self.assertEqual(
+            awgconf.guess_routes("[Interface]\nPrivateKey = k\n"), []
+        )
+
+
+class NatTests(unittest.TestCase):
+    def exit(self, iface, mode="internet", nat=1, enabled=1):
+        return {"iface": iface, "mode": mode, "nat": nat, "enabled": enabled}
+
+    def test_internet_exit_is_always_nated(self):
+        self.assertEqual(routing.nat_targets([self.exit("awg1", nat=0)]), ["awg1"])
+
+    def test_routed_exit_follows_the_flag(self):
+        exits = [self.exit("awg2", "routes", 1), self.exit("awg3", "routes", 0)]
+        self.assertEqual(routing.nat_targets(exits), ["awg2"])
+
+    def test_disabled_exit_is_not_nated(self):
+        self.assertEqual(routing.nat_targets([self.exit("awg1", enabled=0)]), [])
+
+    def fake_iptables(self, fail=None):
+        def fake(cmd):
+            # Legacy rule absent and the jump not installed yet: the first
+            # lookups must fail, otherwise the code skips the insert.
+            if "-C" in cmd and ("awg+" in cmd or "KASKAD-NAT" in cmd):
+                return subprocess.CompletedProcess(cmd, 1, "", "")
+            if fail and fail in cmd:
+                return subprocess.CompletedProcess(cmd, 1, "", "boom")
+            return subprocess.CompletedProcess(cmd, 0, "", "")
+        return fake
+
+    def test_apply_nat_rebuilds_the_chain(self):
+        calls = []
+        fake = self.fake_iptables()
+        with mock.patch.object(routing, "run", side_effect=lambda cmd: (
+                calls.append(cmd), fake(cmd))[1]):
+            added = routing.apply_nat(["awg1", "awg2"], "10.80.0.0/24", [])
+        self.assertEqual(added, 2)
+        text = [" ".join(cmd) for cmd in calls]
+        self.assertTrue(any(cmd.endswith("-N KASKAD-NAT") for cmd in text))
+        self.assertTrue(any("-I POSTROUTING 1 -j KASKAD-NAT" in cmd for cmd in text))
+        self.assertTrue(any(cmd.endswith("-F KASKAD-NAT") for cmd in text))
+        self.assertEqual(sum("-A KASKAD-NAT" in cmd for cmd in text), 2)
+
+    def test_apply_nat_reports_failures(self):
+        errors = []
+        with mock.patch.object(routing, "run", side_effect=self.fake_iptables("-A")):
+            added = routing.apply_nat(["awg1"], "10.80.0.0/24", errors)
+        self.assertEqual(added, 0)
+        self.assertTrue(any("-A KASKAD-NAT" in error for error in errors))
 
 
 class PasswordTests(unittest.TestCase):

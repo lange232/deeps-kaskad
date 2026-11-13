@@ -300,7 +300,67 @@ def execute_plan(plan: dict, errors: list[str]) -> int:
     return changes
 
 
-def desired_state() -> tuple[set[Rule], dict[int, set[Route]], dict[int, list[str]], int]:
+NAT_CHAIN = "KASKAD-NAT"
+
+
+def nat_targets(exits: list[dict]) -> list[str]:
+    """Interfaces that must masquerade client traffic.
+
+    Internet exits always need it: the provider only accepts its own address.
+    A routed exit can keep the client address when the far side routes the
+    client network back, so it is optional there.
+    """
+    targets = {
+        ex["iface"] for ex in exits
+        if ex["enabled"] and ex.get("mode", "internet") == "internet"
+    }
+    targets |= {
+        ex["iface"] for ex in exits
+        if ex["enabled"] and ex.get("mode") == "routes" and int(ex.get("nat", 1))
+    }
+    return sorted(targets)
+
+
+def apply_nat(ifaces: list[str], clients_net: str, errors: list[str]) -> int:
+    """Rebuilds KASKAD-NAT: one masquerade rule per exit that needs it."""
+    def ipt(*args: str) -> subprocess.CompletedProcess:
+        return run(["iptables", "-t", "nat"] + list(args))
+
+    res = ipt("-N", NAT_CHAIN)
+    if res.returncode != 0 and "exist" not in (res.stderr or "").lower():
+        errors.append(f"iptables -N {NAT_CHAIN}: {res.stderr.strip()}")
+    if ipt("-C", "POSTROUTING", "-j", NAT_CHAIN).returncode != 0:
+        res = ipt("-I", "POSTROUTING", "1", "-j", NAT_CHAIN)
+        if res.returncode != 0:
+            errors.append(f"iptables -I POSTROUTING -j {NAT_CHAIN}: {res.stderr.strip()}")
+
+    # Older releases masqueraded every awg+ interface at once.
+    legacy = ["-s", clients_net, "-o", "awg+", "!", "-d", clients_net,
+              "-j", "MASQUERADE"]
+    while ipt("-C", "POSTROUTING", *legacy).returncode == 0:
+        res = ipt("-D", "POSTROUTING", *legacy)
+        if res.returncode != 0:
+            errors.append(f"iptables -D legacy masquerade: {res.stderr.strip()}")
+            break
+
+    res = ipt("-F", NAT_CHAIN)
+    if res.returncode != 0:
+        errors.append(f"iptables -F {NAT_CHAIN}: {res.stderr.strip()}")
+        return 0
+
+    added = 0
+    for iface in ifaces:
+        res = ipt("-A", NAT_CHAIN, "-s", clients_net, "!", "-d", clients_net,
+                  "-o", iface, "-j", "MASQUERADE")
+        if res.returncode != 0:
+            errors.append(f"iptables -A {NAT_CHAIN} -o {iface}: {res.stderr.strip()}")
+        else:
+            added += 1
+    return added
+
+
+def desired_state() -> tuple[set[Rule], dict[int, set[Route]], dict[int, list[str]],
+                             int, list[str], str]:
     """The routing state the panel wants, from the database.
 
     Client tables are returned separately as {table: choices}: which exit the
@@ -309,6 +369,7 @@ def desired_state() -> tuple[set[Rule], dict[int, set[Route]], dict[int, list[st
     """
     c = cfg()
     internet_table = int(c.get("route_table", 100))
+    clients_net = c.get("clients_net", "10.80.0.0/24")
     db = sqlite3.connect(DB_PATH, timeout=10)
     db.row_factory = sqlite3.Row
     try:
@@ -378,12 +439,13 @@ def desired_state() -> tuple[set[Rule], dict[int, set[Route]], dict[int, list[st
                  ("from", cl["ip"], "to", _norm_prefix(cidr), "iif", "awg0",
                   "lookup", str(ex["table_num"])))
             )
-    return rules, routes, client_tables, internet_table
+    return rules, routes, client_tables, internet_table, nat_targets(exits), clients_net
 
 
 def apply() -> dict:
     errors: list[str] = []
-    desired_rules, desired_routes, client_tables, internet_table = desired_state()
+    (desired_rules, desired_routes, client_tables, internet_table,
+     nat_ifaces, clients_net) = desired_state()
 
     res = run(["ip", "rule", "show"])
     if res.returncode != 0:
@@ -449,11 +511,13 @@ def apply() -> dict:
         flush_candidates,
     )
     changes = execute_plan(plan, errors)
+    changes += apply_nat(nat_ifaces, clients_net, errors)
 
     save_setting("routing_tables", json.dumps(sorted(desired_routes)))
     return {
         "rules": len(desired_rules),
         "tables": sorted(desired_routes),
+        "nat": nat_ifaces,
         "changes": changes,
         "errors": errors,
     }
@@ -465,7 +529,7 @@ def main() -> None:
     result = apply()
     print(
         f"rules: {result['rules']}, tables: {result['tables']}, "
-        f"changes: {result['changes']}"
+        f"nat: {result['nat']}, changes: {result['changes']}"
     )
     for error in result["errors"]:
         print(f"error: {error}", file=sys.stderr)

@@ -70,7 +70,7 @@
     </div>
     <div class="oc-panel">
       <table class="oc-table">
-        <thead><tr><th>name</th><th>mode</th><th>interface</th><th>state</th><th></th></tr></thead>
+        <thead><tr><th>name</th><th>mode</th><th>interface</th><th>state</th><th>ping</th><th></th></tr></thead>
         <tbody>
         {% for e in exits %}
           <tr>
@@ -82,10 +82,13 @@
               {% elif e.alive %}<span class="oc-badge oc-badge--success"><span class="oc-dot"></span>up</span>
               {% else %}<span class="oc-badge oc-badge--danger"><span class="oc-dot"></span>down</span>{% endif %}
             </td>
+            <td class="oc-mono oc-muted">
+              {% if e.alive and e.rtt_ms %}{{ e.rtt_ms }} ms{% else %}—{% endif %}
+            </td>
             <td><a class="oc-btn oc-btn--ghost oc-btn--sm" href="/exits/{{ e.id }}">open</a></td>
           </tr>
         {% else %}
-          <tr><td colspan="5" class="oc-muted">no exits — clients will have no internet.</td></tr>
+          <tr><td colspan="6" class="oc-muted">no exits — clients will have no internet.</td></tr>
         {% endfor %}
         </tbody>
       </table>

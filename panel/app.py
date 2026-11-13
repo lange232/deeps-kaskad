@@ -130,7 +130,8 @@ def init_db() -> None:
                 routes TEXT NOT NULL DEFAULT '',
                 dns TEXT NOT NULL DEFAULT '',
                 comment TEXT NOT NULL DEFAULT '',
-                table_num INTEGER NOT NULL DEFAULT 0
+                table_num INTEGER NOT NULL DEFAULT 0,
+                nat INTEGER NOT NULL DEFAULT 1
             );
             CREATE TABLE IF NOT EXISTS audit (
                 id INTEGER PRIMARY KEY,
@@ -175,6 +176,7 @@ def migrate(conn: sqlite3.Connection) -> None:
         ("dns", "ALTER TABLE exits ADD COLUMN dns TEXT NOT NULL DEFAULT ''"),
         ("comment", "ALTER TABLE exits ADD COLUMN comment TEXT NOT NULL DEFAULT ''"),
         ("table_num", "ALTER TABLE exits ADD COLUMN table_num INTEGER NOT NULL DEFAULT 0"),
+        ("nat", "ALTER TABLE exits ADD COLUMN nat INTEGER NOT NULL DEFAULT 1"),
     ):
         if name not in cols:
             conn.execute(ddl)
@@ -1009,9 +1011,12 @@ def exit_view(e, status: dict, active, manual: str = "") -> dict:
         "routes": e["routes"],
         "dns": e["dns"],
         "comment": e["comment"],
+        "nat": bool(e["nat"]) if "nat" in e.keys() else True,
         "endpoint": awgconf.endpoint(e["conf"]),
         "alive": st.get("alive"),
         "last_ok": st.get("last_ok", 0),
+        "rtt_ms": st.get("rtt_ms"),
+        "rtt_ts": st.get("rtt_ts", 0),
         "active": e["iface"] == active,
         "pinned": bool(manual) and e["iface"] == manual,
     }
@@ -1136,6 +1141,14 @@ def logout(request: Request):
     return response
 
 
+@app.get("/ping")
+def ping():
+    """Tiny target for the browser to measure its round-trip to the panel."""
+    return PlainTextResponse(
+        "pong", headers={"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"}
+    )
+
+
 @app.get("/healthz")
 def healthz():
     """Liveness for monitoring: database readable and failover reporting."""
@@ -1221,6 +1234,7 @@ def exit_new_page(request: Request, err: str | None = None):
     return render_page(
         request, "exit_new.html", "exits",
         csrf=csrf(token), err=err, form=EXIT_DEFAULTS,
+        clients_net=cfg()["clients_net"],
     )
 
 
@@ -1246,6 +1260,7 @@ def exit_page(request: Request, eid: int, err: str | None = None, ok: str | None
         conf=mask_conf(awgconf.render(row["conf"], cfg()["exit_mtu"],
                                       [x.strip() for x in (row["routes"] or "").split(",") if x.strip()] or None)),
         clients=assigned,
+        clients_net=cfg()["clients_net"],
     )
 
 
@@ -1271,6 +1286,7 @@ def create_exit(
     routes: str = Form(""),
     dns: str = Form(""),
     comment: str = Form(""),
+    nat: str = Form(""),
     conf: str = Form(...),
     csrf_token: str = Form(...),
 ):
@@ -1301,6 +1317,10 @@ def create_exit(
 
     if mode not in ("internet", "routes"):
         return fail("unknown exit mode")
+    if mode == "routes" and not routes.strip():
+        # The provider config names the networks this peer can reach; when
+        # AllowedIPs is the default route, the Address network is the guess.
+        routes = ", ".join(awgconf.guess_routes(conf))
     try:
         nets = parse_routes(routes) if mode == "routes" else []
     except ValueError as exc:
@@ -1340,10 +1360,11 @@ def create_exit(
             return fail("an exit with this name already exists")
         iface = free_iface(conn)
         cur = conn.execute(
-            "INSERT INTO exits (name, iface, priority, enabled, conf, created_at, mode, routes, dns, comment, table_num) "
-            "VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?, ?, 0)",
+            "INSERT INTO exits (name, iface, priority, enabled, conf, created_at, mode, routes, dns, comment, table_num, nat) "
+            "VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?, ?, 0, ?)",
             (name, iface, prio, conf, datetime.now(timezone.utc).isoformat(timespec="seconds"),
-             mode, ", ".join(nets), dns.strip(), comment),
+             mode, ", ".join(nets), dns.strip(), comment,
+             1 if mode == "internet" or nat else 0),
         )
         eid = cur.lastrowid
         if mode == "routes":
@@ -1382,6 +1403,39 @@ def update_exit_comment(
         conn.execute("UPDATE exits SET comment = ? WHERE id = ?", (comment, eid))
     audit("exit_comment", f"{row['name']}: {comment}")
     return RedirectResponse(f"/exits/{eid}?ok=comment+saved", status_code=303)
+
+
+@app.post("/exits/{eid}/nat")
+def update_exit_nat(
+    request: Request,
+    eid: int,
+    nat: str = Form(""),
+    csrf_token: str = Form(...),
+):
+    token = require_admin(request)
+    if not hmac.compare_digest(csrf_token, csrf(token)):
+        raise HTTPException(status_code=400, detail="csrf")
+    with db() as conn:
+        row = conn.execute("SELECT * FROM exits WHERE id = ?", (eid,)).fetchone()
+        if not row:
+            raise HTTPException(status_code=404)
+        if row["mode"] != "routes":
+            return RedirectResponse(
+                f"/exits/{eid}?err={quote('internet exits always use NAT')}",
+                status_code=303,
+            )
+        wanted = 1 if nat else 0
+        changed = int(row["nat"]) != wanted
+        conn.execute("UPDATE exits SET nat = ? WHERE id = ?", (wanted, eid))
+    audit("exit_nat", f"{row['name']} nat={wanted}")
+    apply_routing()
+    if changed:
+        # Existing flows keep the old mapping until their conntrack entry
+        # expires; drop them only once the new rules are in place.
+        res = run(["conntrack", "-D", "-s", cfg()["clients_net"]], timeout=5)
+        if res.returncode != 0 and "0 flow entries" not in res.stderr.lower():
+            print(f"conntrack: {res.stderr.strip()}", flush=True)
+    return RedirectResponse(f"/exits/{eid}?ok=nat+updated", status_code=303)
 
 
 @app.post("/exits/{eid}/toggle")
@@ -1503,6 +1557,11 @@ def client_page(
     granted = {e["id"] for e in client_internet_exits(cl)}
     live = iface_dump(c["iface"])["peers"]
     view = client_view(cl, live, list(assigned.values()))
+    status = read_status()
+    latency = {
+        iface: info.get("rtt_ms")
+        for iface, info in (status.get("exits") or {}).items()
+    }
     try:
         conf = mask_conf(client_conf(c, cl))
     except ValueError:
@@ -1512,6 +1571,7 @@ def client_page(
         csrf=csrf(token), err=err, ok=ok, cl=view, raw=cl,
         routed=routed, assigned=set(assigned.keys()), conf=conf,
         internet_exits=internet_exits_rows(), granted=granted,
+        latency=latency,
         account=client_account(cid), newpw=pop_secret(newpw),
     )
 
@@ -1913,11 +1973,16 @@ def me_page(request: Request, err: str | None = None, ok: str | None = None):
         iface: bool(info.get("alive"))
         for iface, info in (status.get("exits") or {}).items()
     }
+    latency = {
+        iface: info.get("rtt_ms")
+        for iface, info in (status.get("exits") or {}).items()
+    }
     return render_page(
         request, "me.html", "me", role="user",
         csrf=csrf(token), err=err, ok=ok, cl=client_view(cl, live),
         email=row["email"], last_login=human_ts(row["last_login"]), conf=conf,
         internet_exits=granted, current_exit=current, alive=alive,
+        latency=latency,
     )
 
 

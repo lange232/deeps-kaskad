@@ -50,8 +50,13 @@ up() {
     fi
 
     ensure mangle FORWARD -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu
-    # NAT only towards tunnels; client-to-client traffic is untouched.
-    ensure nat POSTROUTING -s "$CLIENTS" -o awg+ ! -d "$CLIENTS" -j MASQUERADE
+    # NAT lives in its own chain: the panel rebuilds it with one rule per
+    # exit (routed exits may opt out); the unit only guarantees the chain and
+    # the jump exist, so NAT survives before the panel applies its state.
+    iptables -t nat -N KASKAD-NAT 2>/dev/null || true
+    ensure nat POSTROUTING -j KASKAD-NAT
+    # Older releases masqueraded every awg+ interface at once.
+    del nat POSTROUTING -s "$CLIENTS" -o awg+ ! -d "$CLIENTS" -j MASQUERADE
 }
 
 down() {
@@ -64,6 +69,9 @@ down() {
     del filter INPUT -p tcp --dport "$PANEL_PORT" -j ACCEPT
     del filter INPUT ! -i "$AWG0" -p tcp --dport "$PANEL_PORT" -j DROP
     del mangle FORWARD -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu
+    # Keep KASKAD-NAT intact: the panel owns its contents, and a restart of
+    # this unit must not wipe NAT until the next routing apply.
+    del nat POSTROUTING -j KASKAD-NAT
     del nat POSTROUTING -s "$CLIENTS" -o awg+ ! -d "$CLIENTS" -j MASQUERADE
     del nat POSTROUTING -s "$CLIENTS" ! -o "$AWG0" -j MASQUERADE
 }
