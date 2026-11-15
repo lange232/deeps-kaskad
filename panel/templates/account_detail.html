@@ -1,0 +1,252 @@
+{% extends "base.html" %}
+{% block title %}{{ account.email }} — deeps kaskad{% endblock %}
+{% block topbar %}<span class="oc-mono oc-muted">{{ account.email }}</span>{% endblock %}
+{% block body %}
+<div class="crumbs"><a href="/accounts">Accounts</a><span>/</span><span>{{ account.email }}</span></div>
+<div class="page-head">
+  <div class="name-cell">
+    <h1 style="margin:0" class="oc-mono">{{ account.email }}</h1>
+    {% if account.enabled %}<span class="oc-badge oc-badge--success"><span class="oc-dot"></span>login enabled</span>
+    {% else %}<span class="oc-badge oc-badge--subtle">login disabled</span>{% endif %}
+  </div>
+  <p class="oc-muted" style="margin-top:6px">
+    {{ configs | length }} of {{ limit }} configurations · last login {{ account.last_login | ts }}
+  </p>
+</div>
+
+{% if err %}<div class="oc-alert oc-alert--danger" style="margin-bottom:16px"><span class="oc-dot" style="margin-top:7px"></span><div class="oc-alert__body">{{ err }}</div></div>{% endif %}
+{% if ok %}<div class="oc-alert oc-alert--success" style="margin-bottom:16px"><span class="oc-dot" style="margin-top:7px"></span><div class="oc-alert__body">{{ ok }}</div></div>{% endif %}
+
+{% if newpw %}
+<div class="oc-alert oc-alert--success" style="margin-bottom:16px">
+  <span class="oc-dot" style="margin-top:7px"></span>
+  <div class="oc-alert__body">
+    password for <span class="oc-mono">{{ account.email }}</span> — shown once, save it now:
+    <div class="oc-input-affix" style="margin-top:8px">
+      <input class="oc-input oc-mono" type="text" value="{{ newpw }}" readonly
+             autocomplete="off" spellcheck="false" aria-label="generated password"
+             onclick="this.select()">
+    </div>
+  </div>
+</div>
+{% endif %}
+
+<div class="stack">
+  <section>
+    <div class="toolbar">
+      <h2 class="oc-section__title" style="margin:0">configurations</h2>
+      <span class="oc-muted">{{ configs | length }} of {{ limit }}</span>
+    </div>
+    {% if configs %}
+    <div class="oc-panel">
+      <div class="table-scroll">
+      <table class="oc-table">
+        <thead><tr><th>configuration</th><th style="width:1%">access</th><th style="width:1%"></th></tr></thead>
+        <tbody>
+        {% for c in configs %}
+          <tr>
+            <td>
+              {{ c.name }}
+              {% if not c.enabled %}<span class="oc-badge oc-badge--subtle">disabled</span>{% endif %}
+              <div class="cell-sub oc-mono" style="display:flex; flex-wrap:wrap; gap:4px 10px">
+                <span>{{ c.ip }}</span>
+                <span>handshake <span data-hs="{{ c.handshake }}">—</span></span>
+              </div>
+            </td>
+            <td>
+              <div class="actions">
+                {% if c.internet %}<span class="oc-badge oc-badge--success">internet</span>{% endif %}
+                {% for name in c.exits %}<span class="oc-badge oc-badge--info">{{ name }}</span>{% endfor %}
+                {% if not c.internet and not c.exits %}<span class="oc-badge oc-badge--danger">no access</span>{% endif %}
+              </div>
+            </td>
+            <td><a class="oc-btn oc-btn--outline oc-btn--sm" href="/configs/{{ c.id }}">open</a></td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+      </div>
+    </div>
+    {% else %}
+    <div class="oc-empty">this account has no configurations yet</div>
+    {% endif %}
+
+    {% if configs | length < limit %}
+    <form method="post" action="/accounts/{{ account.id }}/configs" class="actions"
+          style="margin-top:12px; max-width:520px">
+      <input type="hidden" name="csrf_token" value="{{ csrf }}">
+      <input class="oc-input oc-input--sm" type="text" name="name" maxlength="32"
+             placeholder="name (optional)" spellcheck="false" style="flex:1">
+      <button class="oc-btn oc-btn--contrast oc-btn--sm">add configuration</button>
+    </form>
+    <p class="oc-hint" style="margin-top:8px">
+      the server generates the keys; one configuration is meant for one device
+    </p>
+    {% else %}
+    <p class="oc-hint" style="margin-top:10px">
+      the limit is reached — raise it below or delete a configuration.
+    </p>
+    {% endif %}
+  </section>
+
+  <section>
+    <h2 class="oc-section__title">access</h2>
+    <div class="oc-panel" style="padding:16px">
+      <form method="post" action="/accounts/{{ account.id }}/exits">
+        <input type="hidden" name="csrf_token" value="{{ csrf }}">
+        <p class="oc-section__title" style="margin:0 0 10px">internet exits</p>
+        {% if internet_exits %}
+        <div class="actions" style="flex-direction:column; align-items:flex-start; gap:10px">
+          {% for e in internet_exits %}
+          <label class="oc-check">
+            <input type="checkbox" name="exits" value="{{ e.id }}" {% if e.id in granted %}checked{% endif %}>
+            <span class="oc-check__box"></span>
+            {{ e.name }}
+            <span class="oc-mono oc-muted" style="margin-left:8px">{{ e.iface }}</span>
+          </label>
+          {% endfor %}
+        </div>
+        {% else %}
+        <p class="oc-muted" style="margin:0">no internet exits are configured yet</p>
+        {% endif %}
+
+        {% if routed %}
+        <p class="oc-section__title" style="margin:20px 0 10px">subnet exits</p>
+        <div class="actions" style="flex-direction:column; align-items:flex-start; gap:10px">
+          {% for e in routed %}
+          <label class="oc-check">
+            <input type="checkbox" name="exits" value="{{ e.id }}" {% if e.id in granted %}checked{% endif %}>
+            <span class="oc-check__box"></span>
+            {{ e.name }}
+            <span class="oc-mono oc-muted" style="margin-left:8px">{{ e.routes }}</span>
+          </label>
+          {% endfor %}
+        </div>
+        {% endif %}
+
+        <div class="actions" style="margin-top:18px">
+          <button class="oc-btn oc-btn--contrast">save access</button>
+        </div>
+        <p class="oc-hint" style="margin-top:10px">
+          access is granted to the account and applies to every configuration;
+          a new grant is appended to each configuration's order.
+        </p>
+      </form>
+    </div>
+  </section>
+
+  <section>
+    <h2 class="oc-section__title">internet exit order</h2>
+    <div class="oc-panel" style="padding:16px">
+      {% if order %}
+      <p class="oc-muted" style="margin:0 0 12px">
+        the account order is the default: new configurations copy it, and
+        "apply to all" resets every configuration to it.
+      </p>
+      <div class="table-scroll">
+      <table class="oc-table">
+        <thead><tr><th style="width:1%">#</th><th>exit</th><th style="width:1%"></th></tr></thead>
+        <tbody>
+        {% for e in order %}
+          <tr>
+            <td class="oc-num">{{ loop.index }}</td>
+            <td>
+              {{ e.comment or e.name }}
+              <div class="cell-sub oc-mono">{{ e.iface }}</div>
+            </td>
+            <td>
+              <div class="actions" style="flex-wrap:nowrap">
+                <form method="post" action="/accounts/{{ account.id }}/order">
+                  <input type="hidden" name="csrf_token" value="{{ csrf }}">
+                  <input type="hidden" name="exit_id" value="{{ e.id }}">
+                  <input type="hidden" name="direction" value="up">
+                  <button class="oc-btn oc-btn--neutral oc-btn--sm" {{ 'disabled' if loop.first }}>up</button>
+                </form>
+                <form method="post" action="/accounts/{{ account.id }}/order">
+                  <input type="hidden" name="csrf_token" value="{{ csrf }}">
+                  <input type="hidden" name="exit_id" value="{{ e.id }}">
+                  <input type="hidden" name="direction" value="down">
+                  <button class="oc-btn oc-btn--neutral oc-btn--sm" {{ 'disabled' if loop.last }}>down</button>
+                </form>
+              </div>
+            </td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+      </div>
+      <form method="post" action="/accounts/{{ account.id }}/order/apply" style="margin-top:14px"
+            onsubmit="return confirm('reset the exit order of every configuration to the account order?')">
+        <input type="hidden" name="csrf_token" value="{{ csrf }}">
+        <button class="oc-btn oc-btn--neutral oc-btn--sm">apply to all configurations</button>
+      </form>
+      {% else %}
+      <p class="oc-muted" style="margin:0">grant at least one internet exit to set an order.</p>
+      {% endif %}
+    </div>
+  </section>
+
+  <section>
+    <h2 class="oc-section__title">limit</h2>
+    <div class="oc-panel" style="padding:16px">
+      <form method="post" action="/accounts/{{ account.id }}/max-configs"
+            class="actions" style="max-width:420px">
+        <input type="hidden" name="csrf_token" value="{{ csrf }}">
+        <input class="oc-input oc-input--sm" type="number" name="max_configs" min="1"
+               value="{{ account.max_configs or '' }}" placeholder="{{ default_limit }}" style="flex:1">
+        <button class="oc-btn oc-btn--neutral oc-btn--sm">save limit</button>
+      </form>
+      <p class="oc-hint" style="margin-top:8px">
+        empty means the server default ({{ default_limit }}); set on
+        <a href="/settings">settings</a>.
+      </p>
+    </div>
+  </section>
+
+  <section>
+    <h2 class="oc-section__title">login</h2>
+    <div class="oc-panel" style="padding:16px">
+      <div class="kv-grid">
+        <div><div class="k">email</div><div class="v oc-mono">{{ account.email }}</div></div>
+        <div><div class="k">state</div><div class="v">
+          {% if account.enabled %}<span class="oc-badge oc-badge--success">enabled</span>
+          {% else %}<span class="oc-badge oc-badge--subtle">disabled</span>{% endif %}
+        </div></div>
+        <div><div class="k">last login</div><div class="v">{{ account.last_login | ts }}</div></div>
+      </div>
+      <div class="actions" style="margin-top:16px">
+        <form method="post" action="/accounts/{{ account.id }}/password">
+          <input type="hidden" name="csrf_token" value="{{ csrf }}">
+          <button class="oc-btn oc-btn--neutral oc-btn--sm">reset password</button>
+        </form>
+        <form method="post" action="/accounts/{{ account.id }}/toggle">
+          <input type="hidden" name="csrf_token" value="{{ csrf }}">
+          <button class="oc-btn oc-btn--neutral oc-btn--sm">{{ 'disable login' if account.enabled else 'enable login' }}</button>
+        </form>
+        <form method="post" action="/accounts/{{ account.id }}/delete"
+              onsubmit="return confirm('delete {{ account.email }} and its {{ configs | length }} configurations? their keys are erased')">
+          <input type="hidden" name="csrf_token" value="{{ csrf }}">
+          <button class="oc-btn oc-btn--ghost-danger oc-btn--sm">delete account</button>
+        </form>
+      </div>
+      <p class="oc-hint" style="margin-top:10px">
+        the account signs in at this panel and in the app with this email; deleting it
+        also deletes its configurations.
+      </p>
+    </div>
+  </section>
+</div>
+
+<script>
+function rel(ts) {
+  if (!ts || Number(ts) <= 0) return 'no data';
+  const d = Math.floor(Date.now() / 1000 - Number(ts));
+  if (d < 60) return d + 's ago';
+  if (d < 3600) return Math.floor(d / 60) + 'm ago';
+  if (d < 86400) return Math.floor(d / 3600) + 'h ago';
+  return Math.floor(d / 86400) + 'd ago';
+}
+for (const el of document.querySelectorAll('[data-hs]')) el.textContent = rel(el.dataset.hs);
+kaskadAutoRefresh(30);
+</script>
+{% endblock %}

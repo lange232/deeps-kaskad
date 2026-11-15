@@ -56,6 +56,8 @@ ANDROID_APK = Path(os.environ.get("KASKAD_ANDROID_APK", "/var/lib/kaskad/app.apk
 COOKIE = "kaskad_session"
 SESSION_TTL = auth.SESSION_TTL
 NAME_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,31}$")
+# Configurations per account unless the administrator sets a personal value.
+DEFAULT_MAX_CONFIGS = 5
 
 def human_ts(value) -> str:
     if not value:
@@ -91,10 +93,18 @@ def db():
 def init_db() -> None:
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     with db() as conn:
+        existing = {
+            r[0] for r in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'"
+            )
+        }
         conn.executescript(
             """
+            -- A row is one configuration (one WireGuard peer), not a device
+            -- or an account: an account can own several of them.
             CREATE TABLE IF NOT EXISTS clients (
                 id INTEGER PRIMARY KEY,
+                account_id INTEGER,
                 name TEXT UNIQUE NOT NULL,
                 ip TEXT UNIQUE NOT NULL,
                 public_key TEXT NOT NULL,
@@ -104,6 +114,24 @@ def init_db() -> None:
                 created_at TEXT NOT NULL,
                 internet INTEGER NOT NULL DEFAULT 1,
                 table_num INTEGER NOT NULL DEFAULT 0
+            );
+            -- The account is the email. It owns configurations and the access
+            -- to exits; a configuration only keeps its own order.
+            CREATE TABLE IF NOT EXISTS accounts (
+                id INTEGER PRIMARY KEY,
+                email TEXT NOT NULL UNIQUE,
+                password_hash TEXT NOT NULL,
+                enabled INTEGER NOT NULL DEFAULT 1,
+                token_version INTEGER NOT NULL DEFAULT 1,
+                max_configs INTEGER,
+                last_login TEXT,
+                created_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS account_exits (
+                account_id INTEGER NOT NULL,
+                exit_id INTEGER NOT NULL,
+                priority INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY (account_id, exit_id)
             );
             CREATE TABLE IF NOT EXISTS client_exits (
                 client_id INTEGER NOT NULL,
@@ -141,16 +169,6 @@ def init_db() -> None:
                 action TEXT NOT NULL,
                 detail TEXT
             );
-            CREATE TABLE IF NOT EXISTS users (
-                id INTEGER PRIMARY KEY,
-                client_id INTEGER NOT NULL UNIQUE,
-                email TEXT NOT NULL UNIQUE,
-                password_hash TEXT NOT NULL,
-                enabled INTEGER NOT NULL DEFAULT 1,
-                token_version INTEGER NOT NULL DEFAULT 1,
-                last_login TEXT,
-                created_at TEXT NOT NULL
-            );
             CREATE TABLE IF NOT EXISTS sessions (
                 jti TEXT PRIMARY KEY,
                 role TEXT NOT NULL,
@@ -166,10 +184,10 @@ def init_db() -> None:
             );
             """
         )
-        migrate(conn)
+        migrate(conn, existing)
 
 
-def migrate(conn: sqlite3.Connection) -> None:
+def migrate(conn: sqlite3.Connection, existing: set[str]) -> None:
     """Brings the schema up to date for databases created by older versions."""
     cols = {r[1] for r in conn.execute("PRAGMA table_info(exits)")}
     for name, ddl in (
@@ -187,6 +205,20 @@ def migrate(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE clients ADD COLUMN internet INTEGER NOT NULL DEFAULT 1")
     if "table_num" not in cols:
         conn.execute("ALTER TABLE clients ADD COLUMN table_num INTEGER NOT NULL DEFAULT 0")
+    # Configurations created before accounts existed belong to nobody: the
+    # administrator re-creates the accounts and their configurations by hand.
+    if "account_id" not in cols:
+        conn.execute("ALTER TABLE clients ADD COLUMN account_id INTEGER")
+    # First start on an old database: accounts replace users and account ids
+    # can collide with old users ids, so a session from before the upgrade
+    # must not sign in as a freshly created account.
+    if "accounts" not in existing:
+        conn.execute("DELETE FROM sessions")
+    if setting("default_max_configs", conn) is None:
+        conn.execute(
+            "INSERT INTO settings (key, value) VALUES ('default_max_configs', ?)",
+            (str(DEFAULT_MAX_CONFIGS),),
+        )
 
     # Table numbers are allocated once and stored: ids are reused after a
     # delete, and computing 1000 + id would eventually collide with the
@@ -210,6 +242,10 @@ def migrate(conn: sqlite3.Connection) -> None:
             f"DELETE FROM {table} WHERE client_id NOT IN (SELECT id FROM clients) "
             "OR exit_id NOT IN (SELECT id FROM exits)"
         )
+    conn.execute(
+        "DELETE FROM account_exits WHERE account_id NOT IN (SELECT id FROM accounts) "
+        "OR exit_id NOT IN (SELECT id FROM exits)"
+    )
 
     # One table per object across both kinds: duplicates would make a client
     # and a routed exit fight over the same routes. The registry is rebuilt
@@ -648,7 +684,7 @@ def revoke_user_sessions(uid: int) -> None:
     with db() as conn:
         conn.execute("UPDATE sessions SET revoked = 1 WHERE uid = ?", (uid,))
         conn.execute(
-            "UPDATE users SET token_version = token_version + 1 WHERE id = ?", (uid,)
+            "UPDATE accounts SET token_version = token_version + 1 WHERE id = ?", (uid,)
         )
 
 
@@ -677,49 +713,27 @@ def require_admin(request: Request) -> str:
     return token
 
 
-def user_row(uid: int):
+def account_row(aid: int):
     with db() as conn:
-        return conn.execute(
-            "SELECT u.id AS uid, u.email, u.password_hash, u.enabled AS account_enabled, "
-            "u.token_version, u.last_login, u.client_id, "
-            "c.name AS client_name, c.ip AS client_ip, c.enabled AS client_enabled, "
-            "c.internet, c.public_key, c.private_key, c.preshared_key "
-            "FROM users u JOIN clients c ON c.id = u.client_id WHERE u.id = ?",
-            (uid,),
-        ).fetchone()
+        return conn.execute("SELECT * FROM accounts WHERE id = ?", (aid,)).fetchone()
 
 
 def require_user(request: Request) -> tuple[str, object]:
-    """Returns (session token, row with the user account and its client)."""
+    """Returns (session token, account row)."""
     token = request.cookies.get(COOKIE)
     data = session_data(token)
     if not data or not session_alive(data):
         _redirect("/login")
     if data["role"] != "user":
         _redirect("/")
-    row = user_row(int(data.get("uid", 0)))
+    row = account_row(int(data.get("uid", 0)))
     if (
         not row
-        or not row["account_enabled"]
-        or not row["client_enabled"]
+        or not row["enabled"]
         or row["token_version"] != data.get("tv")
     ):
         _redirect("/login")
     return token, row
-
-
-def user_client(row) -> dict:
-    """Client row shaped like the one from the clients table, for /me."""
-    return {
-        "id": row["client_id"],
-        "name": row["client_name"],
-        "ip": row["client_ip"],
-        "enabled": row["client_enabled"],
-        "internet": row["internet"],
-        "public_key": row["public_key"],
-        "private_key": row["private_key"],
-        "preshared_key": row["preshared_key"],
-    }
 
 
 RATE_WINDOW = 300
@@ -885,9 +899,33 @@ def remove_exit(row) -> None:
     path.unlink(missing_ok=True)
 
 
-def client_rows():
+def config_rows():
     with db() as conn:
         return conn.execute("SELECT * FROM clients ORDER BY ip").fetchall()
+
+
+def config_row(cid: int):
+    with db() as conn:
+        return conn.execute("SELECT * FROM clients WHERE id = ?", (cid,)).fetchone()
+
+
+def account_configs(aid: int):
+    with db() as conn:
+        return conn.execute(
+            "SELECT * FROM clients WHERE account_id = ? ORDER BY id", (aid,)
+        ).fetchall()
+
+
+def max_configs_for(account) -> int:
+    """The per-account override, or the server default from settings."""
+    value = account["max_configs"]
+    if value is not None:
+        return max(1, int(value))
+    raw = setting("default_max_configs")
+    try:
+        return max(1, int(raw))
+    except (TypeError, ValueError):
+        return DEFAULT_MAX_CONFIGS
 
 
 def ip_free(net_cidr: str, taken: set[str]) -> str:
@@ -900,7 +938,26 @@ def ip_free(net_cidr: str, taken: set[str]) -> str:
     raise RuntimeError("no free addresses left")
 
 
-def client_exits(cl) -> list:
+def account_exits(aid: int, mode: str | None = None) -> list:
+    """Exits granted to an account, in the account's order."""
+    sql = (
+        "SELECT e.*, ae.priority AS choice FROM account_exits ae "
+        "JOIN exits e ON e.id = ae.exit_id "
+        "WHERE ae.account_id = ? AND e.enabled = 1"
+    )
+    params: list = [aid]
+    if mode:
+        sql += " AND e.mode = ?"
+        params.append(mode)
+    sql += " ORDER BY ae.priority, e.priority, e.id"
+    with db() as conn:
+        return conn.execute(sql, params).fetchall()
+
+
+def config_routed_exits(cl) -> list:
+    """Subnet exits of a configuration: from its account, or legacy grants."""
+    if cl["account_id"]:
+        return account_exits(int(cl["account_id"]), "routes")
     with db() as conn:
         return conn.execute(
             "SELECT e.* FROM client_exits ce "
@@ -911,8 +968,30 @@ def client_exits(cl) -> list:
         ).fetchall()
 
 
-def client_internet_exits(cl) -> list:
-    """Internet exits granted to the client, in the order the user chose."""
+def config_internet_exits(cl) -> list:
+    """Internet exits a configuration may use, in the configuration's order.
+
+    Access comes from the account; the order is a per-configuration copy that
+    is created with the configuration and can be changed or reset.
+    """
+    if cl["account_id"]:
+        granted = {
+            e["id"]: e for e in account_exits(int(cl["account_id"]), "internet")
+        }
+        with db() as conn:
+            order = [
+                r["exit_id"] for r in conn.execute(
+                    "SELECT exit_id FROM client_internet_exits "
+                    "WHERE client_id = ? ORDER BY priority, exit_id",
+                    (cl["id"],),
+                )
+            ]
+        items = [granted[eid] for eid in order if eid in granted]
+        items += [
+            e for e in sorted(granted.values(), key=lambda x: (x["priority"], x["id"]))
+            if e["id"] not in order
+        ]
+        return items
     with db() as conn:
         return conn.execute(
             "SELECT e.*, ce.priority AS choice "
@@ -924,6 +1003,13 @@ def client_internet_exits(cl) -> list:
         ).fetchall()
 
 
+def config_has_internet(cl) -> bool:
+    """Account grants decide; an account-less configuration keeps its flag."""
+    if cl["account_id"]:
+        return bool(config_internet_exits(cl))
+    return bool(cl["internet"])
+
+
 def internet_exits_rows() -> list:
     with db() as conn:
         return conn.execute(
@@ -931,11 +1017,53 @@ def internet_exits_rows() -> list:
         ).fetchall()
 
 
-def client_access(c: dict, cl) -> tuple[str, list[str]]:
-    """AllowedIPs and DNS for the client, depending on its class."""
+def sync_account_configs(conn, aid: int, reset_order: bool = False) -> None:
+    """Keeps per-configuration order rows in step with the account's grants.
+
+    A newly granted exit is appended to every configuration of the account;
+    a revoked one disappears. With reset_order the account's order wins
+    outright, which is what the "apply to all" button does.
+    """
+    granted = [
+        r["exit_id"] for r in conn.execute(
+            "SELECT ae.exit_id FROM account_exits ae "
+            "JOIN exits e ON e.id = ae.exit_id "
+            "WHERE ae.account_id = ? AND e.mode = 'internet' "
+            "ORDER BY ae.priority, e.priority, e.id",
+            (aid,),
+        )
+    ]
+    for row in conn.execute(
+        "SELECT id FROM clients WHERE account_id = ?", (aid,)
+    ).fetchall():
+        current = [
+            r["exit_id"] for r in conn.execute(
+                "SELECT exit_id FROM client_internet_exits WHERE client_id = ? "
+                "ORDER BY priority, exit_id",
+                (row["id"],),
+            )
+        ]
+        if reset_order:
+            order = list(granted)
+        else:
+            order = [eid for eid in current if eid in granted]
+            order += [eid for eid in granted if eid not in order]
+        conn.execute(
+            "DELETE FROM client_internet_exits WHERE client_id = ?", (row["id"],)
+        )
+        for position, eid in enumerate(order):
+            conn.execute(
+                "INSERT INTO client_internet_exits (client_id, exit_id, priority) "
+                "VALUES (?, ?, ?)",
+                (row["id"], eid, (position + 1) * 10),
+            )
+
+
+def config_access(c: dict, cl) -> tuple[str, list[str]]:
+    """AllowedIPs and DNS for the configuration, depending on its class."""
     networks: list[str] = []
     dns: list[str] = []
-    for ex in client_exits(cl):
+    for ex in config_routed_exits(cl):
         for cidr in (ex["routes"] or "").split(","):
             cidr = cidr.strip()
             if cidr and cidr not in networks:
@@ -945,15 +1073,15 @@ def client_access(c: dict, cl) -> tuple[str, list[str]]:
             if addr and addr not in dns:
                 dns.append(addr)
 
-    if cl["internet"]:
+    if config_has_internet(cl):
         return "0.0.0.0/0", [d.strip() for d in c["dns"].split(",") if d.strip()]
     if not networks:
-        raise ValueError("client has neither internet nor subnets assigned")
+        raise ValueError("configuration has neither internet nor subnets assigned")
     return ", ".join(networks), dns[:2]
 
 
-def client_conf(c: dict, cl) -> str:
-    allowed, dns = client_access(c, cl)
+def config_conf(c: dict, cl) -> str:
+    allowed, dns = config_access(c, cl)
     lines = [
         "[Interface]",
         f"PrivateKey = {cl['private_key']}",
@@ -986,16 +1114,17 @@ def mask_conf(text: str) -> str:
     return "\n".join(out)
 
 
-def client_view(cl, live: dict, assigned=None) -> dict:
+def config_view(cl, live: dict, assigned=None) -> dict:
     st = live.get(cl["public_key"], {})
     if assigned is None:
-        assigned = client_exits(cl)
+        assigned = config_routed_exits(cl)
     return {
         "id": cl["id"],
+        "account_id": cl["account_id"],
         "name": cl["name"],
         "ip": cl["ip"],
         "enabled": bool(cl["enabled"]),
-        "internet": bool(cl["internet"]),
+        "internet": config_has_internet(cl),
         "exits": [e["name"] for e in assigned],
         "handshake": st.get("handshake", 0),
         "rx": st.get("rx", 0),
@@ -1090,15 +1219,12 @@ def login(request: Request, email: str = Form(""), password: str = Form(...)):
         row = None
         with db() as conn:
             row = conn.execute(
-                "SELECT u.*, c.enabled AS client_enabled FROM users u "
-                "JOIN clients c ON c.id = u.client_id WHERE u.email = ?",
-                (email,),
+                "SELECT * FROM accounts WHERE email = ?", (email,)
             ).fetchone()
         ok = bool(
             row
             and check_password(password, row["password_hash"])
             and row["enabled"]
-            and row["client_enabled"]
         )
         if not row:
             _burn_hash(password)
@@ -1107,7 +1233,8 @@ def login(request: Request, email: str = Form(""), password: str = Form(...)):
             tv = int(row["token_version"])
             with db() as conn:
                 conn.execute(
-                    "UPDATE users SET last_login = ? WHERE id = ?", (_now_iso(), uid)
+                    "UPDATE accounts SET last_login = ? WHERE id = ?",
+                    (_now_iso(), uid),
                 )
             location = "/me"
             role = "user"
@@ -1184,7 +1311,7 @@ def overview(request: Request, err: str | None = None, ok: str | None = None):
     token = require_admin(request)
     c = cfg()
     live = iface_dump(c["iface"])["peers"]
-    clients = [client_view(cl, live) for cl in client_rows()]
+    configs = [config_view(cl, live) for cl in config_rows()]
     status = read_status()
     active = run_dir("active-exit")
     manual = setting("manual_exit") or ""
@@ -1194,14 +1321,14 @@ def overview(request: Request, err: str | None = None, ok: str | None = None):
             "SELECT ts, action, detail FROM audit ORDER BY id DESC LIMIT 6"
         ).fetchall()
     now = int(time.time())
-    online = sum(1 for cl in clients if cl["handshake"] and now - cl["handshake"] < 180)
-    rx = sum(cl["rx"] for cl in clients)
-    tx = sum(cl["tx"] for cl in clients)
+    online = sum(1 for cl in configs if cl["handshake"] and now - cl["handshake"] < 180)
+    rx = sum(cl["rx"] for cl in configs)
+    tx = sum(cl["tx"] for cl in configs)
     active_exit = next((e for e in exits if e["active"]), None)
     return render_page(
         request, "overview.html", "overview",
         csrf=csrf(token), err=err, ok=ok,
-        clients=clients, exits=exits, active_exit=active, manual_exit=manual,
+        clients=configs, exits=exits, active_exit=active, manual_exit=manual,
         active_row=active_exit, online=online, rx=rx, tx=tx,
         status=services(), events=events, net=c["net"],
     )
@@ -1249,8 +1376,12 @@ def exit_page(request: Request, eid: int, err: str | None = None, ok: str | None
         row = conn.execute("SELECT * FROM exits WHERE id = ?", (eid,)).fetchone()
         assigned = conn.execute(
             "SELECT c.* FROM client_exits ce JOIN clients c ON c.id = ce.client_id "
-            "WHERE ce.exit_id = ? ORDER BY c.name",
-            (eid,),
+            "WHERE ce.exit_id = ? AND c.account_id IS NULL "
+            "UNION "
+            "SELECT c.* FROM account_exits ae JOIN clients c ON c.account_id = ae.account_id "
+            "WHERE ae.exit_id = ? "
+            "ORDER BY name",
+            (eid, eid),
         ).fetchall()
     if not row:
         raise HTTPException(status_code=404)
@@ -1502,20 +1633,139 @@ def exit_auto(request: Request, csrf_token: str = Form(...)):
     return RedirectResponse("/exits?ok=automatic+selection", status_code=303)
 
 
-# ---------------------------------------------------------------- clients
+# ---------------------------------------------------------------- configurations
 
-@app.get("/clients", response_class=HTMLResponse)
-def clients_page(request: Request, q: str | None = None):
+def config_limit_error(account) -> str:
+    """Empty string when the account may get another configuration."""
+    n = len(account_configs(int(account["id"])))
+    limit = max_configs_for(account)
+    if n >= limit:
+        return (
+            f"this account already has {n} of {limit} allowed configurations"
+        )
+    return ""
+
+
+def spawn_config(conn, account, name: str = "") -> int:
+    """Creates one configuration with server-generated keys in this transaction.
+
+    The caller commits: the peer must exist in awg0.conf by the time the row
+    is visible, so a failed apply rolls the configuration back.
+    """
+    c = cfg()
+    rows = conn.execute("SELECT ip, name FROM clients").fetchall()
+    taken_ips = {r["ip"] for r in rows}
+    taken_names = {r["name"] for r in rows}
+    name = name.strip()
+    if name:
+        if not NAME_RE.match(name):
+            raise ValueError(
+                "name: latin letters, digits, dot, dash; up to 32 characters"
+            )
+        if name in taken_names:
+            raise ValueError("a configuration with this name already exists")
+    else:
+        local = re.sub(r"[^a-z0-9]+", "-", account["email"].split("@")[0].lower())
+        local = local.strip("-") or "config"
+        n = 1
+        while f"{local}-{n}" in taken_names:
+            n += 1
+        name = f"{local}-{n}"
+    ip = ip_free(c["net"], taken_ips)
+    private = genkey()
+    cur = conn.execute(
+        "INSERT INTO clients (account_id, name, ip, public_key, private_key, "
+        "preshared_key, enabled, created_at, internet, table_num) "
+        "VALUES (?, ?, ?, ?, ?, ?, 1, ?, 1, 0)",
+        (account["id"], name, ip, pubkey(private), private, genpsk(), _now_iso()),
+    )
+    cid = cur.lastrowid
+    conn.execute(
+        "UPDATE clients SET table_num = ? WHERE id = ?",
+        (routing.claim_table(conn, "client", cid), cid),
+    )
+    # A new configuration starts with the account's order at this moment.
+    granted = [
+        r["exit_id"] for r in conn.execute(
+            "SELECT ae.exit_id FROM account_exits ae "
+            "JOIN exits e ON e.id = ae.exit_id "
+            "WHERE ae.account_id = ? AND e.mode = 'internet' "
+            "ORDER BY ae.priority, e.priority, e.id",
+            (account["id"],),
+        )
+    ]
+    for position, eid in enumerate(granted):
+        conn.execute(
+            "INSERT INTO client_internet_exits (client_id, exit_id, priority) "
+            "VALUES (?, ?, ?)",
+            (cid, eid, (position + 1) * 10),
+        )
+    apply_conf(c, conn)
+    return cid
+
+
+def reissue_keys(conn, cl) -> None:
+    """New keys for one configuration; the old config stops working."""
+    private = genkey()
+    conn.execute(
+        "UPDATE clients SET private_key = ?, public_key = ?, preshared_key = ? "
+        "WHERE id = ?",
+        (private, pubkey(private), genpsk(), cl["id"]),
+    )
+    apply_conf(cfg(), conn)
+
+
+def move_in_order(order: list[int], exit_id: int, direction: str) -> list[int]:
+    """Swaps one entry with its neighbour; a foreign exit is a 404."""
+    if exit_id not in order:
+        raise HTTPException(status_code=404)
+    index = order.index(exit_id)
+    target = index - 1 if direction == "up" else index + 1
+    if 0 <= target < len(order):
+        order[index], order[target] = order[target], order[index]
+    return order
+
+
+def write_config_order(conn, cid: int, order: list[int]) -> None:
+    conn.execute(
+        "DELETE FROM client_internet_exits WHERE client_id = ?", (cid,)
+    )
+    for position, eid in enumerate(order):
+        conn.execute(
+            "INSERT INTO client_internet_exits (client_id, exit_id, priority) "
+            "VALUES (?, ?, ?)",
+            (cid, eid, (position + 1) * 10),
+        )
+
+
+def reset_config_order(conn, cl) -> None:
+    """Puts one configuration back on the account's order."""
+    if not cl["account_id"]:
+        return
+    granted = [
+        r["exit_id"] for r in conn.execute(
+            "SELECT ae.exit_id FROM account_exits ae "
+            "JOIN exits e ON e.id = ae.exit_id "
+            "WHERE ae.account_id = ? AND e.mode = 'internet' "
+            "ORDER BY ae.priority, e.priority, e.id",
+            (cl["account_id"],),
+        )
+    ]
+    write_config_order(conn, cl["id"], granted)
+
+
+@app.get("/configs", response_class=HTMLResponse)
+def configs_page(request: Request, q: str | None = None):
     token = require_admin(request)
     live = iface_dump(cfg()["iface"])["peers"]
     with db() as conn:
         accounts = {
-            r["client_id"]: r
-            for r in conn.execute("SELECT client_id, email, enabled FROM users")
+            r["id"]: r
+            for r in conn.execute("SELECT id, email, enabled FROM accounts")
         }
-    items = [client_view(cl, live) for cl in client_rows()]
+    items = [config_view(cl, live) for cl in config_rows()]
     for c in items:
-        account = accounts.get(c["id"])
+        account = accounts.get(c["account_id"])
         c["account_email"] = account["email"] if account else ""
         c["account_enabled"] = bool(account["enabled"]) if account else False
     if q:
@@ -1527,210 +1777,107 @@ def clients_page(request: Request, q: str | None = None):
             or needle in c["account_email"].lower()
         ]
     return render_page(
-        request, "clients.html", "clients",
-        csrf=csrf(token), clients=items, q=q or "",
+        request, "configs.html", "configs",
+        csrf=csrf(token), configs=items, q=q or "",
     )
 
 
-@app.get("/clients/new", response_class=HTMLResponse)
-def client_new_page(request: Request, err: str | None = None):
+@app.get("/configs/new", response_class=HTMLResponse)
+def config_new_page(request: Request, err: str | None = None):
     token = require_admin(request)
-    routed = [e for e in exits_rows() if e["mode"] == "routes" and e["enabled"]]
+    with db() as conn:
+        rows = conn.execute("SELECT * FROM accounts ORDER BY email").fetchall()
+        counts = {
+            r["account_id"]: r["n"] for r in conn.execute(
+                "SELECT account_id, count(*) AS n FROM clients "
+                "WHERE account_id IS NOT NULL GROUP BY account_id"
+            )
+        }
+    accounts = [
+        {
+            "id": a["id"],
+            "email": a["email"],
+            "limit": max_configs_for(a),
+            "n": counts.get(a["id"], 0),
+        }
+        for a in rows
+    ]
     return render_page(
-        request, "client_new.html", "clients",
-        csrf=csrf(token), err=err, routed=routed,
+        request, "config_new.html", "configs",
+        csrf=csrf(token), err=err, accounts=accounts,
     )
 
 
-@app.get("/clients/{cid}", response_class=HTMLResponse)
-def client_page(
+@app.post("/configs")
+def create_config(
+    request: Request,
+    account_id: int = Form(...),
+    name: str = Form(""),
+    csrf_token: str = Form(...),
+):
+    token = require_admin(request)
+    if not hmac.compare_digest(csrf_token, csrf(token)):
+        raise HTTPException(status_code=400, detail="csrf")
+    account = account_row(account_id)
+    if not account:
+        raise HTTPException(status_code=404)
+    problem = config_limit_error(account)
+    if problem:
+        return RedirectResponse("/configs/new?err=" + quote(problem), status_code=303)
+    try:
+        with db() as conn:
+            cid = spawn_config(conn, account, name)
+    except (RuntimeError, ValueError) as exc:
+        message = (
+            apply_error_message(exc, "nothing was saved")
+            if isinstance(exc, RuntimeError) else str(exc)
+        )
+        return RedirectResponse("/configs/new?err=" + quote(message), status_code=303)
+    audit("config_added", f"{account['email']} {name or cid}")
+    apply_routing()
+    return RedirectResponse(f"/configs/{cid}?ok=configuration+created", status_code=303)
+
+
+@app.get("/configs/{cid}", response_class=HTMLResponse)
+def config_page(
     request: Request,
     cid: int,
     err: str | None = None,
     ok: str | None = None,
-    newpw: str | None = None,
 ):
     token = require_admin(request)
     c = cfg()
-    with db() as conn:
-        cl = conn.execute("SELECT * FROM clients WHERE id = ?", (cid,)).fetchone()
+    cl = config_row(cid)
     if not cl:
         raise HTTPException(status_code=404)
-    assigned = {e["id"]: e for e in client_exits(cl)}
-    routed = [e for e in exits_rows() if e["mode"] == "routes" and e["enabled"]]
-    granted = {e["id"] for e in client_internet_exits(cl)}
+    account = account_row(int(cl["account_id"])) if cl["account_id"] else None
     live = iface_dump(c["iface"])["peers"]
-    view = client_view(cl, live, list(assigned.values()))
+    view = config_view(cl, live)
     status = read_status()
     client_rtt = (status.get("client_ping") or {}).get(cl["ip"])
     latency = {
         iface: info.get("rtt_ms")
         for iface, info in (status.get("exits") or {}).items()
     }
+    alive = {
+        iface: bool(info.get("alive"))
+        for iface, info in (status.get("exits") or {}).items()
+    }
     try:
-        conf = mask_conf(client_conf(c, cl))
+        conf = mask_conf(config_conf(c, cl))
     except ValueError:
         conf = None
     return render_page(
-        request, "client_detail.html", "clients",
-        csrf=csrf(token), err=err, ok=ok, cl=view, raw=cl,
-        routed=routed, assigned=set(assigned.keys()), conf=conf,
-        internet_exits=internet_exits_rows(), granted=granted,
-        latency=latency, client_rtt=client_rtt,
-        account=client_account(cid), newpw=pop_secret(newpw),
+        request, "config_detail.html", "configs",
+        csrf=csrf(token), err=err, ok=ok, config=view,
+        account=account, routed=config_routed_exits(cl),
+        internet_exits=config_internet_exits(cl),
+        latency=latency, alive=alive, client_rtt=client_rtt, conf=conf,
     )
 
 
-@app.post("/clients")
-def create_client(
-    request: Request,
-    name: str = Form(...),
-    email: str = Form(...),
-    password: str = Form(""),
-    internet: str = Form(""),
-    exits: list[int] = Form([]),
-    csrf_token: str = Form(...),
-):
-    token = require_admin(request)
-    if not hmac.compare_digest(csrf_token, csrf(token)):
-        raise HTTPException(status_code=400, detail="csrf")
-    name = name.strip()
-
-    def fail(msg: str):
-        return RedirectResponse("/clients/new?err=" + quote(msg), status_code=303)
-
-    if not NAME_RE.match(name):
-        return fail("name: latin letters, digits, dot, dash; up to 32 characters")
-
-    email = normalize_email(email)
-    problem = email_error(email)
-    if problem:
-        return fail(problem)
-    password = password or secrets.token_urlsafe(12)
-    problem = password_error(password)
-    if problem:
-        return fail(problem)
-    with db() as conn:
-        if conn.execute("SELECT 1 FROM users WHERE email = ?", (email,)).fetchone():
-            return fail("email is already used by another account")
-
-    c = cfg()
-    rows = client_rows()
-    if any(r["name"] == name for r in rows):
-        return fail("a client with this name already exists")
-    try:
-        ip = ip_free(c["net"], {r["ip"] for r in rows})
-    except RuntimeError as exc:
-        return fail(str(exc))
-
-    private = genkey()
-    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
-    try:
-        with db() as conn:
-            cur = conn.execute(
-                "INSERT INTO clients (name, ip, public_key, private_key, preshared_key, enabled, created_at, internet, table_num) "
-                "VALUES (?, ?, ?, ?, ?, 1, ?, ?, 0)",
-                (name, ip, pubkey(private), private, genpsk(), now, 1 if internet else 0),
-            )
-            cid = cur.lastrowid
-            table_num = routing.claim_table(conn, "client", cid)
-            conn.execute(
-                "UPDATE clients SET table_num = ? WHERE id = ?", (table_num, cid)
-            )
-            for eid in exits:
-                conn.execute("INSERT OR IGNORE INTO client_exits (client_id, exit_id) VALUES (?, ?)", (cid, eid))
-            conn.execute(
-                "INSERT INTO users (client_id, email, password_hash, enabled, token_version, created_at) "
-                "VALUES (?, ?, ?, 1, 1, ?)",
-                (cid, email, hash_password(password), now),
-            )
-            # The tunnel must carry the new peer before the rows are committed;
-            # a failed apply rolls the client, its account and its grants back.
-            apply_conf(c, conn)
-    except RuntimeError as exc:
-        print(f"client {name}: {exc}", flush=True)
-        return fail(apply_error_message(exc, "nothing was saved"))
-    audit("client_added", f"{name} {ip}")
-    audit("account_created", f"{name} {email}")
-    apply_routing()
-    return RedirectResponse(
-        f"/clients/{cid}?ok=client+created&newpw={quote(stash_secret(password))}",
-        status_code=303,
-    )
-
-
-@app.post("/clients/{cid}/access")
-def client_access_update(
-    request: Request,
-    cid: int,
-    internet: str = Form(""),
-    exits: list[int] = Form([]),
-    csrf_token: str = Form(...),
-):
-    token = require_admin(request)
-    if not hmac.compare_digest(csrf_token, csrf(token)):
-        raise HTTPException(status_code=400, detail="csrf")
-    with db() as conn:
-        row = conn.execute("SELECT * FROM clients WHERE id = ?", (cid,)).fetchone()
-        if not row:
-            raise HTTPException(status_code=404)
-        conn.execute("UPDATE clients SET internet = ? WHERE id = ?", (1 if internet else 0, cid))
-        conn.execute("DELETE FROM client_exits WHERE client_id = ?", (cid,))
-        for eid in exits:
-            conn.execute("INSERT OR IGNORE INTO client_exits (client_id, exit_id) VALUES (?, ?)", (cid, eid))
-    audit("client_updated", row["name"])
-    apply_routing()
-    return RedirectResponse(f"/clients/{cid}?ok=access+updated", status_code=303)
-
-
-@app.post("/clients/{cid}/internet")
-def client_internet_update(
-    request: Request,
-    cid: int,
-    exits: list[int] = Form([]),
-    csrf_token: str = Form(...),
-):
-    token = require_admin(request)
-    if not hmac.compare_digest(csrf_token, csrf(token)):
-        raise HTTPException(status_code=400, detail="csrf")
-    with db() as conn:
-        row = conn.execute("SELECT * FROM clients WHERE id = ?", (cid,)).fetchone()
-        if not row:
-            raise HTTPException(status_code=404)
-        allowed = {
-            r["id"] for r in conn.execute(
-                "SELECT id FROM exits WHERE enabled = 1 AND mode = 'internet'"
-            )
-        }
-        wanted = {int(e) for e in exits if int(e) in allowed}
-        current = {
-            r["exit_id"]: r["priority"] for r in conn.execute(
-                "SELECT exit_id, priority FROM client_internet_exits WHERE client_id = ?",
-                (cid,),
-            )
-        }
-        for exit_id in list(current):
-            if exit_id not in wanted:
-                conn.execute(
-                    "DELETE FROM client_internet_exits WHERE client_id = ? AND exit_id = ?",
-                    (cid, exit_id),
-                )
-        next_priority = max(current.values(), default=0) + 10
-        for exit_id in sorted(wanted):
-            if exit_id in current:
-                continue
-            conn.execute(
-                "INSERT INTO client_internet_exits (client_id, exit_id, priority) VALUES (?, ?, ?)",
-                (cid, exit_id, next_priority),
-            )
-            next_priority += 10
-    audit("client_internet_access", f"{row['name']} exits={sorted(wanted)}")
-    apply_routing()
-    return RedirectResponse(f"/clients/{cid}?ok=internet+exits+updated", status_code=303)
-
-
-@app.post("/clients/{cid}/toggle")
-def toggle_client(request: Request, cid: int, csrf_token: str = Form(...)):
+@app.post("/configs/{cid}/toggle")
+def toggle_config(request: Request, cid: int, csrf_token: str = Form(...)):
     token = require_admin(request)
     if not hmac.compare_digest(csrf_token, csrf(token)):
         raise HTTPException(status_code=400, detail="csrf")
@@ -1740,22 +1887,23 @@ def toggle_client(request: Request, cid: int, csrf_token: str = Form(...)):
             if not row:
                 raise HTTPException(status_code=404)
             conn.execute(
-                "UPDATE clients SET enabled = ? WHERE id = ?", (0 if row["enabled"] else 1, cid)
+                "UPDATE clients SET enabled = ? WHERE id = ?",
+                (0 if row["enabled"] else 1, cid),
             )
             apply_conf(cfg(), conn)
     except RuntimeError as exc:
-        print(f"client {cid}: {exc}", flush=True)
+        print(f"config {cid}: {exc}", flush=True)
         return RedirectResponse(
-            f"/clients/{cid}?err={quote(apply_error_message(exc, 'nothing changed'))}",
+            f"/configs/{cid}?err={quote(apply_error_message(exc, 'nothing changed'))}",
             status_code=303,
         )
-    audit("client_toggle", f"{row['name']} -> {0 if row['enabled'] else 1}")
+    audit("config_toggle", f"{row['name']} -> {0 if row['enabled'] else 1}")
     apply_routing()
-    return RedirectResponse(f"/clients/{cid}", status_code=303)
+    return RedirectResponse(f"/configs/{cid}", status_code=303)
 
 
-@app.post("/clients/{cid}/delete")
-def delete_client(request: Request, cid: int, csrf_token: str = Form(...)):
+@app.post("/configs/{cid}/delete")
+def delete_config(request: Request, cid: int, csrf_token: str = Form(...)):
     token = require_admin(request)
     if not hmac.compare_digest(csrf_token, csrf(token)):
         raise HTTPException(status_code=400, detail="csrf")
@@ -1764,30 +1912,86 @@ def delete_client(request: Request, cid: int, csrf_token: str = Form(...)):
             row = conn.execute("SELECT * FROM clients WHERE id = ?", (cid,)).fetchone()
             if not row:
                 raise HTTPException(status_code=404)
-            conn.execute(
-                "UPDATE sessions SET revoked = 1 WHERE uid IN "
-                "(SELECT id FROM users WHERE client_id = ?)", (cid,)
-            )
             routing.release_table(conn, "client", cid)
-            conn.execute("DELETE FROM users WHERE client_id = ?", (cid,))
             conn.execute("DELETE FROM clients WHERE id = ?", (cid,))
             conn.execute("DELETE FROM client_exits WHERE client_id = ?", (cid,))
             conn.execute("DELETE FROM client_internet_exits WHERE client_id = ?", (cid,))
             apply_conf(cfg(), conn)
     except RuntimeError as exc:
-        print(f"client {cid}: {exc}", flush=True)
+        print(f"config {cid}: {exc}", flush=True)
         return RedirectResponse(
-            f"/clients/{cid}?err={quote(apply_error_message(exc, 'nothing was deleted'))}",
+            f"/configs/{cid}?err={quote(apply_error_message(exc, 'nothing was deleted'))}",
             status_code=303,
         )
-    audit("client_deleted", row["name"])
+    audit("config_deleted", row["name"])
     apply_routing()
-    return RedirectResponse("/clients?ok=client+deleted", status_code=303)
+    return RedirectResponse("/configs?ok=configuration+deleted", status_code=303)
+
+
+@app.post("/configs/{cid}/reissue")
+def reissue_config(request: Request, cid: int, csrf_token: str = Form(...)):
+    token = require_admin(request)
+    if not hmac.compare_digest(csrf_token, csrf(token)):
+        raise HTTPException(status_code=400, detail="csrf")
+    cl = config_row(cid)
+    if not cl:
+        raise HTTPException(status_code=404)
+    try:
+        with db() as conn:
+            reissue_keys(conn, cl)
+    except RuntimeError as exc:
+        print(f"config {cid}: {exc}", flush=True)
+        return RedirectResponse(
+            f"/configs/{cid}?err={quote(apply_error_message(exc, 'the key was not changed'))}",
+            status_code=303,
+        )
+    audit("config_key_reissued", cl["name"])
+    apply_routing()
+    return RedirectResponse(f"/configs/{cid}?ok=key+reissued", status_code=303)
+
+
+@app.post("/configs/{cid}/order")
+def config_order_move(
+    request: Request,
+    cid: int,
+    exit_id: int = Form(...),
+    direction: str = Form(...),
+    csrf_token: str = Form(...),
+):
+    token = require_admin(request)
+    if not hmac.compare_digest(csrf_token, csrf(token)):
+        raise HTTPException(status_code=400, detail="csrf")
+    if direction not in ("up", "down"):
+        raise HTTPException(status_code=400, detail="direction")
+    cl = config_row(cid)
+    if not cl:
+        raise HTTPException(status_code=404)
+    order = [e["id"] for e in config_internet_exits(cl)]
+    with db() as conn:
+        write_config_order(conn, cid, move_in_order(order, exit_id, direction))
+    audit("config_exit_order", f"{cl['name']} {' '.join(str(e) for e in order)}")
+    apply_routing()
+    return RedirectResponse(f"/configs/{cid}?ok=exit+order+updated", status_code=303)
+
+
+@app.post("/configs/{cid}/order/reset")
+def config_order_reset(request: Request, cid: int, csrf_token: str = Form(...)):
+    token = require_admin(request)
+    if not hmac.compare_digest(csrf_token, csrf(token)):
+        raise HTTPException(status_code=400, detail="csrf")
+    cl = config_row(cid)
+    if not cl:
+        raise HTTPException(status_code=404)
+    with db() as conn:
+        reset_config_order(conn, cl)
+    audit("config_exit_order_reset", cl["name"])
+    apply_routing()
+    return RedirectResponse(f"/configs/{cid}?ok=order+reset+to+account", status_code=303)
 
 
 def conf_response(cl) -> PlainTextResponse:
     try:
-        body = client_conf(cfg(), cl)
+        body = config_conf(cfg(), cl)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     return PlainTextResponse(
@@ -1798,7 +2002,7 @@ def conf_response(cl) -> PlainTextResponse:
 
 def qr_response(cl) -> Response:
     try:
-        body = client_conf(cfg(), cl)
+        body = config_conf(cfg(), cl)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     with tempfile.NamedTemporaryFile("w", suffix=".conf", delete=False) as fh:
@@ -1817,21 +2021,19 @@ def qr_response(cl) -> Response:
     return Response(res.stdout, media_type="image/png")
 
 
-@app.get("/clients/{cid}/conf")
+@app.get("/configs/{cid}/conf")
 def download_conf(request: Request, cid: int):
     require_admin(request)
-    with db() as conn:
-        cl = conn.execute("SELECT * FROM clients WHERE id = ?", (cid,)).fetchone()
+    cl = config_row(cid)
     if not cl:
         raise HTTPException(status_code=404)
     return conf_response(cl)
 
 
-@app.get("/clients/{cid}/qr.png")
+@app.get("/configs/{cid}/qr.png")
 def qr(request: Request, cid: int):
     require_admin(request)
-    with db() as conn:
-        cl = conn.execute("SELECT * FROM clients WHERE id = ?", (cid,)).fetchone()
+    cl = config_row(cid)
     if not cl:
         raise HTTPException(status_code=404)
     return qr_response(cl)
@@ -1839,139 +2041,478 @@ def qr(request: Request, cid: int):
 
 # ---------------------------------------------------------------- accounts
 
-def client_account(cid: int):
+@app.get("/accounts", response_class=HTMLResponse)
+def accounts_page(request: Request, q: str | None = None):
+    token = require_admin(request)
     with db() as conn:
-        return conn.execute(
-            "SELECT * FROM users WHERE client_id = ?", (cid,)
-        ).fetchone()
+        rows = conn.execute("SELECT * FROM accounts ORDER BY email").fetchall()
+        counts = {
+            r["account_id"]: r["n"] for r in conn.execute(
+                "SELECT account_id, count(*) AS n FROM clients "
+                "WHERE account_id IS NOT NULL GROUP BY account_id"
+            )
+        }
+    items = [
+        {
+            "id": a["id"],
+            "email": a["email"],
+            "enabled": bool(a["enabled"]),
+            "limit": max_configs_for(a),
+            "max_configs": a["max_configs"],
+            "configs_n": counts.get(a["id"], 0),
+            "internet": bool(account_exits(int(a["id"]), "internet")),
+            "exits": [e["name"] for e in account_exits(int(a["id"]))],
+            "last_login": a["last_login"],
+        }
+        for a in rows
+    ]
+    if q:
+        needle = q.strip().lower()
+        items = [a for a in items if needle in a["email"].lower()]
+    return render_page(
+        request, "accounts.html", "accounts",
+        csrf=csrf(token), accounts=items, q=q or "",
+    )
 
 
-def account_redirect(cid: int, ok: str = "", err: str = "", secret: str = "") -> RedirectResponse:
-    params = []
-    if ok:
-        params.append("ok=" + quote(ok))
-    if err:
-        params.append("err=" + quote(err))
-    if secret:
-        params.append("newpw=" + quote(secret))
-    query = "?" + "&".join(params) if params else ""
-    return RedirectResponse(f"/clients/{cid}{query}", status_code=303)
+@app.get("/accounts/new", response_class=HTMLResponse)
+def account_new_page(request: Request, err: str | None = None):
+    token = require_admin(request)
+    return render_page(
+        request, "account_new.html", "accounts",
+        csrf=csrf(token), err=err, default_limit=setting("default_max_configs"),
+    )
 
 
-@app.post("/clients/{cid}/account")
-def account_create(
+@app.post("/accounts")
+def create_account(
     request: Request,
-    cid: int,
     email: str = Form(...),
     password: str = Form(""),
+    max_configs: str = Form(""),
     csrf_token: str = Form(...),
 ):
     token = require_admin(request)
     if not hmac.compare_digest(csrf_token, csrf(token)):
         raise HTTPException(status_code=400, detail="csrf")
-    with db() as conn:
-        cl = conn.execute("SELECT * FROM clients WHERE id = ?", (cid,)).fetchone()
-    if not cl:
-        raise HTTPException(status_code=404)
-    if client_account(cid):
-        return account_redirect(cid, err="this client already has an account")
+
+    def fail(msg: str):
+        return RedirectResponse("/accounts/new?err=" + quote(msg), status_code=303)
 
     email = normalize_email(email)
     problem = email_error(email)
     if problem:
-        return account_redirect(cid, err=problem)
+        return fail(problem)
     password = password or secrets.token_urlsafe(12)
     problem = password_error(password)
     if problem:
-        return account_redirect(cid, err=problem)
-
+        return fail(problem)
+    limit = None
+    if max_configs.strip():
+        try:
+            limit = int(max_configs)
+        except ValueError:
+            return fail("configurations limit must be a number")
+        if limit < 1:
+            return fail("configurations limit must be at least 1")
     try:
         with db() as conn:
-            conn.execute(
-                "INSERT INTO users (client_id, email, password_hash, enabled, token_version, created_at) "
-                "VALUES (?, ?, ?, 1, 1, ?)",
-                (cid, email, hash_password(password),
-                 datetime.now(timezone.utc).isoformat(timespec="seconds")),
+            cur = conn.execute(
+                "INSERT INTO accounts (email, password_hash, enabled, "
+                "token_version, max_configs, created_at) "
+                "VALUES (?, ?, 1, 1, ?, ?)",
+                (email, hash_password(password), limit, _now_iso()),
             )
+            aid = cur.lastrowid
     except sqlite3.IntegrityError:
-        return account_redirect(cid, err="email is already used by another account")
-    audit("account_created", f"{cl['name']} {email}")
-    return account_redirect(cid, ok="account created", secret=stash_secret(password))
+        return fail("email is already used by another account")
+    audit("account_created", email)
+    return RedirectResponse(
+        f"/accounts/{aid}?ok=account+created&newpw={quote(stash_secret(password))}",
+        status_code=303,
+    )
 
 
-@app.post("/clients/{cid}/account/password")
-def account_reset(request: Request, cid: int, csrf_token: str = Form(...)):
+@app.get("/accounts/{aid}", response_class=HTMLResponse)
+def account_page(
+    request: Request,
+    aid: int,
+    err: str | None = None,
+    ok: str | None = None,
+    newpw: str | None = None,
+):
+    token = require_admin(request)
+    account = account_row(aid)
+    if not account:
+        raise HTTPException(status_code=404)
+    live = iface_dump(cfg()["iface"])["peers"]
+    configs = [config_view(cl, live) for cl in account_configs(aid)]
+    routed = [
+        e for e in exits_rows() if e["mode"] == "routes" and e["enabled"]
+    ]
+    granted = {e["id"] for e in account_exits(aid)}
+    return render_page(
+        request, "account_detail.html", "accounts",
+        csrf=csrf(token), err=err, ok=ok, account=account,
+        configs=configs, routed=routed, granted=granted,
+        internet_exits=internet_exits_rows(),
+        order=account_exits(aid, "internet"),
+        limit=max_configs_for(account),
+        default_limit=setting("default_max_configs"),
+        newpw=pop_secret(newpw),
+    )
+
+
+@app.post("/accounts/{aid}/exits")
+def account_exits_update(
+    request: Request,
+    aid: int,
+    exits: list[int] = Form([]),
+    csrf_token: str = Form(...),
+):
     token = require_admin(request)
     if not hmac.compare_digest(csrf_token, csrf(token)):
         raise HTTPException(status_code=400, detail="csrf")
-    account = client_account(cid)
+    account = account_row(aid)
+    if not account:
+        raise HTTPException(status_code=404)
+    with db() as conn:
+        allowed = {
+            r["id"] for r in conn.execute(
+                "SELECT id FROM exits WHERE enabled = 1"
+            )
+        }
+        wanted = {int(e) for e in exits if int(e) in allowed}
+        current = {
+            r["exit_id"]: r["priority"] for r in conn.execute(
+                "SELECT exit_id, priority FROM account_exits WHERE account_id = ?",
+                (aid,),
+            )
+        }
+        for exit_id in list(current):
+            if exit_id not in wanted:
+                conn.execute(
+                    "DELETE FROM account_exits WHERE account_id = ? AND exit_id = ?",
+                    (aid, exit_id),
+                )
+        next_priority = max(current.values(), default=0) + 10
+        for row in conn.execute(
+            "SELECT id FROM exits WHERE enabled = 1 ORDER BY priority, id"
+        ).fetchall():
+            eid = row["id"]
+            if eid in wanted and eid not in current:
+                conn.execute(
+                    "INSERT INTO account_exits (account_id, exit_id, priority) "
+                    "VALUES (?, ?, ?)",
+                    (aid, eid, next_priority),
+                )
+                next_priority += 10
+        # Granted exits appear on every configuration; revoked ones go away.
+        sync_account_configs(conn, aid)
+    audit("account_exits", f"{account['email']} exits={sorted(wanted)}")
+    apply_routing()
+    return RedirectResponse(f"/accounts/{aid}?ok=access+updated", status_code=303)
+
+
+@app.post("/accounts/{aid}/order")
+def account_order_move(
+    request: Request,
+    aid: int,
+    exit_id: int = Form(...),
+    direction: str = Form(...),
+    csrf_token: str = Form(...),
+):
+    token = require_admin(request)
+    if not hmac.compare_digest(csrf_token, csrf(token)):
+        raise HTTPException(status_code=400, detail="csrf")
+    if direction not in ("up", "down"):
+        raise HTTPException(status_code=400, detail="direction")
+    account = account_row(aid)
+    if not account:
+        raise HTTPException(status_code=404)
+    with db() as conn:
+        # Only the internet exits have a user-visible order; routed exits keep
+        # their own priority and are never swapped with them.
+        order = [
+            r["exit_id"] for r in conn.execute(
+                "SELECT ae.exit_id FROM account_exits ae "
+                "JOIN exits e ON e.id = ae.exit_id "
+                "WHERE ae.account_id = ? AND e.mode = 'internet' "
+                "ORDER BY ae.priority, e.priority, e.id",
+                (aid,),
+            )
+        ]
+        order = move_in_order(order, exit_id, direction)
+        for position, eid in enumerate(order):
+            conn.execute(
+                "UPDATE account_exits SET priority = ? "
+                "WHERE account_id = ? AND exit_id = ?",
+                ((position + 1) * 10, aid, eid),
+            )
+    audit("account_exit_order", f"{account['email']} {' '.join(str(e) for e in order)}")
+    return RedirectResponse(f"/accounts/{aid}?ok=order+updated", status_code=303)
+
+
+@app.post("/accounts/{aid}/order/apply")
+def account_order_apply(request: Request, aid: int, csrf_token: str = Form(...)):
+    token = require_admin(request)
+    if not hmac.compare_digest(csrf_token, csrf(token)):
+        raise HTTPException(status_code=400, detail="csrf")
+    account = account_row(aid)
+    if not account:
+        raise HTTPException(status_code=404)
+    with db() as conn:
+        sync_account_configs(conn, aid, reset_order=True)
+    audit("account_exit_order_applied", account["email"])
+    apply_routing()
+    return RedirectResponse(
+        f"/accounts/{aid}?ok=order+applied+to+all+configurations", status_code=303
+    )
+
+
+@app.post("/accounts/{aid}/max-configs")
+def account_max_configs(
+    request: Request,
+    aid: int,
+    max_configs: str = Form(""),
+    csrf_token: str = Form(...),
+):
+    token = require_admin(request)
+    if not hmac.compare_digest(csrf_token, csrf(token)):
+        raise HTTPException(status_code=400, detail="csrf")
+    account = account_row(aid)
+    if not account:
+        raise HTTPException(status_code=404)
+    value = None
+    if max_configs.strip():
+        try:
+            value = int(max_configs)
+        except ValueError:
+            return RedirectResponse(
+                f"/accounts/{aid}?err=" + quote("limit must be a number"),
+                status_code=303,
+            )
+        if value < 1:
+            return RedirectResponse(
+                f"/accounts/{aid}?err=" + quote("limit must be at least 1"),
+                status_code=303,
+            )
+        have = len(account_configs(aid))
+        if value < have:
+            return RedirectResponse(
+                f"/accounts/{aid}?err="
+                + quote(f"the account already has {have} configurations"),
+                status_code=303,
+            )
+    with db() as conn:
+        conn.execute(
+            "UPDATE accounts SET max_configs = ? WHERE id = ?", (value, aid)
+        )
+    audit(
+        "account_max_configs",
+        f"{account['email']} {'default' if value is None else value}",
+    )
+    return RedirectResponse(f"/accounts/{aid}?ok=limit+updated", status_code=303)
+
+
+@app.post("/accounts/{aid}/configs")
+def account_create_config(
+    request: Request,
+    aid: int,
+    name: str = Form(""),
+    csrf_token: str = Form(...),
+):
+    token = require_admin(request)
+    if not hmac.compare_digest(csrf_token, csrf(token)):
+        raise HTTPException(status_code=400, detail="csrf")
+    account = account_row(aid)
+    if not account:
+        raise HTTPException(status_code=404)
+    problem = config_limit_error(account)
+    if problem:
+        return RedirectResponse(f"/accounts/{aid}?err=" + quote(problem), status_code=303)
+    try:
+        with db() as conn:
+            cid = spawn_config(conn, account, name)
+    except (RuntimeError, ValueError) as exc:
+        message = (
+            apply_error_message(exc, "nothing was saved")
+            if isinstance(exc, RuntimeError) else str(exc)
+        )
+        return RedirectResponse(f"/accounts/{aid}?err=" + quote(message), status_code=303)
+    audit("config_added", f"{account['email']} {name or cid}")
+    apply_routing()
+    return RedirectResponse(f"/configs/{cid}?ok=configuration+created", status_code=303)
+
+
+@app.post("/accounts/{aid}/password")
+def account_reset(request: Request, aid: int, csrf_token: str = Form(...)):
+    token = require_admin(request)
+    if not hmac.compare_digest(csrf_token, csrf(token)):
+        raise HTTPException(status_code=400, detail="csrf")
+    account = account_row(aid)
     if not account:
         raise HTTPException(status_code=404)
     password = secrets.token_urlsafe(12)
     with db() as conn:
         conn.execute(
-            "UPDATE users SET password_hash = ?, token_version = token_version + 1 "
-            "WHERE id = ?",
-            (hash_password(password), account["id"]),
+            "UPDATE accounts SET password_hash = ?, "
+            "token_version = token_version + 1 WHERE id = ?",
+            (hash_password(password), aid),
         )
-        conn.execute(
-            "UPDATE sessions SET revoked = 1 WHERE uid = ?", (account["id"],)
-        )
+        conn.execute("UPDATE sessions SET revoked = 1 WHERE uid = ?", (aid,))
     audit("account_password_reset", account["email"])
-    return account_redirect(cid, ok="password reset", secret=stash_secret(password))
+    return RedirectResponse(
+        f"/accounts/{aid}?ok=password+reset&newpw={quote(stash_secret(password))}",
+        status_code=303,
+    )
 
 
-@app.post("/clients/{cid}/account/toggle")
-def account_toggle(request: Request, cid: int, csrf_token: str = Form(...)):
+@app.post("/accounts/{aid}/toggle")
+def account_toggle(request: Request, aid: int, csrf_token: str = Form(...)):
     token = require_admin(request)
     if not hmac.compare_digest(csrf_token, csrf(token)):
         raise HTTPException(status_code=400, detail="csrf")
-    account = client_account(cid)
+    account = account_row(aid)
     if not account:
         raise HTTPException(status_code=404)
     enabled = 0 if account["enabled"] else 1
     with db() as conn:
         conn.execute(
-            "UPDATE users SET enabled = ?, token_version = token_version + 1 "
+            "UPDATE accounts SET enabled = ?, token_version = token_version + 1 "
             "WHERE id = ?",
-            (enabled, account["id"]),
+            (enabled, aid),
         )
-        conn.execute(
-            "UPDATE sessions SET revoked = 1 WHERE uid = ?", (account["id"],)
-        )
+        conn.execute("UPDATE sessions SET revoked = 1 WHERE uid = ?", (aid,))
     audit("account_toggle", f"{account['email']} -> {enabled}")
-    return account_redirect(cid, ok="account enabled" if enabled else "account disabled")
+    return RedirectResponse(
+        f"/accounts/{aid}?ok=" + ("account+enabled" if enabled else "account+disabled"),
+        status_code=303,
+    )
 
 
-@app.post("/clients/{cid}/account/delete")
-def account_delete(request: Request, cid: int, csrf_token: str = Form(...)):
+@app.post("/accounts/{aid}/delete")
+def account_delete(request: Request, aid: int, csrf_token: str = Form(...)):
     token = require_admin(request)
     if not hmac.compare_digest(csrf_token, csrf(token)):
         raise HTTPException(status_code=400, detail="csrf")
-    account = client_account(cid)
+    account = account_row(aid)
     if not account:
         raise HTTPException(status_code=404)
-    with db() as conn:
-        conn.execute("UPDATE sessions SET revoked = 1 WHERE uid = ?", (account["id"],))
-        conn.execute("DELETE FROM users WHERE id = ?", (account["id"],))
-    audit("account_deleted", account["email"])
-    return account_redirect(cid, ok="account deleted")
+    try:
+        with db() as conn:
+            configs = [
+                r["id"] for r in conn.execute(
+                    "SELECT id FROM clients WHERE account_id = ?", (aid,)
+                )
+            ]
+            conn.execute("UPDATE sessions SET revoked = 1 WHERE uid = ?", (aid,))
+            for cid in configs:
+                routing.release_table(conn, "client", cid)
+                conn.execute("DELETE FROM clients WHERE id = ?", (cid,))
+                conn.execute("DELETE FROM client_exits WHERE client_id = ?", (cid,))
+                conn.execute(
+                    "DELETE FROM client_internet_exits WHERE client_id = ?", (cid,)
+                )
+            conn.execute("DELETE FROM account_exits WHERE account_id = ?", (aid,))
+            conn.execute("DELETE FROM accounts WHERE id = ?", (aid,))
+            apply_conf(cfg(), conn)
+    except RuntimeError as exc:
+        print(f"account {aid}: {exc}", flush=True)
+        return RedirectResponse(
+            f"/accounts/{aid}?err={quote(apply_error_message(exc, 'nothing was deleted'))}",
+            status_code=303,
+        )
+    audit("account_deleted", f"{account['email']} {len(configs)} configurations")
+    apply_routing()
+    return RedirectResponse("/accounts?ok=account+deleted", status_code=303)
 
 
 # ---------------------------------------------------------------- self service
 
+def account_first_config(account):
+    configs = account_configs(int(account["id"]))
+    return configs[0] if configs else None
+
+
+def user_config(account, cid: int):
+    """A configuration of this account, or 404 — never another account's."""
+    cl = config_row(cid)
+    if not cl or cl["account_id"] != account["id"]:
+        raise HTTPException(status_code=404)
+    return cl
+
+
 @app.get("/me", response_class=HTMLResponse)
 def me_page(request: Request, err: str | None = None, ok: str | None = None):
-    token, row = require_user(request)
-    cl = user_client(row)
+    token, account = require_user(request)
+    live = iface_dump(cfg()["iface"])["peers"]
+    configs = [config_view(cl, live) for cl in account_configs(int(account["id"]))]
+    return render_page(
+        request, "me.html", "me", role="user",
+        csrf=csrf(token), err=err, ok=ok, configs=configs,
+        email=account["email"], last_login=human_ts(account["last_login"]),
+        limit=max_configs_for(account),
+        has_app=ANDROID_APK.exists(),
+    )
+
+
+@app.get("/me/configs/new", response_class=HTMLResponse)
+def me_config_new_page(request: Request, err: str | None = None):
+    token, account = require_user(request)
+    configs = account_configs(int(account["id"]))
+    return render_page(
+        request, "me_config_new.html", "me", role="user",
+        csrf=csrf(token), err=err, have=len(configs),
+        limit=max_configs_for(account),
+    )
+
+
+@app.post("/me/configs")
+def me_create_config(
+    request: Request,
+    name: str = Form(""),
+    csrf_token: str = Form(...),
+):
+    token, account = require_user(request)
+    if not hmac.compare_digest(csrf_token, csrf(token)):
+        raise HTTPException(status_code=400, detail="csrf")
+    problem = config_limit_error(account)
+    if problem:
+        return RedirectResponse(
+            "/me/configs/new?err=" + quote(problem), status_code=303
+        )
+    try:
+        with db() as conn:
+            cid = spawn_config(conn, account, name)
+    except (RuntimeError, ValueError) as exc:
+        message = (
+            apply_error_message(exc, "nothing was saved")
+            if isinstance(exc, RuntimeError) else str(exc)
+        )
+        return RedirectResponse(
+            "/me/configs/new?err=" + quote(message), status_code=303
+        )
+    audit("user_config_added", f"{account['email']} {name or cid}")
+    apply_routing()
+    return RedirectResponse(
+        f"/me/configs/{cid}?ok=configuration+created", status_code=303
+    )
+
+
+@app.get("/me/configs/{cid}", response_class=HTMLResponse)
+def me_config_page(
+    request: Request,
+    cid: int,
+    err: str | None = None,
+    ok: str | None = None,
+):
+    token, account = require_user(request)
+    cl = user_config(account, cid)
     c = cfg()
     live = iface_dump(c["iface"])["peers"]
-    try:
-        conf = mask_conf(client_conf(c, cl))
-    except ValueError:
-        conf = None
     status = read_status()
-    granted = client_internet_exits(cl)
+    granted = config_internet_exits(cl)
     current_iface = (status.get("clients") or {}).get(cl["ip"]) or ""
     current = next((e for e in granted if e["iface"] == current_iface), None)
     alive = {
@@ -1982,13 +2523,136 @@ def me_page(request: Request, err: str | None = None, ok: str | None = None):
         iface: info.get("rtt_ms")
         for iface, info in (status.get("exits") or {}).items()
     }
+    try:
+        conf = mask_conf(config_conf(c, cl))
+    except ValueError:
+        conf = None
     return render_page(
-        request, "me.html", "me", role="user",
-        csrf=csrf(token), err=err, ok=ok, cl=client_view(cl, live),
-        email=row["email"], last_login=human_ts(row["last_login"]), conf=conf,
-        internet_exits=granted, current_exit=current, alive=alive,
-        latency=latency, has_app=ANDROID_APK.exists(),
+        request, "me_config.html", "me", role="user",
+        csrf=csrf(token), err=err, ok=ok, email=account["email"],
+        cl=config_view(cl, live),
+        conf=conf, internet_exits=granted, current_exit=current,
+        alive=alive, latency=latency, has_app=ANDROID_APK.exists(),
     )
+
+
+@app.get("/me/configs/{cid}/conf")
+def me_config_conf(request: Request, cid: int):
+    _, account = require_user(request)
+    cl = user_config(account, cid)
+    audit("config_downloaded", f"{account['email']} {cl['name']}")
+    return conf_response(cl)
+
+
+@app.get("/me/configs/{cid}/qr.png")
+def me_config_qr(request: Request, cid: int):
+    _, account = require_user(request)
+    return qr_response(user_config(account, cid))
+
+
+@app.post("/me/configs/{cid}/order")
+def me_config_order(request: Request, cid: int, exit_id: int = Form(...),
+                    direction: str = Form(...), csrf_token: str = Form(...)):
+    token, account = require_user(request)
+    if not hmac.compare_digest(csrf_token, csrf(token)):
+        raise HTTPException(status_code=400, detail="csrf")
+    if direction not in ("up", "down"):
+        raise HTTPException(status_code=400, detail="direction")
+    cl = user_config(account, cid)
+    order = [e["id"] for e in config_internet_exits(cl)]
+    with db() as conn:
+        write_config_order(conn, cid, move_in_order(order, exit_id, direction))
+    audit("user_exit_order", f"{account['email']} {cl['name']} {' '.join(str(e) for e in order)}")
+    apply_routing()
+    return RedirectResponse(
+        f"/me/configs/{cid}?ok=exit+order+updated", status_code=303
+    )
+
+
+@app.post("/me/configs/{cid}/order/reset")
+def me_config_order_reset(request: Request, cid: int, csrf_token: str = Form(...)):
+    token, account = require_user(request)
+    if not hmac.compare_digest(csrf_token, csrf(token)):
+        raise HTTPException(status_code=400, detail="csrf")
+    cl = user_config(account, cid)
+    with db() as conn:
+        reset_config_order(conn, cl)
+    audit("user_exit_order_reset", f"{account['email']} {cl['name']}")
+    apply_routing()
+    return RedirectResponse(
+        f"/me/configs/{cid}?ok=order+reset+to+account", status_code=303
+    )
+
+
+@app.post("/me/configs/{cid}/toggle")
+def me_config_toggle(request: Request, cid: int, csrf_token: str = Form(...)):
+    token, account = require_user(request)
+    if not hmac.compare_digest(csrf_token, csrf(token)):
+        raise HTTPException(status_code=400, detail="csrf")
+    cl = user_config(account, cid)
+    try:
+        with db() as conn:
+            conn.execute(
+                "UPDATE clients SET enabled = ? WHERE id = ?",
+                (0 if cl["enabled"] else 1, cid),
+            )
+            apply_conf(cfg(), conn)
+    except RuntimeError as exc:
+        print(f"config {cid}: {exc}", flush=True)
+        return RedirectResponse(
+            f"/me/configs/{cid}?err="
+            + quote(apply_error_message(exc, "nothing changed")),
+            status_code=303,
+        )
+    audit("user_config_toggle", f"{account['email']} {cl['name']}")
+    apply_routing()
+    return RedirectResponse(f"/me/configs/{cid}", status_code=303)
+
+
+@app.post("/me/configs/{cid}/delete")
+def me_config_delete(request: Request, cid: int, csrf_token: str = Form(...)):
+    token, account = require_user(request)
+    if not hmac.compare_digest(csrf_token, csrf(token)):
+        raise HTTPException(status_code=400, detail="csrf")
+    cl = user_config(account, cid)
+    try:
+        with db() as conn:
+            routing.release_table(conn, "client", cid)
+            conn.execute("DELETE FROM clients WHERE id = ?", (cid,))
+            conn.execute("DELETE FROM client_exits WHERE client_id = ?", (cid,))
+            conn.execute("DELETE FROM client_internet_exits WHERE client_id = ?", (cid,))
+            apply_conf(cfg(), conn)
+    except RuntimeError as exc:
+        print(f"config {cid}: {exc}", flush=True)
+        return RedirectResponse(
+            f"/me/configs/{cid}?err="
+            + quote(apply_error_message(exc, "nothing was deleted")),
+            status_code=303,
+        )
+    audit("user_config_deleted", f"{account['email']} {cl['name']}")
+    apply_routing()
+    return RedirectResponse("/me?ok=configuration+deleted", status_code=303)
+
+
+@app.post("/me/configs/{cid}/reissue")
+def me_config_reissue(request: Request, cid: int, csrf_token: str = Form(...)):
+    token, account = require_user(request)
+    if not hmac.compare_digest(csrf_token, csrf(token)):
+        raise HTTPException(status_code=400, detail="csrf")
+    cl = user_config(account, cid)
+    try:
+        with db() as conn:
+            reissue_keys(conn, cl)
+    except RuntimeError as exc:
+        print(f"config {cid}: {exc}", flush=True)
+        return RedirectResponse(
+            f"/me/configs/{cid}?err="
+            + quote(apply_error_message(exc, "your key was not changed")),
+            status_code=303,
+        )
+    audit("user_key_reissued", f"{account['email']} {cl['name']}")
+    apply_routing()
+    return RedirectResponse(f"/me/configs/{cid}?ok=key+reissued", status_code=303)
 
 
 @app.get("/download/android")
@@ -2006,16 +2670,22 @@ def download_android():
 
 @app.get("/me/conf")
 def me_conf(request: Request):
-    _, row = require_user(request)
-    cl = user_client(row)
-    audit("config_downloaded", row["email"])
+    """Compatibility: the first configuration, for the released app."""
+    _, account = require_user(request)
+    cl = account_first_config(account)
+    if not cl:
+        raise HTTPException(status_code=409, detail="no configuration yet")
+    audit("config_downloaded", f"{account['email']} {cl['name']}")
     return conf_response(cl)
 
 
 @app.get("/me/qr.png")
 def me_qr(request: Request):
-    _, row = require_user(request)
-    return qr_response(user_client(row))
+    _, account = require_user(request)
+    cl = account_first_config(account)
+    if not cl:
+        raise HTTPException(status_code=409, detail="no configuration yet")
+    return qr_response(cl)
 
 
 @app.post("/me/exits/move")
@@ -2025,32 +2695,20 @@ def me_exit_move(
     direction: str = Form(...),
     csrf_token: str = Form(...),
 ):
-    token, row = require_user(request)
+    """Compatibility: reorders the first configuration, like /me/conf."""
+    token, account = require_user(request)
     if not hmac.compare_digest(csrf_token, csrf(token)):
         raise HTTPException(status_code=400, detail="csrf")
     if direction not in ("up", "down"):
         raise HTTPException(status_code=400, detail="direction")
+    cl = account_first_config(account)
+    if not cl:
+        raise HTTPException(status_code=404)
+    order = [e["id"] for e in config_internet_exits(cl)]
     with db() as conn:
-        order = [
-            r["exit_id"] for r in conn.execute(
-                "SELECT exit_id FROM client_internet_exits "
-                "WHERE client_id = ? ORDER BY priority, exit_id",
-                (row["client_id"],),
-            )
-        ]
-        if exit_id not in order:
-            raise HTTPException(status_code=404)
-        index = order.index(exit_id)
-        target = index - 1 if direction == "up" else index + 1
-        if 0 <= target < len(order):
-            order[index], order[target] = order[target], order[index]
-            for position, eid in enumerate(order):
-                conn.execute(
-                    "UPDATE client_internet_exits SET priority = ? "
-                    "WHERE client_id = ? AND exit_id = ?",
-                    ((position + 1) * 10, row["client_id"], eid),
-                )
-    audit("user_exit_order", f"{row['email']} {' '.join(str(e) for e in order)}")
+        write_config_order(conn, cl["id"], move_in_order(order, exit_id, direction))
+    audit("user_exit_order", f"{account['email']} {' '.join(str(e) for e in order)}")
+    apply_routing()
     return RedirectResponse("/me?ok=exit+order+updated", status_code=303)
 
 
@@ -2061,10 +2719,10 @@ def me_password(
     new_password: str = Form(...),
     csrf_token: str = Form(...),
 ):
-    token, row = require_user(request)
+    token, account = require_user(request)
     if not hmac.compare_digest(csrf_token, csrf(token)):
         raise HTTPException(status_code=400, detail="csrf")
-    if not check_password(current_password, row["password_hash"]):
+    if not check_password(current_password, account["password_hash"]):
         return RedirectResponse("/me?err=" + quote("current password is wrong"), status_code=303)
     problem = password_error(new_password, "new password")
     if problem:
@@ -2072,19 +2730,19 @@ def me_password(
     new_hash = hash_password(new_password)
     with db() as conn:
         conn.execute(
-            "UPDATE users SET password_hash = ?, token_version = token_version + 1 "
-            "WHERE id = ?",
-            (new_hash, row["uid"]),
+            "UPDATE accounts SET password_hash = ?, "
+            "token_version = token_version + 1 WHERE id = ?",
+            (new_hash, account["id"]),
         )
         # Every other session of this account dies with the password change.
-        conn.execute("UPDATE sessions SET revoked = 1 WHERE uid = ?", (row["uid"],))
+        conn.execute("UPDATE sessions SET revoked = 1 WHERE uid = ?", (account["id"],))
         tv = conn.execute(
-            "SELECT token_version FROM users WHERE id = ?", (row["uid"],)
+            "SELECT token_version FROM accounts WHERE id = ?", (account["id"],)
         ).fetchone()[0]
-    audit("user_password_changed", row["email"])
+    audit("user_password_changed", account["email"])
     response = RedirectResponse("/me?ok=password+changed", status_code=303)
     response.set_cookie(
-        COOKIE, start_session("user", int(row["uid"]), int(tv)),
+        COOKIE, start_session("user", int(account["id"]), int(tv)),
         httponly=True, secure=True, samesite="strict", max_age=SESSION_TTL,
     )
     return response
@@ -2092,66 +2750,57 @@ def me_password(
 
 @app.post("/me/logout-all")
 def me_logout_all(request: Request, csrf_token: str = Form(...)):
-    token, row = require_user(request)
+    token, account = require_user(request)
     if not hmac.compare_digest(csrf_token, csrf(token)):
         raise HTTPException(status_code=400, detail="csrf")
-    revoke_user_sessions(int(row["uid"]))
-    audit("user_sessions_revoked", row["email"])
+    revoke_user_sessions(int(account["id"]))
+    audit("user_sessions_revoked", account["email"])
     response = RedirectResponse("/login", status_code=303)
     response.delete_cookie(COOKIE)
     return response
-
-
-@app.post("/me/reissue")
-def me_reissue(request: Request, csrf_token: str = Form(...)):
-    token, row = require_user(request)
-    if not hmac.compare_digest(csrf_token, csrf(token)):
-        raise HTTPException(status_code=400, detail="csrf")
-    private = genkey()
-    try:
-        with db() as conn:
-            conn.execute(
-                "UPDATE clients SET private_key = ?, public_key = ?, preshared_key = ? WHERE id = ?",
-                (private, pubkey(private), genpsk(), row["client_id"]),
-            )
-            apply_conf(cfg(), conn)
-    except RuntimeError as exc:
-        print(f"client {row['client_id']}: {exc}", flush=True)
-        return RedirectResponse(
-            f"/me?err={quote(apply_error_message(exc, 'your key was not changed'))}",
-            status_code=303,
-        )
-    apply_routing()
-    audit("user_key_reissued", row["email"])
-    return RedirectResponse("/me?ok=key+reissued", status_code=303)
 
 
 # ------------------------------------------------------------- mobile API
 #
 # Bearer-token API for the mobile app (a WireGuard Android fork). The app
 # signs in with the same email/password as the /me page, gets a long-lived
-# token, and downloads its awg0 client config with it. Admin accounts are
-# not accepted here: the app only ever needs a client config.
+# token, and manages its own configurations. Admin accounts are not accepted
+# here: the app only ever needs client configurations.
 
 API_SESSION_TTL = 30 * 86400
 
 
 def api_user(request: Request):
-    """Bearer auth for the app: the user row or a JSON 401, never a redirect."""
+    """Bearer auth for the app: the account row or a JSON 401, never a redirect."""
     header = request.headers.get("authorization", "")
     token = header[7:].strip() if header.lower().startswith("bearer ") else ""
     data = session_data(token)
     if not data or data["role"] != "user" or not session_alive(data):
         raise HTTPException(status_code=401, detail="sign in again")
-    row = user_row(int(data.get("uid", 0)))
-    if (
-        not row
-        or not row["account_enabled"]
-        or not row["client_enabled"]
-        or row["token_version"] != data.get("tv")
-    ):
+    row = account_row(int(data.get("uid", 0)))
+    if not row or not row["enabled"] or row["token_version"] != data.get("tv"):
         raise HTTPException(status_code=401, detail="account disabled")
     return token, row
+
+
+def api_configs(account) -> list[dict]:
+    live = iface_dump(cfg()["iface"])["peers"]
+    return [config_view(cl, live) for cl in account_configs(int(account["id"]))]
+
+
+def api_config(account, config_id: int | None):
+    """The requested configuration of this account, or its first one."""
+    configs = account_configs(int(account["id"]))
+    if not configs:
+        raise HTTPException(
+            status_code=409, detail="no configuration yet; create one first"
+        )
+    if config_id is None or config_id == 0:
+        return configs[0]
+    for cl in configs:
+        if cl["id"] == config_id:
+            return cl
+    raise HTTPException(status_code=404, detail="configuration not found")
 
 
 @app.post("/api/login")
@@ -2166,16 +2815,12 @@ def api_login(request: Request, email: str = Form(""), password: str = Form(...)
     if email and email != ADMIN_LOGIN:
         with db() as conn:
             row = conn.execute(
-                "SELECT u.*, c.name AS client_name, c.enabled AS client_enabled "
-                "FROM users u "
-                "JOIN clients c ON c.id = u.client_id WHERE u.email = ?",
-                (email,),
+                "SELECT * FROM accounts WHERE email = ?", (email,)
             ).fetchone()
     ok = bool(
         row
         and check_password(password, row["password_hash"])
         and row["enabled"]
-        and row["client_enabled"]
     )
     if not row:
         _burn_hash(password)
@@ -2192,37 +2837,110 @@ def api_login(request: Request, email: str = Form(""), password: str = Form(...)
     uid, tv = int(row["id"]), int(row["token_version"])
     token = start_session("user", uid, tv, ttl=API_SESSION_TTL)
     with db() as conn:
-        conn.execute("UPDATE users SET last_login = ? WHERE id = ?", (_now_iso(), uid))
+        conn.execute("UPDATE accounts SET last_login = ? WHERE id = ?", (_now_iso(), uid))
     clear_failures(ip_key, email)
     prune_sessions()
     audit("api_login", f"{email} {ip}")
+    configs = api_configs(row)
     return {
         "token": token,
         "expires_at": session_data(token)["exp"],
         "email": email,
-        "client": {"id": int(row["client_id"]), "name": row["client_name"]},
+        "client": configs[0] if configs else None,
+        "configs": configs,
     }
 
 
 @app.get("/api/me")
 def api_me(request: Request):
-    _, row = api_user(request)
+    _, account = api_user(request)
+    configs = api_configs(account)
     return {
-        "email": row["email"],
-        "client": {
-            "id": row["client_id"],
-            "name": row["client_name"],
-            "ip": row["client_ip"],
-            "internet": bool(row["internet"]),
-        },
+        "email": account["email"],
+        "client": configs[0] if configs else None,
+        "configs": configs,
     }
 
 
+@app.post("/api/me/configs")
+def api_create_config(request: Request, name: str = Form("")):
+    _, account = api_user(request)
+    problem = config_limit_error(account)
+    if problem:
+        raise HTTPException(status_code=409, detail=problem)
+    try:
+        with db() as conn:
+            cid = spawn_config(conn, account, name)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail=apply_error_message(exc, "not saved"))
+    audit("user_config_added", f"{account['email']} {name or cid} via=api")
+    apply_routing()
+    cl = config_row(cid)
+    return {
+        "config": {
+            "id": cid,
+            "name": cl["name"],
+            "ip": cl["ip"],
+            "internet": config_has_internet(cl),
+            "enabled": True,
+        },
+        "configs": api_configs(account),
+    }
+
+
+@app.post("/api/me/configs/{cid}/toggle")
+def api_toggle_config(request: Request, cid: int):
+    _, account = api_user(request)
+    cl = api_config(account, cid)
+    try:
+        with db() as conn:
+            conn.execute(
+                "UPDATE clients SET enabled = ? WHERE id = ?",
+                (0 if cl["enabled"] else 1, cid),
+            )
+            apply_conf(cfg(), conn)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail=apply_error_message(exc, "not changed"))
+    audit("user_config_toggle", f"{account['email']} {cl['name']} via=api")
+    apply_routing()
+    return {"ok": True, "enabled": not bool(cl["enabled"])}
+
+
+@app.delete("/api/me/configs/{cid}")
+def api_delete_config(request: Request, cid: int):
+    _, account = api_user(request)
+    cl = api_config(account, cid)
+    try:
+        with db() as conn:
+            routing.release_table(conn, "client", cid)
+            conn.execute("DELETE FROM clients WHERE id = ?", (cid,))
+            conn.execute("DELETE FROM client_exits WHERE client_id = ?", (cid,))
+            conn.execute("DELETE FROM client_internet_exits WHERE client_id = ?", (cid,))
+            apply_conf(cfg(), conn)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail=apply_error_message(exc, "not deleted"))
+    audit("user_config_deleted", f"{account['email']} {cl['name']} via=api")
+    apply_routing()
+    return {"ok": True}
+
+
 @app.get("/api/me/conf")
-def api_conf(request: Request):
+def api_conf(request: Request, config_id: int | None = None):
     """The awg0 client config, ready to import into a WireGuard client."""
-    _, row = api_user(request)
-    return conf_response(user_client(row))
+    _, account = api_user(request)
+    cl = api_config(account, config_id)
+    audit("config_downloaded", f"{account['email']} {cl['name']} via=api")
+    return conf_response(cl)
+
+
+@app.get("/api/me/configs/{cid}/conf")
+def api_config_conf(request: Request, cid: int):
+    _, account = api_user(request)
+    cl = api_config(account, cid)
+    audit("config_downloaded", f"{account['email']} {cl['name']} via=api")
+    return conf_response(cl)
 
 
 @app.post("/api/logout")
@@ -2234,13 +2952,14 @@ def api_logout(request: Request):
 
 
 @app.get("/api/me/exits")
-def api_exits(request: Request):
-    """Internet exits granted to the client, in the user's order.
+def api_exits(request: Request, config_id: int | None = None):
+    """Internet exits of one configuration, in its order.
 
     An empty list means the administrator granted none: the client then rides
     the automatic active exit and has nothing to switch.
     """
-    _, row = api_user(request)
+    _, account = api_user(request)
+    cl = api_config(account, config_id)
     status = read_status().get("exits", {})
     return [
         {
@@ -2250,28 +2969,32 @@ def api_exits(request: Request):
             "alive": bool(status.get(e["iface"], {}).get("alive")),
             "rtt_ms": status.get(e["iface"], {}).get("rtt_ms"),
         }
-        for e in client_internet_exits(user_client(row))
+        for e in config_internet_exits(cl)
     ]
 
 
 @app.post("/api/me/exits/order")
-def api_exits_order(request: Request, exit_id: list[int] = Form(...)):
-    """Sets the client's exit order in one call; every granted exit must be
+def api_exits_order(
+    request: Request,
+    exit_id: list[int] = Form(...),
+    config_id: int = Form(0),
+):
+    """Sets one configuration's exit order; every granted exit must be
     present exactly once, so a partial or foreign list is rejected."""
-    _, row = api_user(request)
-    granted = [e["id"] for e in client_internet_exits(user_client(row))]
+    _, account = api_user(request)
+    cl = api_config(account, config_id)
+    granted = [e["id"] for e in config_internet_exits(cl)]
     if sorted(exit_id) != sorted(granted):
         raise HTTPException(
             status_code=400, detail="the order must list every granted exit once"
         )
     with db() as conn:
-        for position, eid in enumerate(exit_id):
-            conn.execute(
-                "UPDATE client_internet_exits SET priority = ? "
-                "WHERE client_id = ? AND exit_id = ?",
-                ((position + 1) * 10, row["client_id"], eid),
-            )
-    audit("user_exit_order", f"{row['email']} {' '.join(str(e) for e in exit_id)} via=api")
+        write_config_order(conn, cl["id"], exit_id)
+    audit(
+        "user_exit_order",
+        f"{account['email']} {cl['name']} {' '.join(str(e) for e in exit_id)} via=api",
+    )
+    apply_routing()
     return {"ok": True}
 
 
@@ -2305,19 +3028,45 @@ def journal_page(request: Request, action: str | None = None, page: int = 1):
 # ---------------------------------------------------------------- settings
 
 @app.get("/settings", response_class=HTMLResponse)
-def settings_page(request: Request):
-    require_admin(request)
+def settings_page(request: Request, ok: str | None = None, err: str | None = None):
+    token = require_admin(request)
     c = cfg()
     with db() as conn:
-        clients_n = conn.execute("SELECT count(*) FROM clients").fetchone()[0]
+        accounts_n = conn.execute("SELECT count(*) FROM accounts").fetchone()[0]
+        configs_n = conn.execute("SELECT count(*) FROM clients").fetchone()[0]
         exits_n = conn.execute("SELECT count(*) FROM exits").fetchone()[0]
         audits_n = conn.execute("SELECT count(*) FROM audit").fetchone()[0]
     db_size = DB_PATH.stat().st_size if DB_PATH.exists() else 0
     return render_page(
         request, "settings.html", "settings",
-        cfg=c, clients_n=clients_n, exits_n=exits_n, audits_n=audits_n,
+        cfg=c, csrf=csrf(token), ok=ok, err=err,
+        accounts_n=accounts_n, configs_n=configs_n, exits_n=exits_n,
+        audits_n=audits_n, default_max_configs=setting("default_max_configs"),
         db_size=db_size, status=services(),
     )
+
+
+@app.post("/settings/max-configs")
+def settings_max_configs(
+    request: Request,
+    default_max_configs: str = Form(...),
+    csrf_token: str = Form(...),
+):
+    token = require_admin(request)
+    if not hmac.compare_digest(csrf_token, csrf(token)):
+        raise HTTPException(status_code=400, detail="csrf")
+    try:
+        value = int(default_max_configs)
+    except ValueError:
+        value = 0
+    if value < 1:
+        return RedirectResponse(
+            "/settings?err=" + quote("the default limit must be at least 1"),
+            status_code=303,
+        )
+    set_setting("default_max_configs", str(value))
+    audit("settings_max_configs", str(value))
+    return RedirectResponse("/settings?ok=default+limit+updated", status_code=303)
 
 
 # ---------------------------------------------------------------- cli
@@ -2378,7 +3127,7 @@ def cli_conf(name: str) -> None:
         cl = conn.execute("SELECT * FROM clients WHERE name = ?", (name,)).fetchone()
     if not cl:
         sys.exit("no such client")
-    print(client_conf(c, cl), end="")
+    print(config_conf(c, cl), end="")
 
 
 def main() -> None:

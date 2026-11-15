@@ -374,22 +374,57 @@ def desired_state() -> tuple[set[Rule], dict[int, set[Route]], dict[int, list[st
     db.row_factory = sqlite3.Row
     try:
         exits = rows(db, "SELECT * FROM exits WHERE enabled = 1")
-        clients = rows(db, "SELECT * FROM clients WHERE enabled = 1")
-        links = rows(db, "SELECT * FROM client_exits")
-        grants = rows(
+        configs = rows(db, "SELECT * FROM clients WHERE enabled = 1")
+        # Access is granted to the account; configurations created before
+        # accounts existed keep their own grants.
+        account_grants = rows(
             db,
-            "SELECT ce.client_id, ce.priority, e.id AS exit_id, e.iface, "
-            "e.priority AS exit_priority FROM client_internet_exits ce "
-            "JOIN exits e ON e.id = ce.exit_id "
+            "SELECT ae.account_id, ae.exit_id FROM account_exits ae "
+            "JOIN exits e ON e.id = ae.exit_id WHERE e.enabled = 1 "
+            "ORDER BY ae.priority, e.priority, e.id",
+        )
+        legacy_links = rows(
+            db,
+            "SELECT ce.client_id, ce.exit_id FROM client_exits ce "
+            "JOIN clients c ON c.id = ce.client_id "
+            "WHERE c.account_id IS NULL",
+        )
+        order = rows(
+            db,
+            "SELECT ci.client_id, ci.priority, e.id AS exit_id, e.iface, "
+            "e.priority AS exit_priority FROM client_internet_exits ci "
+            "JOIN exits e ON e.id = ci.exit_id "
             "WHERE e.enabled = 1 AND e.mode = 'internet' "
-            "ORDER BY ce.priority, e.priority, e.id",
+            "ORDER BY ci.priority, e.priority, e.id",
         )
     finally:
         db.close()
 
+    granted_ids: dict[int, set[int]] = {}
+    for grant in account_grants:
+        granted_ids.setdefault(grant["account_id"], set()).add(grant["exit_id"])
+
+    # A configuration's order is its own copy, but only exits the account
+    # still grants may be used. Account-less configurations keep the legacy
+    # `internet` flag and their own grants.
+    per_config: dict[int, list[str]] = {}
+    for row in order:
+        per_config.setdefault(row["client_id"], []).append(row["iface"])
+
     client_choices: dict[int, list[str]] = {}
-    for grant in grants:
-        client_choices.setdefault(grant["client_id"], []).append(grant["iface"])
+    for cl in configs:
+        if cl["account_id"]:
+            granted = granted_ids.get(cl["account_id"], set())
+            choices = [
+                row["iface"] for row in order
+                if row["client_id"] == cl["id"] and row["exit_id"] in granted
+            ]
+        elif cl["internet"]:
+            choices = per_config.get(cl["id"], [])
+        else:
+            choices = []
+        if choices:
+            client_choices[cl["id"]] = choices
 
     routes: dict[int, set[Route]] = {}
 
@@ -403,31 +438,43 @@ def desired_state() -> tuple[set[Rule], dict[int, set[Route]], dict[int, list[st
         for cidr in [x.strip() for x in (ex["routes"] or "").split(",") if x.strip()]:
             routes.setdefault(table, set()).add((_norm_prefix(cidr), ex["iface"]))
 
-    # clients with granted internet exits get their own table; the failover
-    # daemon keeps its default route on the first exit that is alive
+    # configurations with granted internet exits get their own table; the
+    # failover daemon keeps its default route on the first exit that is alive
     client_tables: dict[int, list[str]] = {}
-    for cl in clients:
-        choices = client_choices.get(cl["id"]) if cl["internet"] else None
+    for cl in configs:
+        choices = client_choices.get(cl["id"])
         if choices and cl["table_num"] > 0:
             client_tables[cl["table_num"]] = choices
 
     # client rules
     rules: set[Rule] = set()
-    for cl in clients:
-        if not cl["internet"]:
-            continue
-        if client_choices.get(cl["id"]) and cl["table_num"] > 0:
+    for cl in configs:
+        choices = client_choices.get(cl["id"])
+        if choices and cl["table_num"] > 0:
             rules.add(
                 (CLIENT_PRIORITY,
                  ("from", cl["ip"], "iif", "awg0", "lookup", str(cl["table_num"])))
             )
-        else:
+        elif not cl["account_id"] and cl["internet"]:
+            # Legacy configuration without granted exits: the shared
+            # automatic table. Account-owned configurations with no grants
+            # have no internet at all, by design.
             rules.add(
                 (INTERNET_PRIORITY,
                  ("from", cl["ip"], "iif", "awg0", "lookup", str(internet_table)))
             )
-    for link in links:
-        cl = next((x for x in clients if x["id"] == link["client_id"]), None)
+    routed_links = list(legacy_links)
+    by_account: dict[int, list[dict]] = {}
+    for cl in configs:
+        if cl["account_id"]:
+            by_account.setdefault(cl["account_id"], []).append(cl)
+    for grant in account_grants:
+        for cl in by_account.get(grant["account_id"], []):
+            routed_links.append(
+                {"client_id": cl["id"], "exit_id": grant["exit_id"]}
+            )
+    for link in routed_links:
+        cl = next((x for x in configs if x["id"] == link["client_id"]), None)
         ex = next((x for x in exits if x["id"] == link["exit_id"]), None)
         if not cl or not ex or ex["mode"] != "routes" or ex["table_num"] <= 0:
             continue

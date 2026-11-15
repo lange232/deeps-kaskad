@@ -12,16 +12,52 @@ client ──plain WG──> S1 ──AmneziaWG/WG──> exit N ──> interne
                  failover picks the internet exit by priority
 ```
 
-## Two client classes
+## Accounts and configurations
+
+The account is the email. It signs in at the panel and in the Android app,
+owns its WireGuard configurations and holds the access to exits:
+
+```
+account alice@example.com
+├── account_exits   finland, amsterdam, lab-subnet   (what may be used)
+└── configurations
+    ├── alice-laptop   10.80.0.2   order: finland, amsterdam
+    └── alice-phone    10.80.0.3   order: amsterdam, finland
+```
+
+- an account can have several configurations; the default limit is 5 and is
+  set on the settings page, while the administrator can override it per
+  account;
+- access (internet and subnets) is granted to the **account** and applies to
+  every configuration;
+- the internet exit **order** is per configuration: a new configuration copies
+  the account order, the user can reorder it, and "apply to all" resets every
+  configuration to the account order;
+- the server generates the keys and the address for every configuration, both
+  when the administrator creates it and when the user does it in the cabinet;
+- accounts are created only by the administrator;
+- a configuration can be **disabled** (the peer stays, the tunnel stops) or
+  **deleted** (the peer and its keys are erased).
+
+One configuration is meant for one device: a WireGuard peer keeps one session,
+so two devices imported from the same `.conf` keep taking it over from each
+other. The cabinet says so next to "new configuration".
+
+Rows in the `clients` table are configurations, not devices; the physical
+table name is kept for compatibility.
+
+## Two access classes
 
 | Class | What it gets | AllowedIPs | DNS |
 |---|---|---|---|
-| internet | full tunnel via the active internet exit | `0.0.0.0/0` | `1.1.1.1, 1.0.0.1` |
-| subnets | only the CIDRs assigned to the client | union of subnets | DNS of its exit |
+| internet | full tunnel via the first alive granted exit | `0.0.0.0/0` | `1.1.1.1, 1.0.0.1` |
+| subnets | only the CIDRs granted to the account | union of subnets | DNS of its exit |
 | both | internet plus subnets | `0.0.0.0/0` | global |
 
-Access is granted per client in the panel: an internet toggle plus checkboxes
-for the routed exits. A client with neither has no access at all.
+Access is granted per account in the panel: internet exits and routed exits
+are checkboxes on the account page. An account with neither has no access at
+all. A configuration created before accounts existed keeps its old per-client
+grants until it is deleted and recreated under an account.
 
 ## Two exit modes
 
@@ -77,17 +113,22 @@ to us. That part is outside this project.
 
 ```
 10000  from 10.80.0.7 to 192.168.50.0/24 iif awg0 lookup 1001
-20000  from 10.80.0.7 iif awg0 lookup 100
+20000  from 10.80.0.7 iif awg0 lookup 1002
 ```
 
 - specific subnets always win over the default route (lower number wins);
-- the internet rule is installed **only for clients with the internet toggle**,
-  otherwise a subnets-only client would still leave through the internet exit;
-- table `100` holds the active internet exit and is managed by the failover
-  daemon;
+- a configuration whose account has internet exits gets its own table
+  (`1000 + n`) holding those exits in the configuration's order, so each
+  configuration switches independently;
+- the internet rule is installed **only when the account actually has an
+  internet exit granted** — otherwise a subnets-only account would still leave
+  through the internet exit, and an account with no grants has no internet at
+  all, by design;
+- table `100` holds the active internet exit for configurations from before
+  accounts existed and is managed by the failover daemon;
 - exit tables start at `1000`;
-- the script removes its own rules before every apply, so deleting a client or
-  an exit leaves no stale state.
+- the script removes its own rules before every apply, so deleting a
+  configuration or an exit leaves no stale state.
 
 **Never use tables 253/254/255** — these are `default`, `main` and `local`.
 A range of `201..264` once wiped the main table and cut a host off the network.
@@ -166,6 +207,26 @@ without access to Launchpad.
 
 `state/` is gitignored: provider configs, client keys and migration seeds.
 
+### Upgrading to the account model
+
+The panel used to keep one account per client (`users.client_id UNIQUE`); an
+account now owns several configurations. There is no automatic data migration:
+
+1. back up the database (see [Backups](#backups));
+2. deploy as usual — the schema is extended in place, the old `users` table and
+   the old rows in `clients` are left untouched. Existing sessions are dropped
+   on the first start: account ids can collide with old user ids, so a cookie
+   from before the upgrade must not sign in as a new account;
+3. open `/accounts`, recreate the accounts by hand, grant the exits and create
+   the configurations (this generates new keys, so devices need the new
+   `.conf`);
+4. delete the old rows: they appear as "unassigned" on `/configs` and keep
+   working (with their old grants) until deleted. Deleting a configuration
+   erases its keys and releases its routing table.
+
+Account-page and configuration-page paths are `/accounts` and `/configs`; the
+old `/clients*` routes are gone, so bookmarks must be updated.
+
 ## Versioning
 
 `VERSION` in `develop` announces the upcoming release; its notes live under
@@ -188,32 +249,40 @@ The panel has two kinds of sign-in:
   first deploy and printed once; only its hash is stored in
   `/etc/kaskad/panel.env`. Reset: delete the file, run `--tags panel`, restart
   `kaskad-panel`.
-- **client** — an account created from the client page; the email is the
-  login and the password is generated or set by the administrator and shown
-  once. A client signs in at `/me` and sees only their own config: download,
-  QR, WireGuard instructions, self-service key reissue and password change.
+- **account** — an email created by the administrator; the password is
+  generated or set there and shown once. The account signs in at `/me`, sees
+  all its configurations, downloads a `.conf` or scans a QR for any of them,
+  creates up to its limit, disables or deletes them, reissues keys, orders its
+  exits per configuration and changes its password.
 
-The administrator manages clients (create, change class and access, account,
-download the config, QR, enable/disable, delete), exits (add, enable/disable,
-delete, manual switch), service status and the action journal.
+The administrator manages accounts (`/accounts`), configurations
+(`/configs`), exits, service status and the action journal. On the account
+page: grants, exit order with "apply to all", the configuration limit, login
+state, password reset, delete. On the configuration page: download, QR, key
+reissue, link to the account, internet order, disable, delete.
+
+Pages: `/`, `/exits`, `/accounts`, `/configs`, `/journal`, `/settings`, plus
+`/accounts/new`, `/accounts/{id}`, `/configs/new`, `/configs/{id}` and the
+cabinet under `/me`, `/me/configs/new`, `/me/configs/{id}`.
 
 Sign-in limits: five failed attempts for the same email from the same address
 block that pair for five minutes, twenty failures from one address block the
 address, and repeated guesses against one email only add a growing delay — so
 nobody can lock the administrator out by guessing his address from elsewhere.
 Sessions are stored server-side: signing out revokes the cookie, changing the
-password or resetting it kills every session of that account, and a client can
+password or resetting it kills every session of that account, and an account can
 press "sign out everywhere" on `/me`.
 
 `/healthz` answers without authentication and returns
 `{"ok": true, "version": ..., "active": ...}`; it is meant for monitoring and
 returns 503 when the database cannot be read.
 
-Internet exits are granted per client: the administrator ticks the exits a
-client may use, and the client puts them in their own order on `/me`.
-Traffic uses the first granted exit that is alive; if none of them is up the
-client has no internet. Clients without granted exits stay on the automatic
-active exit selected by the failover daemon.
+Internet exits are granted per account: the administrator ticks the exits an
+account may use, and every configuration puts them in its own order on `/me`
+(or the user does it in the app). Traffic uses the first granted exit that is
+alive; if none of them is up the configuration has no internet. Configurations
+created before accounts existed stay on the automatic active exit selected by
+the failover daemon.
 
 Access mode is controlled by `kaskad_panel_expose`: `lan` keeps the port open,
 `clients` exposes it only through the tunnel at `https://10.80.0.1:8080`.
@@ -221,21 +290,29 @@ Access mode is controlled by `kaskad_panel_expose`: `lan` keeps the port open,
 ### Mobile API
 
 A small bearer-token API for the mobile app (a WireGuard Android fork). It
-uses the same client accounts as `/me`; the administrator login is not
-accepted. Form-encoded requests, JSON responses, the same sign-in limits and
-fail2ban logging as the web login (`via=api` in the journal line).
+uses the same accounts as `/me`; the administrator login is not accepted.
+Form-encoded requests, JSON responses, the same sign-in limits and fail2ban
+logging as the web login (`via=api` in the journal line).
 
 ```
-POST /api/login            email, password -> {token, expires_at, email, client}
-GET  /api/me               Authorization: Bearer <token> -> account and client info
-GET  /api/me/conf          Authorization: Bearer <token> -> the awg0 client config
-GET  /api/me/exits         Authorization: Bearer <token> -> granted internet exits
-                             in the user's order (id, name, comment, alive, rtt_ms);
-                             an empty list means the client rides the automatic exit
-POST /api/me/exits/order   exit_id (repeated) -> sets the exit order; the list
-                             must contain every granted exit exactly once
-POST /api/logout           revokes the token
+POST /api/login                   email, password -> {token, expires_at, email, client, configs}
+GET  /api/me                      -> account and its configurations
+POST /api/me/configs              name (optional) -> creates a configuration
+GET  /api/me/conf?config_id=N     the awg0 config of that configuration (first by default)
+GET  /api/me/configs/{id}/conf    the same, addressed by configuration
+POST /api/me/configs/{id}/toggle  enable or disable one configuration
+DELETE /api/me/configs/{id}       delete one configuration and its keys
+GET  /api/me/exits?config_id=N    granted internet exits in this configuration's
+                                    order (id, name, comment, alive, rtt_ms);
+                                    an empty list means the account has no grants
+POST /api/me/exits/order          exit_id (repeated) + config_id -> sets the order;
+                                    the list must contain every granted exit exactly once
+POST /api/logout                  revokes the token
 ```
+
+`client` is a compatibility field: the account's first configuration (`null`
+while the account has none), for app versions that predate the account model.
+New code should use `configs`.
 
 API tokens live 30 days, are stored server-side like web sessions, and die
 with a password change or "sign out everywhere".
@@ -379,8 +456,9 @@ a client.
 - Client tunnels are IPv4 only; on dual-stack devices IPv6 bypasses the tunnel.
 - The panel is exposed over a self-signed certificate (or a Let's Encrypt one,
   which covers the domain, not the IP) and a password.
-- Client sessions are invalidated when the account is disabled or its client
-  is disabled; the account and the client are a one-to-one pair.
+- Account sessions are invalidated when the account is disabled or its
+  password is reset. A configuration belongs to an account; disabling one
+  configuration only stops that peer, not the account.
 
 ## License
 
