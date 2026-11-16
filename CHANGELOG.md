@@ -55,6 +55,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `/settings` shows accounts and configurations instead of clients and owns
   the default configuration limit.
 
+### Fixed
+
+- `roles/panel/tasks/tls.yml`: a staging certificate is deleted before the
+  real one is issued. `certbot --keep-until-expiring` treated the test
+  certificate as valid for 90 days and never replaced it, so a stand deployed
+  with `kaskad_le_staging: true` stayed on a staging certificate after the
+  flag was turned off.
+
 ### Removed
 
 - `/clients*` pages and their templates; `/configs*` replaces them.
