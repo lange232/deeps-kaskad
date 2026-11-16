@@ -107,6 +107,21 @@ exit's CIDRs.
 On the provider side, the subnets must be allowed in the peer and routed back
 to us. That part is outside this project.
 
+## Client configs
+
+Every generated `.conf` carries `PersistentKeepalive`. The default is 25
+seconds, the WireGuard recommendation behind NAT. Some Wi-Fi and CGNAT paths
+drop an idle UDP mapping after about 15 seconds, and the tunnel then dies
+between keepalives; for such a host set
+
+```yaml
+kaskad_client_keepalive: 10
+```
+
+in `group_vars/all.yml` or the host's `host_vars`. The cost is a wake-up every
+10 seconds on the phone. The value is read when the config is generated, so an
+existing tunnel must be re-imported to pick up a change.
+
 ## Client routing
 
 `panel/routing.py` applies the state from the database:

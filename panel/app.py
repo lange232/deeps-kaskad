@@ -1082,6 +1082,10 @@ def config_access(c: dict, cl) -> tuple[str, list[str]]:
 
 def config_conf(c: dict, cl) -> str:
     allowed, dns = config_access(c, cl)
+    # 25 s is the WireGuard recommendation behind NAT; an aggressive NAT or a
+    # short UDP timeout on the path needs a smaller value, so an installation
+    # can set its own (kaskad_client_keepalive).
+    keepalive = int(c.get("client_keepalive", 25) or 25)
     lines = [
         "[Interface]",
         f"PrivateKey = {cl['private_key']}",
@@ -1097,7 +1101,7 @@ def config_conf(c: dict, cl) -> str:
         f"PresharedKey = {cl['preshared_key']}",
         f"Endpoint = {c['endpoint']}:{c['port']}",
         f"AllowedIPs = {allowed}",
-        "PersistentKeepalive = 25",
+        f"PersistentKeepalive = {keepalive}",
     ]
     return "\n".join(lines) + "\n"
 

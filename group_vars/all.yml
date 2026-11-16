@@ -18,6 +18,10 @@ kaskad_route_table: 100
 # Panel
 kaskad_endpoint: "{{ ansible_host }}"
 kaskad_panel_port: 8080
+# PersistentKeepalive written into every client config. 25 is the WireGuard
+# recommendation behind NAT; use 10 when the path drops UDP after ~15 s idle
+# (some Wi-Fi/CGNAT setups), at the cost of a wake-up every 10 s on the phone.
+kaskad_client_keepalive: 25
 # lan — port open to the network; clients — only through awg0
 kaskad_panel_expose: lan
 kaskad_panel_tls_regen: auto

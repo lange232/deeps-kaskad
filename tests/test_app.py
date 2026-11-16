@@ -99,6 +99,20 @@ class RenderTests(unittest.TestCase):
         self.assertNotIn("PublicKey = pubkey", app.render_conf(c))
 
     @unittest.skipUnless(app, "fastapi is not installed")
+    def test_client_keepalive_defaults_to_25_and_is_configurable(self):
+        c = {"endpoint": "vpn.example.com", "port": 51820, "mtu": 1280,
+             "dns": "1.1.1.1"}
+        cl = {"ip": "10.80.0.2", "private_key": "priv", "preshared_key": "psk"}
+        with mock.patch.object(app, "config_access",
+                               return_value=("0.0.0.0/0", ["1.1.1.1"])), \
+             mock.patch.object(app, "server_key", return_value="srvkey"):
+            self.assertIn("PersistentKeepalive = 25", app.config_conf(c, cl))
+            c["client_keepalive"] = 10
+            text = app.config_conf(c, cl)
+        self.assertIn("PersistentKeepalive = 10", text)
+        self.assertNotIn("PersistentKeepalive = 25", text)
+
+    @unittest.skipUnless(app, "fastapi is not installed")
     def test_failed_apply_restores_the_previous_file(self):
         c = self.config()
         path = Path(self.tmp.name) / "awg0.conf"

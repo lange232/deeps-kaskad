@@ -32,6 +32,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `kaskad_client_keepalive` (25 seconds by default) sets
+  `PersistentKeepalive` in every generated client config instead of the
+  hard-coded 25; lower it to 10 for paths that drop idle UDP mappings after
+  about 15 seconds.
 - Access is granted to the account, not to a single client: every
   configuration of the account uses the same exits. The internet order stays
   per configuration: a new configuration copies the account order, the user
