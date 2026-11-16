@@ -109,18 +109,56 @@ to us. That part is outside this project.
 
 ## Client configs
 
-Every generated `.conf` carries `PersistentKeepalive`. The default is 25
-seconds, the WireGuard recommendation behind NAT. Some Wi-Fi and CGNAT paths
-drop an idle UDP mapping after about 15 seconds, and the tunnel then dies
-between keepalives; for such a host set
+Every generated `.conf` carries `PersistentKeepalive`, 25 seconds by default
+(the WireGuard recommendation behind NAT). It is tunable per installation:
 
 ```yaml
-kaskad_client_keepalive: 10
+kaskad_client_keepalive: 10        # wake up every 10 s instead of 25
 ```
 
-in `group_vars/all.yml` or the host's `host_vars`. The cost is a wake-up every
-10 seconds on the phone. The value is read when the config is generated, so an
-existing tunnel must be re-imported to pick up a change.
+A smaller value helps when a NAT drops the mapping between keepalives, but it
+does not help against a network that blocks the protocol itself: a Wi-Fi or
+ISP that kills plain WireGuard after a few seconds of idle UDP — the tunnel
+comes up, traffic flows, then "we stopped hearing back after 15 seconds" while
+the server keeps answering — is DPI, not a timeout. Keepalive does not fix
+that; obfuscation on `awg0` does, see [Obfuscated `awg0`](#obfuscated-awg0).
+
+The value is read when the config is generated, so an existing tunnel must be
+re-imported to pick up a change.
+
+## Obfuscated `awg0`
+
+`awg0` is plain WireGuard by default: any stock WireGuard client can connect,
+and DPI can recognise the protocol. When that matters, give `awg0` the same
+obfuscation the exits use:
+
+```yaml
+kaskad_awg0_params:
+  Jc: 4
+  Jmin: 40
+  Jmax: 70
+  S1: 50
+  S2: 100
+  S3: 0
+  S4: 0
+  H1: 1048573
+  H2: 1234567
+  H3: 1500001
+  H4: 1999999
+  ContentPaddingAddition: 0
+  RandomTrailers: "off"
+  DisableCookies: "off"
+```
+
+`H1..H4` must be the same on both sides and may be any distinct numbers; pick
+random ones so installations differ. When the parameters differ from the
+neutral set, the panel writes them into every client `.conf` as well, so the
+app configures its side identically. A plain WireGuard client can no longer
+connect to such a host — the client must understand AmneziaWG parameters.
+
+The port is not part of the obfuscation: `kaskad_awg0_port` (51820 by default)
+can be moved to 443/udp if that helps on the networks you care about; remember
+the firewall role opens the configured port.
 
 ## Client routing
 

@@ -1080,6 +1080,24 @@ def config_access(c: dict, cl) -> tuple[str, list[str]]:
     return ", ".join(networks), dns[:2]
 
 
+PLAIN_AWG0_PARAMS = {
+    "jc": "0", "jmin": "0", "jmax": "0",
+    "s1": "0", "s2": "0", "s3": "0", "s4": "0",
+    "h1": "1", "h2": "2", "h3": "3", "h4": "4",
+    "contentpaddingaddition": "0",
+    "randomtrailers": "off", "disablecookies": "off",
+}
+
+
+def awg0_obfuscated(params: dict) -> bool:
+    """True when awg0 is not plain WireGuard and clients need the params too."""
+    for key, value in (params or {}).items():
+        default = PLAIN_AWG0_PARAMS.get(str(key).lower())
+        if default is not None and str(value).strip().lower() != default:
+            return True
+    return False
+
+
 def config_conf(c: dict, cl) -> str:
     allowed, dns = config_access(c, cl)
     # 25 s is the WireGuard recommendation behind NAT; an aggressive NAT or a
@@ -1093,8 +1111,15 @@ def config_conf(c: dict, cl) -> str:
     ]
     if dns:
         lines.append(f"DNS = {', '.join(dns)}")
+    lines.append(f"MTU = {c['mtu']}")
+    # With obfuscation on awg0 a plain WireGuard client cannot connect any
+    # more, and the app needs the parameters in its own config: they go into
+    # [Interface] next to the keys. Plain installs keep the file readable by
+    # stock WireGuard.
+    if awg0_obfuscated(c.get("params") or {}):
+        for key, value in c["params"].items():
+            lines.append(f"{key} = {value}")
     lines += [
-        f"MTU = {c['mtu']}",
         "",
         "[Peer]",
         f"PublicKey = {pubkey(server_key(c))}",

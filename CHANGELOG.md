@@ -34,8 +34,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `kaskad_client_keepalive` (25 seconds by default) sets
   `PersistentKeepalive` in every generated client config instead of the
-  hard-coded 25; lower it to 10 for paths that drop idle UDP mappings after
-  about 15 seconds.
+  hard-coded 25.
+- When `kaskad_awg0_params` differ from the neutral set, the parameters are
+  written into every client config too, so an obfuscated `awg0` works with the
+  app; a stock WireGuard client cannot connect to such a host.
 - Access is granted to the account, not to a single client: every
   configuration of the account uses the same exits. The internet order stays
   per configuration: a new configuration copies the account order, the user
