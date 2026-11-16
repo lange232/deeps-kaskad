@@ -57,6 +57,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The generated account password (shown once after creating an account or
+  resetting it) has the reveal and copy buttons back; they were lost when the
+  client page was replaced by the account page. The field is masked until the
+  eye is pressed, and the copy button falls back to `execCommand` when the
+  clipboard API is unavailable.
 - `roles/panel/tasks/tls.yml`: a staging certificate is deleted before the
   real one is issued. `certbot --keep-until-expiring` treated the test
   certificate as valid for 90 days and never replaced it, so a stand deployed
