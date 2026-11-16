@@ -63,6 +63,26 @@
       certbot standalone needs it for the HTTP-01 challenge
     quiet: true
 
+- name: Existing certificate
+  ansible.builtin.command:
+    argv: [certbot, certificates, --cert-name, "{{ kaskad_le_domain }}"]
+  register: kaskad_le_existing
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  when: not ansible_check_mode
+
+# certbot keeps a staging certificate until it is close to expiry, so
+# --keep-until-expiring would never replace it with a real one. A test
+# certificate is deleted explicitly before the real run.
+- name: Drop a staging certificate before issuing the real one
+  ansible.builtin.command:
+    argv: [certbot, delete, --cert-name, "{{ kaskad_le_domain }}", --non-interactive]
+  when:
+    - not ansible_check_mode
+    - not (kaskad_le_staging | bool)
+    - "'TEST_CERT' in (kaskad_le_existing.stdout | default(''))"
+
 - name: Obtain the certificate
   ansible.builtin.command:
     argv: >-

@@ -1,0 +1,187 @@
+{% extends "base.html" %}
+{% block title %}{{ config.name }} — deeps kaskad{% endblock %}
+{% block topbar %}<span class="oc-mono oc-muted">{{ config.ip }}</span>{% endblock %}
+{% block body %}
+<div class="crumbs"><a href="/configs">Configs</a><span>/</span><span>{{ config.name }}</span></div>
+<div class="page-head">
+  <div class="name-cell">
+    <h1 style="margin:0">{{ config.name }}</h1>
+    {% if config.enabled %}<span class="oc-badge oc-badge--success"><span class="oc-dot"></span>enabled</span>
+    {% else %}<span class="oc-badge oc-badge--subtle">disabled</span>{% endif %}
+  </div>
+  <p class="oc-muted" style="margin-top:6px">
+    <span class="oc-mono">{{ config.ip }}/32</span> ·
+    {% if account %}
+    <a class="oc-mono" href="/accounts/{{ account.id }}">{{ account.email }}</a>
+    {% else %}<span class="oc-badge oc-badge--warning">no account</span>{% endif %}
+    ·
+    {% if config.internet %}<span class="oc-badge oc-badge--success">internet</span>{% endif %}
+    {% for e in routed %}<span class="oc-badge oc-badge--info">{{ e.name }}</span>{% endfor %}
+    {% if not config.internet and not routed %}<span class="oc-badge oc-badge--danger">no access</span>{% endif %}
+  </p>
+</div>
+
+{% if err %}<div class="oc-alert oc-alert--danger" style="margin-bottom:16px"><span class="oc-dot" style="margin-top:7px"></span><div class="oc-alert__body">{{ err }}</div></div>{% endif %}
+{% if ok %}<div class="oc-alert oc-alert--success" style="margin-bottom:16px"><span class="oc-dot" style="margin-top:7px"></span><div class="oc-alert__body">{{ ok }}</div></div>{% endif %}
+
+{% if not account %}
+<div class="oc-alert oc-alert--warning" style="margin-bottom:16px">
+  <span class="oc-dot" style="margin-top:7px"></span>
+  <div class="oc-alert__body">
+    this configuration was created before accounts existed and has no owner.
+    delete it and create a configuration in the account instead.
+  </div>
+</div>
+{% endif %}
+
+<div class="stack">
+  <div class="oc-panel" style="padding:16px">
+    <div class="kv-grid">
+      <div><div class="k">handshake</div><div class="v" data-hs="{{ config.handshake }}">—</div></div>
+      <div><div class="k">received</div><div class="v oc-num">{{ (config.rx / 1048576) | round(1) }} MiB</div></div>
+      <div><div class="k">sent</div><div class="v oc-num">{{ (config.tx / 1048576) | round(1) }} MiB</div></div>
+      <div><div class="k">address</div><div class="v oc-mono">{{ config.ip }}</div></div>
+    </div>
+  </div>
+
+  <section>
+    <h2 class="oc-section__title">access</h2>
+    <div class="oc-panel" style="padding:16px">
+      {% if account %}
+      <p class="oc-muted" style="margin:0">
+        access to exits is granted to the account — this configuration uses the same set.
+        change it on the <a href="/accounts/{{ account.id }}">account page</a>.
+      </p>
+      {% else %}
+      <p class="oc-muted" style="margin:0">legacy configuration: its access stays as it was until deleted.</p>
+      {% endif %}
+    </div>
+  </section>
+
+  <section>
+    <h2 class="oc-section__title">internet exit order</h2>
+    <div class="oc-panel" style="padding:16px">
+      {% if internet_exits %}
+      <p class="oc-muted" style="margin:0 0 12px">
+        internet traffic uses the first available exit in this list; the order is this
+        configuration's own copy of the account order.
+      </p>
+      <div class="table-scroll">
+      <table class="oc-table">
+        <thead><tr><th style="width:1%">#</th><th>exit</th><th style="width:1%"></th></tr></thead>
+        <tbody>
+        {% for e in internet_exits %}
+          <tr>
+            <td class="oc-num">{{ loop.index }}</td>
+            <td>
+              {{ e.comment or e.name }}
+              <div class="actions" style="margin-top:4px; gap:8px">
+                {% if alive.get(e.iface) %}<span class="oc-badge oc-badge--success">up</span>
+                {% else %}<span class="oc-badge oc-badge--subtle">down</span>{% endif %}
+                {% set exit_ms = latency.get(e.iface) %}
+                {% if exit_ms %}
+                  {% if client_rtt is not none %}
+                  <span class="cell-sub oc-mono" title="client to S1 {{ client_rtt }} ms + S1 to exit {{ exit_ms }} ms">≈ {{ client_rtt + exit_ms }} ms · client {{ client_rtt }} + exit {{ exit_ms }} ms</span>
+                  {% else %}
+                  <span class="cell-sub oc-mono" title="S1 to exit only; the client does not answer ping">exit {{ exit_ms }} ms</span>
+                  {% endif %}
+                {% endif %}
+              </div>
+            </td>
+            <td>
+              <div class="actions" style="flex-wrap:nowrap">
+                <form method="post" action="/configs/{{ config.id }}/order">
+                  <input type="hidden" name="csrf_token" value="{{ csrf }}">
+                  <input type="hidden" name="exit_id" value="{{ e.id }}">
+                  <input type="hidden" name="direction" value="up">
+                  <button class="oc-btn oc-btn--neutral oc-btn--sm" {{ 'disabled' if loop.first }}>up</button>
+                </form>
+                <form method="post" action="/configs/{{ config.id }}/order">
+                  <input type="hidden" name="csrf_token" value="{{ csrf }}">
+                  <input type="hidden" name="exit_id" value="{{ e.id }}">
+                  <input type="hidden" name="direction" value="down">
+                  <button class="oc-btn oc-btn--neutral oc-btn--sm" {{ 'disabled' if loop.last }}>down</button>
+                </form>
+              </div>
+            </td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+      </div>
+      {% if account %}
+      <form method="post" action="/configs/{{ config.id }}/order/reset" style="margin-top:14px">
+        <input type="hidden" name="csrf_token" value="{{ csrf }}">
+        <button class="oc-btn oc-btn--neutral oc-btn--sm">reset to account order</button>
+      </form>
+      {% endif %}
+      {% else %}
+      <p class="oc-muted" style="margin:0">
+        the account has no internet exits granted — this configuration has no internet access.
+      </p>
+      {% endif %}
+    </div>
+  </section>
+
+  <section>
+    <h2 class="oc-section__title">configuration</h2>
+    <div class="oc-panel" style="padding:16px">
+      <div class="actions">
+        <a class="oc-btn oc-btn--outline oc-btn--sm" href="/configs/{{ config.id }}/conf">download .conf</a>
+        <form method="post" action="/configs/{{ config.id }}/reissue"
+              onsubmit="return confirm('reissue the key? the current config stops working')">
+          <input type="hidden" name="csrf_token" value="{{ csrf }}">
+          <button class="oc-btn oc-btn--neutral oc-btn--sm">reissue key</button>
+        </form>
+      </div>
+      <details id="qr" style="margin-top:14px">
+        <summary class="oc-btn oc-btn--ghost oc-btn--sm" style="display:inline-flex">show qr</summary>
+        <div style="margin-top:14px; background:var(--ui-bg-deep); padding:12px; border-radius:6px; display:inline-block">
+          <img src="/configs/{{ config.id }}/qr.png" alt="qr" style="width:220px; height:220px; image-rendering:pixelated">
+        </div>
+      </details>
+      <details style="margin-top:14px">
+        <summary class="oc-btn oc-btn--ghost oc-btn--sm" style="display:inline-flex">show config</summary>
+        {% if conf %}<pre class="conf" style="margin-top:12px">{{ conf }}</pre>
+        {% else %}<p class="oc-muted" style="margin-top:10px">the account has neither internet nor subnets assigned — no config can be issued.</p>{% endif %}
+      </details>
+      <p class="oc-hint" style="margin-top:12px">
+        one configuration is meant for one device: a WireGuard peer keeps one session,
+        two devices with the same config will keep taking it over from each other.
+      </p>
+    </div>
+  </section>
+
+  <section>
+    <h2 class="oc-section__title">danger zone</h2>
+    <div class="oc-panel" style="padding:16px">
+      <div class="actions">
+        <form method="post" action="/configs/{{ config.id }}/toggle">
+          <input type="hidden" name="csrf_token" value="{{ csrf }}">
+          <button class="oc-btn oc-btn--neutral oc-btn--sm">{{ 'disable' if config.enabled else 'enable' }}</button>
+        </form>
+        <form method="post" action="/configs/{{ config.id }}/delete"
+              onsubmit="return confirm('delete {{ config.name }}? its keys are erased and the config stops working')">
+          <input type="hidden" name="csrf_token" value="{{ csrf }}">
+          <button class="oc-btn oc-btn--ghost-danger oc-btn--sm">delete configuration</button>
+        </form>
+        <a class="oc-btn oc-btn--ghost-muted oc-btn--sm" href="/configs">back</a>
+      </div>
+      <p class="oc-hint" style="margin-top:10px">disable keeps the peer and lets you turn it back on; delete erases the keys.</p>
+    </div>
+  </section>
+</div>
+
+<script>
+function rel(ts) {
+  if (!ts || Number(ts) <= 0) return 'no data';
+  const d = Math.floor(Date.now() / 1000 - Number(ts));
+  if (d < 60) return d + 's ago';
+  if (d < 3600) return Math.floor(d / 60) + 'm ago';
+  if (d < 86400) return Math.floor(d / 3600) + 'h ago';
+  return Math.floor(d / 86400) + 'd ago';
+}
+for (const el of document.querySelectorAll('[data-hs]')) el.textContent = rel(el.dataset.hs);
+kaskadAutoRefresh(30);
+</script>
+{% endblock %}

@@ -1,0 +1,252 @@
+{% extends "base.html" %}
+{% block title %}{{ cl.name }} — deeps kaskad{% endblock %}
+{% block topbar %}<span class="oc-mono oc-muted">{{ email }}</span>{% endblock %}
+{% block body %}
+<div class="crumbs"><a href="/me">My access</a><span>/</span><span>{{ cl.name }}</span></div>
+<div class="page-head">
+  <div class="name-cell">
+    <h1 style="margin:0">{{ cl.name }}</h1>
+    {% if cl.enabled %}<span class="oc-badge oc-badge--success"><span class="oc-dot"></span>active</span>
+    {% else %}<span class="oc-badge oc-badge--subtle">disabled</span>{% endif %}
+  </div>
+  <p class="oc-muted" style="margin-top:6px">
+    <span class="oc-mono">{{ cl.ip }}/32</span> ·
+    {% if cl.internet %}<span class="oc-badge oc-badge--success">internet</span>{% endif %}
+    {% for name in cl.exits %}<span class="oc-badge oc-badge--info">{{ name }}</span>{% endfor %}
+    {% if not cl.internet and not cl.exits %}<span class="oc-badge oc-badge--danger">no access</span>{% endif %}
+  </p>
+</div>
+
+{% if err %}<div class="oc-alert oc-alert--danger" style="margin-bottom:16px"><span class="oc-dot" style="margin-top:7px"></span><div class="oc-alert__body">{{ err }}</div></div>{% endif %}
+{% if ok %}<div class="oc-alert oc-alert--success" style="margin-bottom:16px"><span class="oc-dot" style="margin-top:7px"></span><div class="oc-alert__body">{{ ok }}</div></div>{% endif %}
+
+<div class="stack">
+  <div class="oc-panel" style="padding:16px">
+    <div class="kv-grid">
+      <div><div class="k">handshake</div><div class="v" data-hs="{{ cl.handshake }}">—</div></div>
+      <div><div class="k">received</div><div class="v oc-num">{{ (cl.rx / 1048576) | round(1) }} MiB</div></div>
+      <div><div class="k">sent</div><div class="v oc-num">{{ (cl.tx / 1048576) | round(1) }} MiB</div></div>
+      <div><div class="k">address</div><div class="v oc-mono">{{ cl.ip }}</div></div>
+    </div>
+  </div>
+
+  {% if internet_exits and cl.internet %}
+  <section>
+    <h2 class="oc-section__title">exit priority</h2>
+    <div class="oc-panel" style="padding:16px">
+      <p class="oc-muted" style="margin:0 0 12px">
+        internet traffic uses the first available exit in this list; if none of them is up,
+        there is no internet.
+      </p>
+      {% if current_exit %}
+      <p style="margin:0 0 12px">
+        in use now: <span class="oc-badge oc-badge--accent">{{ current_exit.comment or current_exit.name }}</span>
+      </p>
+      {% else %}
+      <p style="margin:0 0 12px">
+        <span class="oc-badge oc-badge--danger">no internet</span>
+        none of the granted exits is up
+      </p>
+      {% endif %}
+      <p class="oc-hint" style="margin:0 0 10px">
+        ping = your device to the panel (<span id="client-rtt">measuring…</span>)
+        + panel to the exit
+      </p>
+      <div class="table-scroll">
+      <table class="oc-table">
+        <thead>
+          <tr><th style="width:1%">#</th><th>exit</th><th style="width:1%"></th></tr>
+        </thead>
+        <tbody>
+        {% for e in internet_exits %}
+          <tr>
+            <td class="oc-num">{{ loop.index }}</td>
+            <td>
+              {{ e.comment or e.name }}
+              <div class="actions" style="margin-top:4px; gap:8px">
+                {% if current_exit and current_exit.id == e.id %}<span class="oc-badge oc-badge--accent">in use</span>{% endif %}
+                {% if alive.get(e.iface) %}<span class="oc-badge oc-badge--success">up</span>
+                {% else %}<span class="oc-badge oc-badge--subtle">down</span>{% endif %}
+                {% if alive.get(e.iface) and latency.get(e.iface) %}
+                <span class="cell-sub oc-mono" data-exit-ping="{{ latency.get(e.iface) }}"
+                      title="panel to exit only; measuring your device...">{{ latency.get(e.iface) }} ms</span>
+                <span class="cell-sub oc-mono" data-ping-parts="{{ latency.get(e.iface) }}">exit {{ latency.get(e.iface) }} ms</span>
+                {% endif %}
+              </div>
+            </td>
+            <td>
+              <div class="actions" style="flex-wrap:nowrap">
+                <form method="post" action="/me/configs/{{ cl.id }}/order">
+                  <input type="hidden" name="csrf_token" value="{{ csrf }}">
+                  <input type="hidden" name="exit_id" value="{{ e.id }}">
+                  <input type="hidden" name="direction" value="up">
+                  <button class="oc-btn oc-btn--neutral oc-btn--sm" {{ 'disabled' if loop.first }}>up</button>
+                </form>
+                <form method="post" action="/me/configs/{{ cl.id }}/order">
+                  <input type="hidden" name="csrf_token" value="{{ csrf }}">
+                  <input type="hidden" name="exit_id" value="{{ e.id }}">
+                  <input type="hidden" name="direction" value="down">
+                  <button class="oc-btn oc-btn--neutral oc-btn--sm" {{ 'disabled' if loop.last }}>down</button>
+                </form>
+              </div>
+            </td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+      </div>
+      <form method="post" action="/me/configs/{{ cl.id }}/order/reset" style="margin-top:14px">
+        <input type="hidden" name="csrf_token" value="{{ csrf }}">
+        <button class="oc-btn oc-btn--neutral oc-btn--sm">reset to account order</button>
+      </form>
+    </div>
+  </section>
+  {% endif %}
+
+  <section>
+    <h2 class="oc-section__title">configuration</h2>
+    <div class="oc-panel" style="padding:16px">
+      {% if conf %}
+      <div class="actions">
+        <a class="oc-btn oc-btn--outline oc-btn--sm" href="/me/configs/{{ cl.id }}/conf">download .conf</a>
+        {% if has_app %}
+        <a class="oc-btn oc-btn--outline oc-btn--sm" href="/download/android">android app</a>
+        {% endif %}
+        <details id="qr" style="display:inline-flex">
+          <summary class="oc-btn oc-btn--ghost oc-btn--sm" style="display:inline-flex">show qr</summary>
+        </details>
+      </div>
+      <div id="qr-box" style="margin-top:14px; background:var(--ui-bg-deep); padding:12px; border-radius:6px; display:none">
+        <img src="/me/configs/{{ cl.id }}/qr.png" alt="qr" style="width:240px; height:240px; image-rendering:pixelated">
+      </div>
+      <details style="margin-top:14px">
+        <summary class="oc-btn oc-btn--ghost oc-btn--sm" style="display:inline-flex">show config</summary>
+        <pre class="conf" style="margin-top:12px">{{ conf }}</pre>
+        <p class="oc-hint" style="margin-top:8px">keys are hidden here; the downloaded file is complete</p>
+      </details>
+      {% else %}
+      <p class="oc-muted" style="margin:0">
+        this configuration has no internet or subnet access assigned yet — contact the administrator.
+      </p>
+      {% endif %}
+    </div>
+  </section>
+
+  {% if conf %}
+  <section>
+    <h2 class="oc-section__title">wireguard client</h2>
+    <div class="oc-panel" style="padding:16px">
+      <p class="oc-muted" style="margin:0 0 12px">
+        use the standard WireGuard app; Amnezia is not required.
+        install it from <a href="https://www.wireguard.com/install/">wireguard.com/install</a>.
+      </p>
+      <ol class="oc-muted" style="margin:0; padding-left:20px; line-height:1.9">
+        <li>install WireGuard for Windows, macOS, Android, iOS or Linux;</li>
+        <li>create a tunnel: scan the QR code or import the downloaded <span class="oc-mono">.conf</span> file;</li>
+        <li>switch the tunnel on — all traffic listed above goes through deeps kaskad;</li>
+        <li>download the config again after reissuing the key.</li>
+      </ol>
+    </div>
+  </section>
+
+  <section>
+    <h2 class="oc-section__title">reissue key</h2>
+    <div class="oc-panel" style="padding:16px">
+      <p class="oc-muted" style="margin:0 0 12px">
+        generates new keys on the server. the current config stops working immediately,
+        so download the new one and update the device.
+      </p>
+      <form method="post" action="/me/configs/{{ cl.id }}/reissue"
+            onsubmit="return confirm('reissue the key? the current config will stop working')">
+        <input type="hidden" name="csrf_token" value="{{ csrf }}">
+        <button class="oc-btn oc-btn--neutral oc-btn--sm">reissue key</button>
+      </form>
+    </div>
+  </section>
+  {% endif %}
+
+  <section>
+    <h2 class="oc-section__title">danger zone</h2>
+    <div class="oc-panel" style="padding:16px">
+      <div class="actions">
+        <form method="post" action="/me/configs/{{ cl.id }}/toggle">
+          <input type="hidden" name="csrf_token" value="{{ csrf }}">
+          <button class="oc-btn oc-btn--neutral oc-btn--sm">{{ 'disable' if cl.enabled else 'enable' }}</button>
+        </form>
+        <form method="post" action="/me/configs/{{ cl.id }}/delete"
+              onsubmit="return confirm('delete {{ cl.name }}? its keys are erased and the config stops working')">
+          <input type="hidden" name="csrf_token" value="{{ csrf }}">
+          <button class="oc-btn oc-btn--ghost-danger oc-btn--sm">delete configuration</button>
+        </form>
+        <a class="oc-btn oc-btn--ghost-muted oc-btn--sm" href="/me">back</a>
+      </div>
+      <p class="oc-hint" style="margin-top:10px">
+        disable keeps the peer and lets you turn it back on; delete erases the keys.
+      </p>
+    </div>
+  </section>
+</div>
+
+<script>
+function rel(ts) {
+  if (!ts || Number(ts) <= 0) return 'no data';
+  const d = Math.floor(Date.now() / 1000 - Number(ts));
+  if (d < 60) return d + 's ago';
+  if (d < 3600) return Math.floor(d / 60) + 'm ago';
+  if (d < 86400) return Math.floor(d / 3600) + 'h ago';
+  return Math.floor(d / 86400) + 'd ago';
+}
+for (const el of document.querySelectorAll('[data-hs]')) el.textContent = rel(el.dataset.hs);
+
+// The exit ping comes from the server; the part from this device to the panel
+// is measured here, a few samples, median. Total = both.
+(function () {
+  const targets = document.querySelectorAll('[data-exit-ping]');
+  if (!targets.length) return;
+
+  function apply(clientMs) {
+    const label = document.getElementById('client-rtt');
+    if (label) label.textContent = clientMs + ' ms';
+    for (const el of targets) {
+      const exitMs = Number(el.dataset.exitPing);
+      if (!Number.isFinite(exitMs)) continue;
+      el.textContent = '≈ ' + (clientMs + exitMs) + ' ms';
+      el.title = 'device to panel ' + clientMs + ' ms + panel to exit ' + exitMs + ' ms';
+      const parts = el.parentElement.querySelector('[data-ping-parts]');
+      if (parts) parts.textContent = 'exit ' + exitMs + ' + device ' + clientMs + ' ms';
+    }
+  }
+
+  function unavailable() {
+    const label = document.getElementById('client-rtt');
+    if (label) label.textContent = 'unavailable';
+    for (const el of targets) {
+      el.textContent = Number(el.dataset.exitPing) + ' ms';
+      el.title = 'panel to exit only; the device round-trip could not be measured';
+    }
+  }
+
+  function sample(left, values) {
+    if (left <= 0) {
+      if (!values.length) {
+        unavailable();
+        return;
+      }
+      values.sort((a, b) => a - b);
+      apply(Math.round(values[Math.floor(values.length / 2)]));
+      return;
+    }
+    const started = performance.now();
+    fetch('/ping', {cache: 'no-store'})
+      .then((r) => r.text())
+      .then(() => values.push(performance.now() - started))
+      .catch(() => {})
+      .finally(() => sample(left - 1, values));
+  }
+
+  sample(4, []);
+})();
+
+kaskadAutoRefresh(30);
+</script>
+{% endblock %}

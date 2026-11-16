@@ -104,7 +104,13 @@ def exits() -> list[dict]:
 
 
 def client_grants() -> list[dict]:
-    """Granted internet exits, ordered by the client's own priority."""
+    """Granted internet exits, ordered by the client's own priority.
+
+    A configuration owned by an account gets its access from the account; its
+    `client_internet_exits` rows are kept in step with the grants, so the same
+    query serves both. The legacy `internet` flag only matters for rows that
+    predate accounts.
+    """
     conn = sqlite3.connect(DB_PATH, timeout=5)
     conn.row_factory = sqlite3.Row
     try:
@@ -115,7 +121,7 @@ def client_grants() -> list[dict]:
                 "c.table_num AS client_table, e.iface "
                 "FROM client_internet_exits ce "
                 "JOIN clients c ON c.id = ce.client_id "
-                "AND c.enabled = 1 AND c.internet = 1 "
+                "AND c.enabled = 1 AND (c.internet = 1 OR c.account_id IS NOT NULL) "
                 "JOIN exits e ON e.id = ce.exit_id "
                 "AND e.enabled = 1 AND e.mode = 'internet' "
                 "ORDER BY ce.client_id, ce.priority, e.priority, e.id"

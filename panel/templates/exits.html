@@ -23,6 +23,7 @@
     <span style="flex:1"></span>
     <span class="oc-badge oc-badge--subtle">{{ exits | selectattr('enabled') | list | length }} of {{ exits | length }} enabled</span>
   </div>
+  <div class="table-scroll">
   <table class="oc-table">
     <thead>
       <tr><th>name</th><th>mode</th><th>interface</th><th>address</th><th>state</th><th>ping</th><th></th></tr>
@@ -61,6 +62,7 @@
     {% endfor %}
     </tbody>
   </table>
+  </div>
 </div>
 {% else %}
 <div class="oc-card oc-card--warning">

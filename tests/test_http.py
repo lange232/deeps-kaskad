@@ -10,6 +10,7 @@ request handling, the database state and the transaction boundaries.
 import json
 import os
 import re
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -116,23 +117,32 @@ class PanelTestCase(unittest.TestCase):
         self.assertEqual(response.status_code, 303)
         return response
 
+    def seed_account(self, email="c1@example.com", password=USER_PASSWORD,
+                     enabled=1, max_configs=None):
+        with app.db() as conn:
+            cur = conn.execute(
+                "INSERT INTO accounts (email, password_hash, enabled, "
+                "token_version, max_configs, created_at) "
+                "VALUES (?, ?, ?, 1, ?, 'now')",
+                (email, auth.hash_password(password), enabled, max_configs),
+            )
+            return cur.lastrowid
+
     def seed_client(self, name="c1", ip="10.80.0.2", email="c1@example.com",
-                    password=USER_PASSWORD, internet=1, enabled=1):
+                    password=USER_PASSWORD, internet=1, enabled=1,
+                    max_configs=None):
+        """An account with its first configuration; returns (account, config)."""
+        aid = self.seed_account(email, password, max_configs=max_configs)
         with app.db() as conn:
             table = app.routing.allocate_table(conn)
             cur = conn.execute(
-                "INSERT INTO clients (name, ip, public_key, private_key, "
-                "preshared_key, enabled, created_at, internet, table_num) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (name, ip, "pubkey", "privkey", "psk", enabled, "now", internet, table),
+                "INSERT INTO clients (account_id, name, ip, public_key, "
+                "private_key, preshared_key, enabled, created_at, internet, "
+                "table_num) VALUES (?, ?, ?, 'pubkey', 'privkey', 'psk', ?, "
+                "'now', ?, ?)",
+                (aid, name, ip, enabled, internet, table),
             )
-            cid = cur.lastrowid
-            conn.execute(
-                "INSERT INTO users (client_id, email, password_hash, enabled, "
-                "token_version, created_at) VALUES (?, ?, ?, 1, 1, ?)",
-                (cid, email, auth.hash_password(password), "now"),
-            )
-        return cid
+            return aid, cur.lastrowid
 
     def seed_exit(self, name="e1", iface="awg1", mode="internet", routes="",
                   enabled=1, priority=10):
@@ -145,15 +155,37 @@ class PanelTestCase(unittest.TestCase):
             )
             return cur.lastrowid
 
+    def grant(self, aid, cid, exit_id, priority=10):
+        """Access for the account plus the configuration's own order row."""
+        with app.db() as conn:
+            conn.execute(
+                "INSERT INTO account_exits (account_id, exit_id, priority) "
+                "VALUES (?, ?, ?)", (aid, exit_id, priority),
+            )
+            conn.execute(
+                "INSERT INTO client_internet_exits (client_id, exit_id, priority) "
+                "VALUES (?, ?, ?)", (cid, exit_id, priority),
+            )
+
     def grants(self, cid):
         with app.db() as conn:
             return [tuple(r) for r in conn.execute(
                 "SELECT exit_id, priority FROM client_internet_exits "
                 "WHERE client_id = ? ORDER BY priority", (cid,))]
 
+    def account_grants(self, aid):
+        with app.db() as conn:
+            return [tuple(r) for r in conn.execute(
+                "SELECT exit_id, priority FROM account_exits "
+                "WHERE account_id = ? ORDER BY priority", (aid,))]
+
     def client_count(self):
         with app.db() as conn:
             return conn.execute("SELECT count(*) FROM clients").fetchone()[0]
+
+    def account_count(self):
+        with app.db() as conn:
+            return conn.execute("SELECT count(*) FROM accounts").fetchone()[0]
 
 
 class LoginTests(PanelTestCase):
@@ -169,12 +201,12 @@ class LoginTests(PanelTestCase):
 
     def test_bad_csrf_is_rejected(self):
         self.login_admin()
-        response = self.client.post("/clients", data={
-            "name": "c1", "email": "c1@example.com", "password": USER_PASSWORD,
+        response = self.client.post("/accounts", data={
+            "email": "c1@example.com", "password": USER_PASSWORD,
             "csrf_token": "wrong",
         })
         self.assertEqual(response.status_code, 400)
-        self.assertEqual(self.client_count(), 0)
+        self.assertEqual(self.account_count(), 0)
 
 
 class RateLimitTests(PanelTestCase):
@@ -188,21 +220,21 @@ class RoleTests(PanelTestCase):
     def test_user_cannot_open_admin_pages(self):
         self.seed_client(email="c1@example.com")
         self.login("c1@example.com", USER_PASSWORD)
-        for path in ("/clients", "/exits", "/journal"):
+        for path in ("/accounts", "/configs", "/exits", "/journal"):
             response = self.client.get(path)
             self.assertEqual(response.status_code, 303, path)
             self.assertEqual(response.headers["location"], "/me")
 
     def test_user_cannot_change_grants(self):
-        cid = self.seed_client(email="c1@example.com")
+        aid, _ = self.seed_client(email="c1@example.com")
         exit_id = self.seed_exit()
         self.login("c1@example.com", USER_PASSWORD)
         csrf = self.csrf("/me")
-        response = self.client.post(f"/clients/{cid}/internet",
+        response = self.client.post(f"/accounts/{aid}/exits",
                                     data={"exits": [exit_id], "csrf_token": csrf})
         self.assertEqual(response.status_code, 303)
         self.assertEqual(response.headers["location"], "/me")
-        self.assertEqual(self.grants(cid), [])
+        self.assertEqual(self.account_grants(aid), [])
 
     def test_anonymous_is_redirected_to_login(self):
         response = self.client.get("/me")
@@ -279,21 +311,31 @@ class SessionTests(PanelTestCase):
                          "/login")
         with app.db() as conn:
             self.assertEqual(conn.execute(
-                "SELECT token_version FROM users").fetchone()[0], 2)
+                "SELECT token_version FROM accounts").fetchone()[0], 2)
 
     def test_account_reset_revokes_user_sessions(self):
-        cid = self.seed_client(email="c1@example.com")
+        aid, _ = self.seed_client(email="c1@example.com")
         self.login("c1@example.com", USER_PASSWORD)
         cookie = self.client.cookies.get(app.COOKIE)
         self.client.post("/logout")
 
         self.login_admin()
-        csrf = self.csrf(f"/clients/{cid}")
-        response = self.client.post(f"/clients/{cid}/account/password",
+        csrf = self.csrf(f"/accounts/{aid}")
+        response = self.client.post(f"/accounts/{aid}/password",
                                     data={"csrf_token": csrf})
         self.assertEqual(response.status_code, 303)
         self.assertEqual(self.stale_client(cookie).get("/me").headers["location"],
                          "/login")
+
+    def test_upgrade_drops_sessions_from_before_accounts(self):
+        """Account ids can collide with old users ids, so old cookies die."""
+        app.start_session("user", 1, 1)
+        with app.db() as conn:
+            conn.execute("DROP TABLE accounts")
+        app.init_db()
+        with app.db() as conn:
+            self.assertEqual(conn.execute(
+                "SELECT count(*) FROM sessions").fetchone()[0], 0)
 
     def test_healthz_is_public(self):
         fresh = {"ts": int(time.time())}
@@ -341,38 +383,47 @@ class RollbackMessageTests(PanelTestCase):
         self.assertIn("inspect", text)
         self.assertNotIn("nothing", text)
 
-    def test_create_client(self):
+    def make_account(self, email="rb@example.com"):
         self.login_admin()
-        csrf = self.csrf("/clients/new")
+        csrf = self.csrf("/accounts/new")
+        response = self.client.post("/accounts", data={
+            "email": email, "password": USER_PASSWORD, "csrf_token": csrf,
+        })
+        self.assertEqual(response.status_code, 303)
+        location = response.headers["location"]
+        return int(location.split("/accounts/")[1].split("?")[0])
+
+    def test_create_config(self):
+        aid = self.make_account()
+        csrf = self.csrf(f"/accounts/{aid}")
         app.apply_conf.side_effect = self.rollback_error()
-        response = self.client.post("/clients", data={
-            "name": "rb", "email": "rb@example.com",
-            "password": USER_PASSWORD, "csrf_token": csrf,
+        response = self.client.post(f"/accounts/{aid}/configs", data={
+            "name": "rb", "csrf_token": csrf,
         })
         self.assert_warns(response)
 
-    def test_toggle_client(self):
-        cid = self.seed_client()
+    def test_toggle_config(self):
+        _, cid = self.seed_client()
         self.login_admin()
-        csrf = self.csrf(f"/clients/{cid}")
+        csrf = self.csrf(f"/configs/{cid}")
         app.apply_conf.side_effect = self.rollback_error()
-        self.assert_warns(self.client.post(f"/clients/{cid}/toggle",
+        self.assert_warns(self.client.post(f"/configs/{cid}/toggle",
                                            data={"csrf_token": csrf}))
 
-    def test_delete_client(self):
-        cid = self.seed_client()
+    def test_delete_config(self):
+        _, cid = self.seed_client()
         self.login_admin()
-        csrf = self.csrf(f"/clients/{cid}")
+        csrf = self.csrf(f"/configs/{cid}")
         app.apply_conf.side_effect = self.rollback_error()
-        self.assert_warns(self.client.post(f"/clients/{cid}/delete",
+        self.assert_warns(self.client.post(f"/configs/{cid}/delete",
                                            data={"csrf_token": csrf}))
 
     def test_reissue(self):
-        self.seed_client(email="rb@example.com")
+        _, cid = self.seed_client(email="rb@example.com")
         self.login("rb@example.com", USER_PASSWORD)
-        csrf = self.csrf("/me")
+        csrf = self.csrf(f"/me/configs/{cid}")
         app.apply_conf.side_effect = self.rollback_error()
-        self.assert_warns(self.client.post("/me/reissue",
+        self.assert_warns(self.client.post(f"/me/configs/{cid}/reissue",
                                            data={"csrf_token": csrf}))
 
 
@@ -471,98 +522,158 @@ class AdminPingTests(PanelTestCase):
         self.assertIn("kaskadAutoRefresh = function", response.text)
 
 
-class ClientTests(PanelTestCase):
-    def test_create_client_with_account(self):
+class AccountTests(PanelTestCase):
+    def create_account(self, email="new@example.com", max_configs=""):
         self.login_admin()
-        csrf = self.csrf("/clients/new")
-        response = self.client.post("/clients", data={
-            "name": "new-client", "email": "new@example.com",
-            "password": USER_PASSWORD, "internet": "on",
-            "csrf_token": csrf,
+        csrf = self.csrf("/accounts/new")
+        response = self.client.post("/accounts", data={
+            "email": email, "password": USER_PASSWORD,
+            "max_configs": max_configs, "csrf_token": csrf,
         })
         self.assertEqual(response.status_code, 303)
-        self.assertIn("/clients/", response.headers["location"])
+        location = response.headers["location"]
+        return int(location.split("/accounts/")[1].split("?")[0])
+
+    def test_create_account_and_config(self):
+        aid = self.create_account()
         with app.db() as conn:
-            client = conn.execute("SELECT * FROM clients").fetchone()
-            user = conn.execute("SELECT * FROM users").fetchone()
-        self.assertEqual(client["name"], "new-client")
-        self.assertEqual(client["ip"], "10.80.0.2")
-        self.assertGreaterEqual(client["table_num"], app.routing.TABLE_POOL_BASE)
-        self.assertEqual(user["client_id"], client["id"])
-        self.assertEqual(user["email"], "new@example.com")
+            account = conn.execute("SELECT * FROM accounts").fetchone()
+        self.assertEqual(account["email"], "new@example.com")
+        self.assertIsNone(account["max_configs"])
+
+        csrf = self.csrf("/configs/new")
+        response = self.client.post("/configs", data={
+            "account_id": aid, "name": "new-client", "csrf_token": csrf,
+        })
+        self.assertEqual(response.status_code, 303)
+        self.assertIn("/configs/", response.headers["location"])
+        with app.db() as conn:
+            config = conn.execute("SELECT * FROM clients").fetchone()
+            claims = [tuple(r) for r in conn.execute(
+                "SELECT table_num, kind, owner_id FROM table_numbers")]
+        self.assertEqual(config["account_id"], aid)
+        self.assertEqual(config["name"], "new-client")
+        self.assertEqual(config["ip"], "10.80.0.2")
+        self.assertGreaterEqual(config["table_num"], app.routing.TABLE_POOL_BASE)
+        self.assertEqual(claims,
+                         [(config["table_num"], "client", config["id"])])
         app.apply_conf.assert_called()
         # The tunnel must be configured from the uncommitted transaction.
         self.assertIsNotNone(app.apply_conf.call_args.args[1])
-        with app.db() as conn:
-            claims = [tuple(r) for r in conn.execute(
-                "SELECT table_num, kind, owner_id FROM table_numbers")]
-        self.assertEqual(claims, [(client["table_num"], "client", client["id"])])
 
     def test_duplicate_email_creates_nothing(self):
-        self.seed_client(email="taken@example.com")
+        self.seed_account(email="taken@example.com")
         self.login_admin()
-        csrf = self.csrf("/clients/new")
-        response = self.client.post("/clients", data={
-            "name": "other", "email": "taken@example.com",
-            "password": USER_PASSWORD, "csrf_token": csrf,
+        csrf = self.csrf("/accounts/new")
+        response = self.client.post("/accounts", data={
+            "email": "taken@example.com", "password": USER_PASSWORD,
+            "csrf_token": csrf,
         })
         self.assertEqual(response.status_code, 303)
         self.assertIn("err=", response.headers["location"])
-        self.assertEqual(self.client_count(), 1)
+        self.assertEqual(self.account_count(), 1)
 
     def test_failed_apply_leaves_no_rows(self):
+        self.seed_account(email="broken@example.com")
+        with app.db() as conn:
+            aid = conn.execute("SELECT id FROM accounts").fetchone()[0]
         self.login_admin()
-        csrf = self.csrf("/clients/new")
+        csrf = self.csrf(f"/accounts/{aid}")
         app.apply_conf.side_effect = RuntimeError("syncconf: boom")
-        response = self.client.post("/clients", data={
-            "name": "broken", "email": "broken@example.com",
-            "password": USER_PASSWORD, "csrf_token": csrf,
+        response = self.client.post(f"/accounts/{aid}/configs", data={
+            "name": "broken", "csrf_token": csrf,
         })
         self.assertEqual(response.status_code, 303)
         self.assertIn("err=", response.headers["location"])
-        with app.db() as conn:
-            self.assertEqual(conn.execute("SELECT count(*) FROM clients").fetchone()[0], 0)
-            self.assertEqual(conn.execute("SELECT count(*) FROM users").fetchone()[0], 0)
+        self.assertEqual(self.client_count(), 0)
 
-    def test_delete_removes_account_and_grants(self):
-        cid = self.seed_client()
+    def test_delete_config_removes_grants_and_table(self):
+        aid, cid = self.seed_client()
         exit_id = self.seed_exit()
-        with app.db() as conn:
-            conn.execute(
-                "INSERT INTO client_internet_exits (client_id, exit_id, priority) "
-                "VALUES (?, ?, 10)", (cid, exit_id))
+        self.grant(aid, cid, exit_id)
         self.login_admin()
-        csrf = self.csrf(f"/clients/{cid}")
-        response = self.client.post(f"/clients/{cid}/delete",
+        csrf = self.csrf(f"/configs/{cid}")
+        response = self.client.post(f"/configs/{cid}/delete",
                                     data={"csrf_token": csrf})
         self.assertEqual(response.status_code, 303)
         with app.db() as conn:
-            self.assertEqual(conn.execute("SELECT count(*) FROM clients").fetchone()[0], 0)
-            self.assertEqual(conn.execute("SELECT count(*) FROM users").fetchone()[0], 0)
+            self.assertEqual(conn.execute(
+                "SELECT count(*) FROM clients").fetchone()[0], 0)
             self.assertEqual(conn.execute(
                 "SELECT count(*) FROM client_internet_exits").fetchone()[0], 0)
             self.assertEqual(conn.execute(
                 "SELECT count(*) FROM table_numbers").fetchone()[0], 0)
+            self.assertEqual(conn.execute(
+                "SELECT count(*) FROM accounts").fetchone()[0], 1)
 
-    def test_failed_apply_keeps_the_client(self):
-        cid = self.seed_client()
+    def test_delete_account_removes_its_configs(self):
+        aid, _ = self.seed_client()
         self.login_admin()
-        csrf = self.csrf(f"/clients/{cid}")
+        csrf = self.csrf(f"/accounts/{aid}")
+        response = self.client.post(f"/accounts/{aid}/delete",
+                                    data={"csrf_token": csrf})
+        self.assertEqual(response.status_code, 303)
+        with app.db() as conn:
+            self.assertEqual(conn.execute(
+                "SELECT count(*) FROM clients").fetchone()[0], 0)
+            self.assertEqual(conn.execute(
+                "SELECT count(*) FROM accounts").fetchone()[0], 0)
+            self.assertEqual(conn.execute(
+                "SELECT count(*) FROM table_numbers").fetchone()[0], 0)
+
+    def test_failed_apply_keeps_the_config(self):
+        _, cid = self.seed_client()
+        self.login_admin()
+        csrf = self.csrf(f"/configs/{cid}")
         app.apply_conf.side_effect = RuntimeError("syncconf: boom")
-        response = self.client.post(f"/clients/{cid}/delete",
+        response = self.client.post(f"/configs/{cid}/delete",
                                     data={"csrf_token": csrf})
         self.assertEqual(response.status_code, 303)
         self.assertIn("err=", response.headers["location"])
         self.assertEqual(self.client_count(), 1)
 
 
-class ClientPingTests(PanelTestCase):
+class ConfigLimitTests(PanelTestCase):
+    def test_personal_limit_blocks_another_config(self):
+        aid, _ = self.seed_client(max_configs=1)
+        self.login_admin()
+        csrf = self.csrf(f"/accounts/{aid}")
+        response = self.client.post(f"/accounts/{aid}/configs", data={
+            "name": "second", "csrf_token": csrf,
+        })
+        self.assertEqual(response.status_code, 303)
+        self.assertIn("err=", response.headers["location"])
+        self.assertEqual(self.client_count(), 1)
+
+    def test_limit_below_the_current_count_is_rejected(self):
+        aid, _ = self.seed_client()
+        self.login_admin()
+        csrf = self.csrf(f"/accounts/{aid}")
+        response = self.client.post(f"/accounts/{aid}/max-configs", data={
+            "max_configs": "0", "csrf_token": csrf,
+        })
+        self.assertEqual(response.status_code, 303)
+        self.assertIn("err=", response.headers["location"])
+
+    def test_default_limit_is_editable(self):
+        self.login_admin()
+        response = self.client.get("/settings")
+        self.assertIn("default configurations per account", response.text)
+        csrf = self.csrf("/settings")
+        response = self.client.post("/settings/max-configs", data={
+            "default_max_configs": "2", "csrf_token": csrf,
+        })
+        self.assertEqual(response.status_code, 303)
+        self.assertEqual(app.setting("default_max_configs"), "2")
+
+
+class ConfigPingTests(PanelTestCase):
     def card(self, status):
-        cid = self.seed_client()
-        self.seed_exit("e1", "awg1")
+        aid, cid = self.seed_client()
+        self.grant(aid, cid, self.seed_exit("e1", "awg1"))
         self.login_admin()
         with mock.patch.object(app, "read_status", return_value=status):
-            response = self.client.get(f"/clients/{cid}")
+            response = self.client.get(f"/configs/{cid}")
         self.assertEqual(response.status_code, 200)
         return response.text
 
@@ -584,40 +695,111 @@ class ClientPingTests(PanelTestCase):
 
 
 class GrantTests(PanelTestCase):
-    def test_grants_are_saved_in_order(self):
-        cid = self.seed_client()
+    def test_grants_are_saved_in_order_for_every_config(self):
+        aid, cid = self.seed_client()
         first = self.seed_exit("e1", "awg1", priority=10)
         second = self.seed_exit("e2", "awg2", priority=20)
         self.login_admin()
-        csrf = self.csrf(f"/clients/{cid}")
-        response = self.client.post(f"/clients/{cid}/internet", data={
+        csrf = self.csrf(f"/accounts/{aid}")
+        response = self.client.post(f"/accounts/{aid}/exits", data={
             "exits": [second, first], "csrf_token": csrf,
         })
         self.assertEqual(response.status_code, 303)
-        saved = {exit_id: prio for exit_id, prio in self.grants(cid)}
-        self.assertEqual(saved, {first: 10, second: 20})
+        expected = {first: 10, second: 20}
+        self.assertEqual(dict(self.account_grants(aid)), expected)
+        self.assertEqual(dict(self.grants(cid)), expected)
 
     def test_disabled_exit_cannot_be_granted(self):
-        cid = self.seed_client()
+        aid, cid = self.seed_client()
         dead = self.seed_exit("dead", "awg5", enabled=0)
         self.login_admin()
-        csrf = self.csrf(f"/clients/{cid}")
-        self.client.post(f"/clients/{cid}/internet",
+        csrf = self.csrf(f"/accounts/{aid}")
+        self.client.post(f"/accounts/{aid}/exits",
                          data={"exits": [dead], "csrf_token": csrf})
+        self.assertEqual(self.account_grants(aid), [])
         self.assertEqual(self.grants(cid), [])
 
-    def test_routed_exit_is_not_an_internet_grant(self):
-        cid = self.seed_client()
+    def test_routed_exit_is_not_an_internet_order(self):
+        aid, cid = self.seed_client()
         routed = self.seed_exit("sub", "awg2", mode="routes", routes="10.9.0.0/24")
         self.login_admin()
-        csrf = self.csrf(f"/clients/{cid}")
-        self.client.post(f"/clients/{cid}/internet",
+        csrf = self.csrf(f"/accounts/{aid}")
+        self.client.post(f"/accounts/{aid}/exits",
                          data={"exits": [routed], "csrf_token": csrf})
+        self.assertEqual([exit_id for exit_id, _ in self.account_grants(aid)],
+                         [routed])
         self.assertEqual(self.grants(cid), [])
+
+    def test_routed_grant_does_not_block_internet_order(self):
+        aid, cid = self.seed_client()
+        routed = self.seed_exit("sub", "awg9", mode="routes",
+                                routes="10.9.0.0/24", priority=1)
+        first = self.seed_exit("e1", "awg1", priority=10)
+        second = self.seed_exit("e2", "awg2", priority=20)
+        self.login_admin()
+        csrf = self.csrf(f"/accounts/{aid}")
+        self.client.post(f"/accounts/{aid}/exits", data={
+            "exits": [routed, first, second], "csrf_token": csrf,
+        })
+        self.client.post(f"/accounts/{aid}/order", data={
+            "exit_id": first, "direction": "down", "csrf_token": csrf,
+        })
+        with app.db() as conn:
+            internet = [r["exit_id"] for r in conn.execute(
+                "SELECT ae.exit_id FROM account_exits ae "
+                "JOIN exits e ON e.id = ae.exit_id "
+                "WHERE ae.account_id = ? AND e.mode = 'internet' "
+                "ORDER BY ae.priority, e.priority, e.id", (aid,))]
+        self.assertEqual(internet, [second, first])
+        self.assertEqual([e for e, _ in self.grants(cid)], [first, second])
+
+    def test_order_swap_and_apply_to_all(self):
+        aid, cid = self.seed_client()
+        first = self.seed_exit("e1", "awg1", priority=10)
+        second = self.seed_exit("e2", "awg2", priority=20)
+        self.login_admin()
+        csrf = self.csrf(f"/accounts/{aid}")
+        self.client.post(f"/accounts/{aid}/exits", data={
+            "exits": [first, second], "csrf_token": csrf,
+        })
+        # One configuration gets its own order...
+        self.client.post(f"/configs/{cid}/order", data={
+            "exit_id": second, "direction": "up", "csrf_token": csrf,
+        })
+        self.assertEqual([e for e, _ in self.grants(cid)], [second, first])
+        # ...and "apply to all" puts it back on the account order.
+        self.client.post(f"/accounts/{aid}/order/apply",
+                         data={"csrf_token": csrf})
+        self.assertEqual([e for e, _ in self.grants(cid)], [first, second])
+        # The account order can change without reordering the configurations.
+        self.client.post(f"/accounts/{aid}/order", data={
+            "exit_id": second, "direction": "up", "csrf_token": csrf,
+        })
+        self.assertEqual([e for e, _ in self.account_grants(aid)], [second, first])
+        self.assertEqual([e for e, _ in self.grants(cid)], [first, second])
+        self.client.post(f"/accounts/{aid}/order/apply",
+                         data={"csrf_token": csrf})
+        self.assertEqual([e for e, _ in self.grants(cid)], [second, first])
+
+    def test_new_config_copies_the_account_order(self):
+        aid, cid = self.seed_client()
+        first = self.seed_exit("e1", "awg1", priority=10)
+        second = self.seed_exit("e2", "awg2", priority=20)
+        self.login_admin()
+        csrf = self.csrf(f"/accounts/{aid}")
+        self.client.post(f"/accounts/{aid}/exits", data={
+            "exits": [second, first], "csrf_token": csrf,
+        })
+        response = self.client.post(f"/accounts/{aid}/configs", data={
+            "name": "second-config", "csrf_token": csrf,
+        })
+        self.assertEqual(response.status_code, 303)
+        new_cid = int(response.headers["location"].split("/configs/")[1].split("?")[0])
+        self.assertEqual([e for e, _ in self.grants(new_cid)], [first, second])
 
 
 class UserPageTests(PanelTestCase):
-    def test_me_shows_only_own_client(self):
+    def test_me_shows_only_own_configs(self):
         self.seed_client("mine", "10.80.0.2", "mine@example.com")
         self.seed_client("other", "10.80.0.3", "other@example.com")
         self.login("mine@example.com", USER_PASSWORD)
@@ -626,14 +808,37 @@ class UserPageTests(PanelTestCase):
         self.assertIn("10.80.0.2", response.text)
         self.assertNotIn("10.80.0.3", response.text)
 
+    def test_user_creates_a_config(self):
+        aid, _ = self.seed_client(email="c1@example.com", max_configs=2)
+        self.login("c1@example.com", USER_PASSWORD)
+        csrf = self.csrf("/me/configs/new")
+        response = self.client.post("/me/configs", data={
+            "name": "phone", "csrf_token": csrf,
+        })
+        self.assertEqual(response.status_code, 303)
+        self.assertIn("/me/configs/", response.headers["location"])
+        with app.db() as conn:
+            row = conn.execute(
+                "SELECT account_id, name FROM clients WHERE name = 'phone'"
+            ).fetchone()
+        self.assertEqual(row["account_id"], aid)
+
+    def test_user_cannot_open_another_accounts_config(self):
+        self.seed_client("mine", "10.80.0.2", "mine@example.com")
+        _, other = self.seed_client("other", "10.80.0.3", "other@example.com")
+        self.login("mine@example.com", USER_PASSWORD)
+        response = self.client.get(f"/me/configs/{other}")
+        self.assertEqual(response.status_code, 404)
+
     def test_reissue_changes_the_keys(self):
-        cid = self.seed_client(email="c1@example.com")
+        _, cid = self.seed_client(email="c1@example.com")
         with app.db() as conn:
             before = conn.execute(
                 "SELECT public_key FROM clients WHERE id = ?", (cid,)).fetchone()[0]
         self.login("c1@example.com", USER_PASSWORD)
-        csrf = self.csrf("/me")
-        response = self.client.post("/me/reissue", data={"csrf_token": csrf})
+        csrf = self.csrf(f"/me/configs/{cid}")
+        response = self.client.post(f"/me/configs/{cid}/reissue",
+                                    data={"csrf_token": csrf})
         self.assertEqual(response.status_code, 303)
         with app.db() as conn:
             after = conn.execute(
@@ -642,14 +847,15 @@ class UserPageTests(PanelTestCase):
         app.apply_conf.assert_called()
 
     def test_reissue_failure_keeps_the_old_key(self):
-        cid = self.seed_client(email="c1@example.com")
+        _, cid = self.seed_client(email="c1@example.com")
         with app.db() as conn:
             before = conn.execute(
                 "SELECT public_key FROM clients WHERE id = ?", (cid,)).fetchone()[0]
         self.login("c1@example.com", USER_PASSWORD)
-        csrf = self.csrf("/me")
+        csrf = self.csrf(f"/me/configs/{cid}")
         app.apply_conf.side_effect = RuntimeError("syncconf: boom")
-        response = self.client.post("/me/reissue", data={"csrf_token": csrf})
+        response = self.client.post(f"/me/configs/{cid}/reissue",
+                                    data={"csrf_token": csrf})
         self.assertEqual(response.status_code, 303)
         self.assertIn("err=", response.headers["location"])
         with app.db() as conn:
@@ -671,7 +877,7 @@ class UserPageTests(PanelTestCase):
         self.assertIn("ok=", response.headers["location"])
         with app.db() as conn:
             self.assertEqual(conn.execute(
-                "SELECT token_version FROM users").fetchone()[0], 2)
+                "SELECT token_version FROM accounts").fetchone()[0], 2)
 
         stale = TestClient(app.app, base_url="https://testserver",
                            follow_redirects=False,
@@ -695,7 +901,82 @@ class UserPageTests(PanelTestCase):
         self.assertIn("err=", response.headers["location"])
         with app.db() as conn:
             self.assertEqual(conn.execute(
-                "SELECT token_version FROM users").fetchone()[0], 1)
+                "SELECT token_version FROM accounts").fetchone()[0], 1)
+
+
+class MobileApiTests(PanelTestCase):
+    def api_login(self, email="c1@example.com", password=USER_PASSWORD):
+        response = self.client.post("/api/login", data={
+            "email": email, "password": password,
+        })
+        self.assertEqual(response.status_code, 200, response.text)
+        return {"Authorization": "Bearer " + response.json()["token"]}, response.json()
+
+    def test_login_lists_configs_and_keeps_the_client_field(self):
+        aid, cid = self.seed_client()
+        _, payload = self.api_login()
+        self.assertEqual(payload["client"]["id"], cid)
+        self.assertEqual([c["id"] for c in payload["configs"]], [cid])
+
+    def test_create_conf_order_and_delete(self):
+        aid, cid = self.seed_client(max_configs=5)
+        exit_id = self.seed_exit()
+        headers, _ = self.api_login()
+        response = self.client.get("/api/me", headers=headers)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(response.json()["configs"]), 1)
+
+        response = self.client.post("/api/me/configs", data={"name": "tablet"},
+                                    headers=headers)
+        self.assertEqual(response.status_code, 200, response.text)
+        new_cid = response.json()["config"]["id"]
+        self.assertEqual(response.json()["config"]["name"], "tablet")
+
+        response = self.client.get(f"/api/me/configs/{new_cid}/conf",
+                                   headers=headers)
+        self.assertEqual(response.status_code, 400)  # no access granted yet
+
+        with app.db() as conn:
+            conn.execute(
+                "INSERT INTO account_exits (account_id, exit_id, priority) "
+                "VALUES (?, ?, 10)", (aid, exit_id))
+            app.sync_account_configs(conn, aid)
+        response = self.client.get("/api/me/exits?config_id=" + str(new_cid),
+                                   headers=headers)
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual([e["id"] for e in response.json()], [exit_id])
+        response = self.client.get(f"/api/me/configs/{new_cid}/conf",
+                                   headers=headers)
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("[Interface]", response.text)
+
+        response = self.client.post("/api/me/exits/order", data={
+            "config_id": str(new_cid), "exit_id": [str(exit_id)],
+        }, headers=headers)
+        self.assertEqual(response.status_code, 200, response.text)
+        response = self.client.post("/api/me/exits/order", data={
+            "config_id": str(new_cid), "exit_id": ["999"],
+        }, headers=headers)
+        self.assertEqual(response.status_code, 400)
+
+        response = self.client.post(f"/api/me/configs/{new_cid}/toggle",
+                                    headers=headers)
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertFalse(response.json()["enabled"])
+
+        response = self.client.delete(f"/api/me/configs/{new_cid}",
+                                      headers=headers)
+        self.assertEqual(response.status_code, 200, response.text)
+        response = self.client.get(f"/api/me/configs/{new_cid}/conf",
+                                   headers=headers)
+        self.assertEqual(response.status_code, 404)
+
+    def test_limit_is_enforced(self):
+        self.seed_client(max_configs=1)
+        headers, _ = self.api_login()
+        response = self.client.post("/api/me/configs", data={"name": "extra"},
+                                    headers=headers)
+        self.assertEqual(response.status_code, 409)
 
 
 if __name__ == "__main__":

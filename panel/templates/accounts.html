@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+{% block title %}accounts — deeps kaskad{% endblock %}
+{% block body %}
+<div class="page-head">
+  <h1>Accounts</h1>
+  <p class="oc-muted">an account is an email; it owns configurations and the access to exits</p>
+</div>
+
+<div class="toolbar">
+  <form method="get" action="/accounts" class="actions" style="flex:1; max-width:360px">
+    <input class="oc-input oc-input--sm" type="text" name="q" value="{{ q }}" placeholder="search by email" style="flex:1; min-width:0">
+    <button class="oc-btn oc-btn--neutral oc-btn--sm">search</button>
+    {% if q %}<a class="oc-btn oc-btn--ghost oc-btn--sm" href="/accounts">reset</a>{% endif %}
+  </form>
+  <a class="oc-btn oc-btn--contrast oc-btn--sm" href="/accounts/new">add account</a>
+</div>
+
+{% if accounts %}
+<div class="oc-panel">
+  <div class="table-scroll">
+  <table class="oc-table">
+    <thead>
+      <tr><th>account</th><th style="width:1%">access</th><th style="width:1%"></th></tr>
+    </thead>
+    <tbody>
+    {% for a in accounts %}
+      <tr>
+        <td>
+          <span class="oc-mono">{{ a.email }}</span>
+          {% if not a.enabled %}<span class="oc-badge oc-badge--subtle">login off</span>{% endif %}
+          <div class="cell-sub">
+            {{ a.configs_n }} of {{ a.limit }} configurations ·
+            last login {{ a.last_login | ts }}
+          </div>
+        </td>
+        <td>
+          <div class="actions">
+            {% if a.internet %}<span class="oc-badge oc-badge--success">internet</span>{% endif %}
+            {% for name in a.exits %}<span class="oc-badge oc-badge--info">{{ name }}</span>{% endfor %}
+            {% if not a.internet and not a.exits %}<span class="oc-badge oc-badge--danger">no access</span>{% endif %}
+          </div>
+        </td>
+        <td><a class="oc-btn oc-btn--outline oc-btn--sm" href="/accounts/{{ a.id }}">open</a></td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+</div>
+{% else %}
+<div class="oc-empty">{% if q %}nothing found{% else %}no accounts yet{% endif %}</div>
+{% endif %}
+{% endblock %}

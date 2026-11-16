@@ -17,6 +17,7 @@
 
 {% if events %}
 <div class="oc-panel">
+  <div class="table-scroll">
   <table class="oc-table">
     <thead><tr><th style="width:150px">time</th><th style="width:160px">action</th><th>details</th></tr></thead>
     <tbody>
@@ -29,6 +30,7 @@
     {% endfor %}
     </tbody>
   </table>
+  </div>
 </div>
 
 {% if pages > 1 %}

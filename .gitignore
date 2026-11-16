@@ -5,6 +5,7 @@ __pycache__/
 # agent and local editor files
 AGENTS.md
 CLAUDE.md
+ideas.md
 todo.md
 .opencode/
 .cursor/
@@ -17,6 +18,7 @@ todo.md
 # environment-specific, never published
 inventory.yml
 inventory.lab*.yml
+inventory.libra.yml
 host_vars/*.yml
 !host_vars/example.yml
 internal/

@@ -5,6 +5,79 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] - 2026-11-16
+
+### Added
+
+- Accounts: the email is now the primary entity. An account owns several
+  WireGuard configurations, holds the access to exits and signs in at `/me`
+  and in the mobile app. Accounts are created only by the administrator.
+- `/accounts`, `/accounts/new`, `/accounts/{id}`: grants (internet and routed
+  exits), the account exit order with "apply to all configurations", the
+  per-account configuration limit, login state, password reset and delete.
+- `/configs`, `/configs/new`, `/configs/{id}` replace the old client pages.
+  A configuration is one WireGuard peer with server-generated keys; it can be
+  disabled (the peer stays) or deleted (the keys are erased).
+- The cabinet (`/me`, `/me/configs/new`, `/me/configs/{id}`) lists all the
+  configurations of the account, lets the user create new ones up to the
+  limit, download `.conf`/QR, reorder exits per configuration, reissue keys,
+  disable and delete them, and warns that one configuration is for one device.
+- `settings.default_max_configs` (5 by default) with a form on `/settings`;
+  the administrator can override it per account, and lowering it below the
+  current count is rejected.
+- Mobile API: `GET /api/me/configs` (as `configs` in `/api/login` and
+  `/api/me`), `POST /api/me/configs`, `GET /api/me/configs/{id}/conf`,
+  `POST /api/me/configs/{id}/toggle`, `DELETE /api/me/configs/{id}`, and a
+  `config_id` parameter on `/api/me/conf` and `/api/me/exits[?/order]`.
+
+### Changed
+
+- `kaskad_client_keepalive` (25 seconds by default) sets
+  `PersistentKeepalive` in every generated client config instead of the
+  hard-coded 25.
+- When `kaskad_awg0_params` differ from the neutral set, the parameters are
+  written into every client config too, so an obfuscated `awg0` works with the
+  app; a stock WireGuard client cannot connect to such a host.
+- Access is granted to the account, not to a single client: every
+  configuration of the account uses the same exits. The internet order stays
+  per configuration: a new configuration copies the account order, the user
+  can reorder it, and "apply to all" resets it.
+- `panel/routing.py`: a configuration whose account has internet exits gets
+  its own table; a configuration whose account has no grants gets no internet
+  rule at all. Rows without an account keep the old per-client grants and the
+  shared table, so an existing database keeps working until they are deleted.
+- The physical `clients` table is kept as the configuration store (a new
+  nullable `account_id` column) instead of being renamed; `client_exits` and
+  `client_internet_exits` are reused as per-configuration rows. New tables:
+  `accounts`, `account_exits`.
+- The old `users` table is no longer read or created on fresh databases. With
+  no automatic migration, the administrator recreates the existing accounts by
+  hand and deletes the unassigned rows (see "Upgrading to the account model" in
+  the README).
+- Compatibility shims for the released app: `/api/login` and `/api/me` still
+  return `client` (the first configuration, `null` while the account has none),
+  `/api/me/conf`, `/me/conf`, `/me/qr.png` and `/me/exits/move` operate on the
+  first configuration.
+- `/settings` shows accounts and configurations instead of clients and owns
+  the default configuration limit.
+
+### Fixed
+
+- The generated account password (shown once after creating an account or
+  resetting it) has the reveal and copy buttons back; they were lost when the
+  client page was replaced by the account page. The field is masked until the
+  eye is pressed, and the copy button falls back to `execCommand` when the
+  clipboard API is unavailable.
+- `roles/panel/tasks/tls.yml`: a staging certificate is deleted before the
+  real one is issued. `certbot --keep-until-expiring` treated the test
+  certificate as valid for 90 days and never replaced it, so a stand deployed
+  with `kaskad_le_staging: true` stayed on a staging certificate after the
+  flag was turned off.
+
+### Removed
+
+- `/clients*` pages and their templates; `/configs*` replaces them.
+
 ## [0.3.9] - 2026-11-14
 
 ### Changed

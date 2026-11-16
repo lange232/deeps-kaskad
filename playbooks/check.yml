@@ -68,32 +68,58 @@
 
         conn = sqlite3.connect("/var/lib/kaskad/panel.db")
         conn.row_factory = sqlite3.Row
-        granted = {
-            r["client_id"]
-            for r in conn.execute(
-                "SELECT ce.client_id FROM client_internet_exits ce "
-                "JOIN exits e ON e.id = ce.exit_id "
-                "WHERE e.enabled = 1 AND e.mode = 'internet'"
-            )
-        }
-        for cl in conn.execute(
-            "SELECT id, ip, internet, table_num FROM clients WHERE enabled = 1"
+        granted_accounts = {}
+        for row in conn.execute(
+            "SELECT ae.account_id, ae.exit_id FROM account_exits ae "
+            "JOIN exits e ON e.id = ae.exit_id "
+            "WHERE e.enabled = 1 AND e.mode = 'internet'"
         ):
-            if not cl["internet"]:
-                continue
-            # Clients with granted exits use the table allocated in the panel.
-            lookup = cl["table_num"] if cl["id"] in granted else table
+            granted_accounts.setdefault(row["account_id"], set()).add(row["exit_id"])
+        per_config = {}
+        for row in conn.execute(
+            "SELECT ci.client_id, ci.exit_id FROM client_internet_exits ci "
+            "JOIN exits e ON e.id = ci.exit_id "
+            "WHERE e.enabled = 1 AND e.mode = 'internet'"
+        ):
+            per_config.setdefault(row["client_id"], []).append(row["exit_id"])
+
+        for cl in conn.execute(
+            "SELECT id, ip, internet, table_num, account_id FROM clients "
+            "WHERE enabled = 1"
+        ):
+            if cl["account_id"] is not None:
+                # Access is granted to the account; the configuration keeps
+                # the order. No granted exit means no internet by design.
+                allowed = granted_accounts.get(cl["account_id"], set())
+                choices = [
+                    eid for eid in per_config.get(cl["id"], []) if eid in allowed
+                ]
+                if not choices:
+                    continue
+                lookup = cl["table_num"]
+            else:
+                if not cl["internet"]:
+                    continue
+                # Configurations from before accounts use the shared table
+                # unless they were granted exits explicitly.
+                lookup = cl["table_num"] if per_config.get(cl["id"]) else table
             if not lookup:
-                missing.append(f"client {cl['ip']} has granted exits but no table")
+                missing.append(f"config {cl['ip']} has granted exits but no table")
                 continue
             if f"from {cl['ip']} iif awg0 lookup {lookup}" not in rules:
                 missing.append(f"internet rule for {cl['ip']} -> {lookup}")
 
         for row in conn.execute(
+            "SELECT c.ip, e.id, e.routes, e.table_num FROM account_exits ae "
+            "JOIN clients c ON c.account_id = ae.account_id "
+            "JOIN exits e ON e.id = ae.exit_id "
+            "WHERE c.enabled = 1 AND e.enabled = 1 AND e.mode = 'routes' "
+            "UNION "
             "SELECT c.ip, e.id, e.routes, e.table_num FROM client_exits ce "
             "JOIN clients c ON c.id = ce.client_id "
             "JOIN exits e ON e.id = ce.exit_id "
-            "WHERE c.enabled = 1 AND e.enabled = 1 AND e.mode = 'routes'"
+            "WHERE c.account_id IS NULL AND c.enabled = 1 "
+            "AND e.enabled = 1 AND e.mode = 'routes'"
         ):
             for cidr in [x.strip() for x in row["routes"].split(",") if x.strip()]:
                 # iproute2 prints a /32 destination without the prefix length.
@@ -140,6 +166,10 @@
              "SELECT count(*) FROM client_internet_exits ce WHERE "
              "ce.client_id NOT IN (SELECT id FROM clients) "
              "OR ce.exit_id NOT IN (SELECT id FROM exits)"),
+            ("account_exits",
+             "SELECT count(*) FROM account_exits ae WHERE "
+             "ae.account_id NOT IN (SELECT id FROM accounts) "
+             "OR ae.exit_id NOT IN (SELECT id FROM exits)"),
         ):
             orphans = conn.execute(sql).fetchone()[0]
             if orphans:

@@ -6,6 +6,9 @@
   <p class="oc-muted">read-only: managed by Ansible, not by the panel</p>
 </div>
 
+{% if err %}<div class="oc-alert oc-alert--danger" style="margin-bottom:16px"><span class="oc-dot" style="margin-top:7px"></span><div class="oc-alert__body">{{ err }}</div></div>{% endif %}
+{% if ok %}<div class="oc-alert oc-alert--success" style="margin-bottom:16px"><span class="oc-dot" style="margin-top:7px"></span><div class="oc-alert__body">{{ ok }}</div></div>{% endif %}
+
 <div class="stack">
   <section>
     <h2 class="oc-section__title">panel</h2>
@@ -47,11 +50,31 @@
     <h2 class="oc-section__title">data</h2>
     <div class="oc-panel" style="padding:16px">
       <div class="kv-grid">
-        <div><div class="k">clients</div><div class="v oc-num">{{ clients_n }}</div></div>
+        <div><div class="k">accounts</div><div class="v oc-num">{{ accounts_n }}</div></div>
+        <div><div class="k">configurations</div><div class="v oc-num">{{ configs_n }}</div></div>
         <div><div class="k">exits</div><div class="v oc-num">{{ exits_n }}</div></div>
         <div><div class="k">journal entries</div><div class="v oc-num">{{ audits_n }}</div></div>
         <div><div class="k">database size</div><div class="v oc-num">{{ (db_size / 1024) | round(0) }} KiB</div></div>
       </div>
+    </div>
+  </section>
+
+  <section>
+    <h2 class="oc-section__title">accounts</h2>
+    <div class="oc-panel" style="padding:16px">
+      <form method="post" action="/settings/max-configs" class="actions" style="max-width:420px">
+        <input type="hidden" name="csrf_token" value="{{ csrf }}">
+        <label class="oc-field" style="flex:1">
+          <span class="oc-field__label">default configurations per account</span>
+          <input class="oc-input" type="number" name="default_max_configs" min="1" required
+                 value="{{ default_max_configs }}">
+        </label>
+        <button class="oc-btn oc-btn--neutral oc-btn--sm">save</button>
+      </form>
+      <p class="oc-hint" style="margin-top:8px">
+        used for accounts without a personal limit; the administrator can override it on
+        the account page.
+      </p>
     </div>
   </section>
 

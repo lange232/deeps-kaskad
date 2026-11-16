@@ -99,6 +99,48 @@ class RenderTests(unittest.TestCase):
         self.assertNotIn("PublicKey = pubkey", app.render_conf(c))
 
     @unittest.skipUnless(app, "fastapi is not installed")
+    def test_client_keepalive_defaults_to_25_and_is_configurable(self):
+        c = {"endpoint": "vpn.example.com", "port": 51820, "mtu": 1280,
+             "dns": "1.1.1.1"}
+        cl = {"ip": "10.80.0.2", "private_key": "priv", "preshared_key": "psk"}
+        with mock.patch.object(app, "config_access",
+                               return_value=("0.0.0.0/0", ["1.1.1.1"])), \
+             mock.patch.object(app, "server_key", return_value="srvkey"):
+            self.assertIn("PersistentKeepalive = 25", app.config_conf(c, cl))
+            c["client_keepalive"] = 10
+            text = app.config_conf(c, cl)
+        self.assertIn("PersistentKeepalive = 10", text)
+        self.assertNotIn("PersistentKeepalive = 25", text)
+
+    @unittest.skipUnless(app, "fastapi is not installed")
+    def test_obfuscated_awg0_puts_params_into_the_client_config(self):
+        plain = {"Jc": 0, "Jmin": 0, "Jmax": 0, "S1": 0, "S2": 0, "S3": 0,
+                 "S4": 0, "H1": 1, "H2": 2, "H3": 3, "H4": 4,
+                 "RandomTrailers": "off", "DisableCookies": "off"}
+        hidden = dict(plain, Jc=4, Jmin=40, Jmax=70, S1=50, S2=100,
+                      H1=1048573, H2=1234567)
+        cl = {"ip": "10.80.0.2", "private_key": "priv", "preshared_key": "psk"}
+        with mock.patch.object(app, "config_access",
+                               return_value=("0.0.0.0/0", ["1.1.1.1"])), \
+             mock.patch.object(app, "server_key", return_value="srvkey"):
+            # Plain WireGuard: stock clients reject unknown keys, so none go in.
+            text = app.config_conf({"endpoint": "vpn.example.com", "port": 51820,
+                                    "mtu": 1280, "dns": "1.1.1.1",
+                                    "params": plain}, cl)
+            self.assertNotIn("Jc =", text)
+            self.assertNotIn("H1 =", text)
+            # Obfuscated: the app needs the same parameters as the server.
+            text = app.config_conf({"endpoint": "vpn.example.com", "port": 443,
+                                    "mtu": 1280, "dns": "1.1.1.1",
+                                    "params": hidden}, cl)
+        self.assertIn("Jc = 4", text)
+        self.assertIn("Jmin = 40", text)
+        self.assertIn("S1 = 50", text)
+        self.assertIn("H1 = 1048573", text)
+        self.assertIn("Endpoint = vpn.example.com:443", text)
+        self.assertEqual(text.count("MTU = 1280"), 1)
+
+    @unittest.skipUnless(app, "fastapi is not installed")
     def test_failed_apply_restores_the_previous_file(self):
         c = self.config()
         path = Path(self.tmp.name) / "awg0.conf"

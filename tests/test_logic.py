@@ -6,6 +6,7 @@ import json
 import sqlite3
 import subprocess
 import sys
+import tempfile
 import time
 import unittest
 from pathlib import Path
@@ -83,6 +84,43 @@ class ClientExitTests(unittest.TestCase):
 
     def test_no_grants(self):
         self.assertIsNone(failover.pick_client_exit([], {"awg1"}))
+
+
+class ClientGrantQueryTests(unittest.TestCase):
+    """client_grants() must not depend on the legacy internet flag."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.old_db = failover.DB_PATH
+        failover.DB_PATH = Path(self.tmp.name) / "panel.db"
+        conn = sqlite3.connect(failover.DB_PATH)
+        conn.executescript(
+            """
+            CREATE TABLE clients (id INTEGER PRIMARY KEY, ip TEXT, enabled INTEGER,
+                internet INTEGER, table_num INTEGER, account_id INTEGER);
+            CREATE TABLE exits (id INTEGER PRIMARY KEY, iface TEXT, enabled INTEGER,
+                mode TEXT, priority INTEGER);
+            CREATE TABLE client_internet_exits (client_id INTEGER, exit_id INTEGER,
+                priority INTEGER);
+            INSERT INTO exits VALUES (1, 'awg1', 1, 'internet', 10);
+            INSERT INTO clients VALUES (1, '10.80.0.2', 1, 0, 1001, 7);
+            INSERT INTO clients VALUES (2, '10.80.0.3', 1, 0, 1002, NULL);
+            INSERT INTO clients VALUES (3, '10.80.0.4', 1, 1, 1003, 7);
+            INSERT INTO client_internet_exits VALUES (1, 1, 10);
+            INSERT INTO client_internet_exits VALUES (2, 1, 10);
+            INSERT INTO client_internet_exits VALUES (3, 1, 10);
+            """
+        )
+        conn.commit()
+        conn.close()
+
+    def tearDown(self):
+        failover.DB_PATH = self.old_db
+        self.tmp.cleanup()
+
+    def test_account_config_keeps_its_grants_without_the_legacy_flag(self):
+        grants = failover.client_grants()
+        self.assertEqual([g["ip"] for g in grants], ["10.80.0.2", "10.80.0.4"])
 
 
 class ClientTableTests(unittest.TestCase):
