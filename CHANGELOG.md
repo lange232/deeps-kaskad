@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Lists open an object by clicking its row: the "open" button and its
+  column are gone from accounts, configurations, exits and the cabinet.
+  Links and controls inside a row keep their own target, and Enter on a
+  focused row opens it too.
+
 ### Added
 
 - The configuration page and the cabinet list the subnets the account grants

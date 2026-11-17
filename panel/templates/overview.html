@@ -70,10 +70,10 @@
     </div>
     <div class="oc-panel">
       <table class="oc-table">
-        <thead><tr><th>name</th><th>mode</th><th>interface</th><th>state</th><th>ping</th><th></th></tr></thead>
+        <thead><tr><th>name</th><th>mode</th><th>interface</th><th>state</th><th>ping</th></tr></thead>
         <tbody>
         {% for e in exits %}
-          <tr>
+          <tr data-href="/exits/{{ e.id }}" tabindex="0">
             <td><span class="name-cell">{{ e.name }}{% if e.active %}<span class="oc-badge oc-badge--accent">active</span>{% endif %}{% if e.pinned %}<span class="oc-badge oc-badge--warning">pinned</span>{% endif %}</span></td>
             <td>{% if e.mode == 'routes' %}<span class="oc-badge oc-badge--info">subnets</span>{% else %}<span class="oc-badge oc-badge--success">internet</span>{% endif %}</td>
             <td class="oc-mono">{{ e.iface }}</td>
@@ -88,10 +88,9 @@
               <div class="cell-sub" data-ping-parts>exit {{ e.rtt_ms }} ms</div>
               {% else %}—{% endif %}
             </td>
-            <td><a class="oc-btn oc-btn--ghost oc-btn--sm" href="/exits/{{ e.id }}">open</a></td>
           </tr>
         {% else %}
-          <tr><td colspan="6" class="oc-muted">no exits — clients will have no internet.</td></tr>
+          <tr><td colspan="5" class="oc-muted">no exits — clients will have no internet.</td></tr>
         {% endfor %}
         </tbody>
       </table>

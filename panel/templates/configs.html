@@ -19,11 +19,11 @@
   <div class="table-scroll">
   <table class="oc-table">
     <thead>
-      <tr><th>configuration</th><th style="width:1%">access</th><th style="width:1%"></th></tr>
+      <tr><th>configuration</th><th style="width:1%">access</th></tr>
     </thead>
     <tbody>
     {% for c in configs %}
-      <tr>
+      <tr data-href="/configs/{{ c.id }}" tabindex="0">
         <td>
           {{ c.name }}
           {% if not c.enabled %}<span class="oc-badge oc-badge--subtle">disabled</span>{% endif %}
@@ -46,7 +46,6 @@
             {% if not c.internet and not c.exits %}<span class="oc-badge oc-badge--danger">no access</span>{% endif %}
           </div>
         </td>
-        <td><a class="oc-btn oc-btn--outline oc-btn--sm" href="/configs/{{ c.id }}">open</a></td>
       </tr>
     {% endfor %}
     </tbody>
