@@ -29,9 +29,11 @@
   .table-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
   .app--centered { grid-template-columns: minmax(0, 1fr); }
   .app--centered .main { max-width: 380px; margin: 12vh auto 0; }
+  /* The cabinet has one page, not a section tree: no sidebar, full width. */
+  .app--wide { grid-template-columns: minmax(0, 1fr); }
   .main { min-width: 0; }
-  .side { position: sticky; top: 8px; align-self: start; padding-top: 18px;
-          display: flex; flex-direction: column; gap: 2px; }
+  .side { position: sticky; top: 8px; align-self: start; padding-top: 18px; }
+  .side nav { display: flex; flex-direction: column; gap: 2px; }
   .side a {
     display: flex; align-items: center; gap: 8px;
     padding: 6px 10px; border-radius: 6px;
@@ -39,6 +41,7 @@
     font-size: 13px; font-weight: 440; letter-spacing: -0.04px;
   }
   .side a:hover { background: var(--ui-bg-layer-1); color: var(--ui-text-base); }
+  .side a:focus-visible { outline: 2px solid var(--ui-border-focus); outline-offset: 2px; }
   .side a.is-active { background: var(--ui-bg-layer-2); color: var(--ui-text-base); font-weight: 530; }
   .side a .oc-dot { background: currentColor; opacity: .5; }
   .side__sep { height: 1px; background: var(--ui-border-base); margin: 8px 10px; }
@@ -48,6 +51,8 @@
   .crumbs { display: flex; gap: 6px; align-items: center; font-size: 12px; color: var(--ui-text-faint); margin-bottom: 6px; }
   .crumbs a { color: var(--ui-text-muted); text-decoration: none; }
   .crumbs a:hover { color: var(--ui-text-base); }
+  .topbar-link { color: var(--ui-text-muted); text-decoration: none; }
+  .topbar-link:hover { color: var(--ui-text-base); }
   .stack { display: flex; flex-direction: column; gap: 24px; }
   .actions { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
   .actions form { display: inline; margin: 0; }
@@ -76,6 +81,8 @@
              background: var(--ui-bg-deep); border: 1px solid var(--ui-border-base);
              font: 12px/1.45 var(--ui-font-mono, ui-monospace, monospace); color: var(--ui-text-muted); }
   .toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+  .list-search { flex: 1; max-width: 360px; }
+  .list-search .oc-input { flex: 1; min-width: 0; }
   .site-footer {
     display: flex; flex-wrap: wrap; gap: 10px 24px;
     justify-content: space-between; align-items: center;
@@ -92,7 +99,8 @@
   }
   @media (max-width: 760px) {
     .app { grid-template-columns: minmax(0, 1fr); gap: 8px; }
-    .side { position: static; flex-direction: row; overflow-x: auto; padding-top: 8px; }
+    .side { position: static; padding-top: 8px; }
+    .side nav { flex-direction: row; flex-wrap: wrap; }
     .side__sep { display: none; }
     .side a { white-space: nowrap; }
     /* The brand, the badge and the two buttons do not fit 360 px in one
@@ -101,6 +109,9 @@
     .oc-topbar__spacer { min-width: 8px; }
     .oc-topbar .oc-badge--subtle { display: none; }
     .oc-panel__head { flex-wrap: wrap; }
+    .toolbar--list { flex-direction: column; align-items: stretch; }
+    .toolbar--list .list-search { max-width: none; }
+    .toolbar--list > .oc-btn { align-self: flex-start; }
   }
 </style>
 <script>
@@ -128,7 +139,6 @@
   <a class="oc-brand" href="/" style="text-decoration:none">
     <span class="oc-brand__dim">deeps</span><span class="oc-brand__mark">kaskad</span>
   </a>
-  <span class="oc-badge oc-badge--subtle">panel</span>
   <span class="oc-topbar__spacer"></span>
   {% block topbar %}{% endblock %}
   <button class="oc-btn oc-btn--ghost-muted oc-btn--sm" id="theme-toggle" type="button">light theme</button>
@@ -139,20 +149,23 @@
   {% endif %}
 </header>
 
-<div class="app {{ 'app--centered' if hide_nav }}">
-  {% if not hide_nav %}
+<div class="app {{ 'app--centered' if hide_nav }}{{ ' app--wide' if role == 'user' and not hide_nav }}">
+  {% if not hide_nav and role != 'user' %}
   <aside class="side">
-    {% if role == 'user' %}
-    <a href="/me" class="{{ 'is-active' if nav == 'me' }}">My access</a>
-    {% else %}
-    <a href="/" class="{{ 'is-active' if nav == 'overview' }}">Overview</a>
-    <a href="/exits" class="{{ 'is-active' if nav == 'exits' }}">Exits</a>
-    <a href="/accounts" class="{{ 'is-active' if nav == 'accounts' }}">Accounts</a>
-    <a href="/configs" class="{{ 'is-active' if nav == 'configs' }}">Configs</a>
-    <a href="/journal" class="{{ 'is-active' if nav == 'journal' }}">Journal</a>
-    <div class="side__sep"></div>
-    <a href="/settings" class="{{ 'is-active' if nav == 'settings' }}">Settings</a>
-    {% endif %}
+    {% set links = [
+        ('/', 'Overview', 'overview'),
+        ('/accounts', 'Accounts', 'accounts'),
+        ('/configs', 'Configs', 'configs'),
+        ('/exits', 'Exits', 'exits'),
+        ('/journal', 'Journal', 'journal'),
+        ('/settings', 'Settings', 'settings')] %}
+    <nav aria-label="Main">
+      {% for href, label, key in links %}
+      {% if key == 'journal' %}<div class="side__sep"></div>{% endif %}
+      <a href="{{ href }}" class="{{ 'is-active' if nav == key }}"
+         {% if nav == key %}aria-current="page"{% endif %}>{{ label }}</a>
+      {% endfor %}
+    </nav>
   </aside>
   {% endif %}
   <main class="main">

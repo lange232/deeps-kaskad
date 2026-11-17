@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 {% block title %}my access — deeps kaskad{% endblock %}
-{% block topbar %}<span class="oc-mono oc-muted">{{ email }}</span>{% endblock %}
+{% block topbar %}<a class="oc-mono topbar-link" href="/me">{{ email }}</a>{% endblock %}
 {% block body %}
 <div class="page-head">
   <div class="name-cell">
@@ -54,11 +54,6 @@
       </table>
       </div>
     </div>
-    <p class="oc-hint" style="margin-top:10px">
-      one configuration is meant for one device. a WireGuard peer keeps one session, so
-      two devices with the same config will keep taking it over from each other —
-      create a separate configuration instead.
-    </p>
     {% else %}
     <div class="oc-empty">
       no configurations yet — create one to connect a device.
@@ -70,9 +65,6 @@
   <section>
     <h2 class="oc-section__title">android app</h2>
     <div class="oc-panel" style="padding:16px">
-      <p class="oc-muted" style="margin:0 0 12px">
-        the app signs in with this account and manages its configuration itself.
-      </p>
       <a class="oc-btn oc-btn--outline oc-btn--sm" href="/download/android">download the app</a>
     </div>
   </section>
@@ -93,9 +85,8 @@
           <input class="oc-input" type="password" name="new_password"
                  autocomplete="new-password" minlength="12" required>
         </label>
-        <p class="oc-hint" style="margin-top:8px">
-          at least 12 characters; other sessions are signed out
-        </p>
+        <p class="oc-hint" style="margin-top:8px">at least 12 characters</p>
+
         <button class="oc-btn oc-btn--contrast oc-btn--sm" style="margin-top:12px">change password</button>
       </form>
       <form method="post" action="/me/logout-all" style="margin-top:16px">

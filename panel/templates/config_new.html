@@ -4,9 +4,6 @@
 <div class="crumbs"><a href="/configs">Configs</a><span>/</span><span>new</span></div>
 <div class="page-head">
   <h1>New configuration</h1>
-  <p class="oc-muted">
-    the server generates the keys and assigns the address; one configuration is meant for one device
-  </p>
 </div>
 
 {% if err %}<div class="oc-alert oc-alert--danger" style="margin-bottom:16px"><span class="oc-dot" style="margin-top:7px"></span><div class="oc-alert__body">{{ err }}</div></div>{% endif %}
@@ -24,13 +21,12 @@
         </option>
         {% endfor %}
       </select>
-      <span class="oc-hint">access to exits comes from the account; the configuration only keeps its own order</span>
     </label>
     <label class="oc-field" style="margin-top:12px">
       <span class="oc-field__label">name (optional)</span>
       <input class="oc-input" type="text" name="name" maxlength="32" spellcheck="false"
              placeholder="generated from the email">
-      <span class="oc-hint">latin letters, digits, dot, dash; used in the config file name</span>
+      <span class="oc-hint">latin letters, digits, dot, dash</span>
     </label>
     <div class="actions" style="margin-top:24px">
       <button class="oc-btn oc-btn--contrast">create</button>

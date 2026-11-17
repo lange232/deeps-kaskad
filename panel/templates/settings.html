@@ -3,7 +3,6 @@
 {% block body %}
 <div class="page-head">
   <h1>Settings</h1>
-  <p class="oc-muted">read-only: managed by Ansible, not by the panel</p>
 </div>
 
 {% if err %}<div class="oc-alert oc-alert--danger" style="margin-bottom:16px"><span class="oc-dot" style="margin-top:7px"></span><div class="oc-alert__body">{{ err }}</div></div>{% endif %}
@@ -71,10 +70,6 @@
         </label>
         <button class="oc-btn oc-btn--neutral oc-btn--sm">save</button>
       </form>
-      <p class="oc-hint" style="margin-top:8px">
-        used for accounts without a personal limit; the administrator can override it on
-        the account page.
-      </p>
     </div>
   </section>
 

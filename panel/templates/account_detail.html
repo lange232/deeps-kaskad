@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 {% block title %}{{ account.email }} — deeps kaskad{% endblock %}
-{% block topbar %}<span class="oc-mono oc-muted">{{ account.email }}</span>{% endblock %}
+{% block topbar %}<a class="oc-mono topbar-link" href="/accounts/{{ account.id }}">{{ account.email }}</a>{% endblock %}
 {% block body %}
 <div class="crumbs"><a href="/accounts">Accounts</a><span>/</span><span>{{ account.email }}</span></div>
 <div class="page-head">
@@ -110,13 +110,9 @@
              placeholder="name (optional)" spellcheck="false" style="flex:1">
       <button class="oc-btn oc-btn--contrast oc-btn--sm">add configuration</button>
     </form>
-    <p class="oc-hint" style="margin-top:8px">
-      the server generates the keys; one configuration is meant for one device
-    </p>
     {% else %}
-    <p class="oc-hint" style="margin-top:10px">
-      the limit is reached — raise it below or delete a configuration.
-    </p>
+    <p class="oc-hint" style="margin-top:10px">limit reached</p>
+
     {% endif %}
   </section>
 
@@ -158,10 +154,6 @@
         <div class="actions" style="margin-top:18px">
           <button class="oc-btn oc-btn--contrast">save access</button>
         </div>
-        <p class="oc-hint" style="margin-top:10px">
-          access is granted to the account and applies to every configuration;
-          a new grant is appended to each configuration's order.
-        </p>
       </form>
     </div>
   </section>
@@ -170,10 +162,6 @@
     <h2 class="oc-section__title">internet exit order</h2>
     <div class="oc-panel" style="padding:16px">
       {% if order %}
-      <p class="oc-muted" style="margin:0 0 12px">
-        the account order is the default: new configurations copy it, and
-        "apply to all" resets every configuration to it.
-      </p>
       <div class="table-scroll">
       <table class="oc-table">
         <thead><tr><th style="width:1%">#</th><th>exit</th><th style="width:1%"></th></tr></thead>
@@ -212,7 +200,7 @@
         <button class="oc-btn oc-btn--neutral oc-btn--sm">apply to all configurations</button>
       </form>
       {% else %}
-      <p class="oc-muted" style="margin:0">grant at least one internet exit to set an order.</p>
+      <p class="oc-muted" style="margin:0">no internet exits to order</p>
       {% endif %}
     </div>
   </section>
@@ -227,10 +215,6 @@
                value="{{ account.max_configs or '' }}" placeholder="{{ default_limit }}" style="flex:1">
         <button class="oc-btn oc-btn--neutral oc-btn--sm">save limit</button>
       </form>
-      <p class="oc-hint" style="margin-top:8px">
-        empty means the server default ({{ default_limit }}); set on
-        <a href="/settings">settings</a>.
-      </p>
     </div>
   </section>
 
@@ -260,10 +244,6 @@
           <button class="oc-btn oc-btn--ghost-danger oc-btn--sm">delete account</button>
         </form>
       </div>
-      <p class="oc-hint" style="margin-top:10px">
-        the account signs in at this panel and in the app with this email; deleting it
-        also deletes its configurations.
-      </p>
     </div>
   </section>
 </div>

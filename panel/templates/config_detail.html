@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 {% block title %}{{ config.name }} — deeps kaskad{% endblock %}
-{% block topbar %}<span class="oc-mono oc-muted">{{ config.ip }}</span>{% endblock %}
+{% block topbar %}<a class="oc-mono topbar-link" href="/configs/{{ config.id }}">{{ config.ip }}</a>{% endblock %}
 {% block body %}
 <div class="crumbs"><a href="/configs">Configs</a><span>/</span><span>{{ config.name }}</span></div>
 <div class="page-head">
@@ -28,8 +28,18 @@
 <div class="oc-alert oc-alert--warning" style="margin-bottom:16px">
   <span class="oc-dot" style="margin-top:7px"></span>
   <div class="oc-alert__body">
-    this configuration was created before accounts existed and has no owner.
-    delete it and create a configuration in the account instead.
+    no account — created before accounts existed
+    {% if accounts %}
+    <form method="post" action="/configs/{{ config.id }}/account"
+          class="actions" style="margin-top:10px">
+      <input type="hidden" name="csrf_token" value="{{ csrf }}">
+      <select class="oc-input oc-input--sm" name="account_id"
+              aria-label="account" style="flex:1; max-width:280px">
+        {% for a in accounts %}<option value="{{ a.id }}">{{ a.email }}</option>{% endfor %}
+      </select>
+      <button class="oc-btn oc-btn--contrast oc-btn--sm">assign</button>
+    </form>
+    {% endif %}
   </div>
 </div>
 {% endif %}
@@ -45,27 +55,9 @@
   </div>
 
   <section>
-    <h2 class="oc-section__title">access</h2>
-    <div class="oc-panel" style="padding:16px">
-      {% if account %}
-      <p class="oc-muted" style="margin:0">
-        access to exits is granted to the account — this configuration uses the same set.
-        change it on the <a href="/accounts/{{ account.id }}">account page</a>.
-      </p>
-      {% else %}
-      <p class="oc-muted" style="margin:0">legacy configuration: its access stays as it was until deleted.</p>
-      {% endif %}
-    </div>
-  </section>
-
-  <section>
     <h2 class="oc-section__title">internet exit order</h2>
     <div class="oc-panel" style="padding:16px">
       {% if internet_exits %}
-      <p class="oc-muted" style="margin:0 0 12px">
-        internet traffic uses the first available exit in this list; the order is this
-        configuration's own copy of the account order.
-      </p>
       <div class="table-scroll">
       <table class="oc-table">
         <thead><tr><th style="width:1%">#</th><th>exit</th><th style="width:1%"></th></tr></thead>
@@ -116,9 +108,7 @@
       </form>
       {% endif %}
       {% else %}
-      <p class="oc-muted" style="margin:0">
-        the account has no internet exits granted — this configuration has no internet access.
-      </p>
+      <p class="oc-muted" style="margin:0">no internet exits granted</p>
       {% endif %}
     </div>
   </section>
@@ -143,12 +133,8 @@
       <details style="margin-top:14px">
         <summary class="oc-btn oc-btn--ghost oc-btn--sm" style="display:inline-flex">show config</summary>
         {% if conf %}<pre class="conf" style="margin-top:12px">{{ conf }}</pre>
-        {% else %}<p class="oc-muted" style="margin-top:10px">the account has neither internet nor subnets assigned — no config can be issued.</p>{% endif %}
+        {% else %}<p class="oc-muted" style="margin-top:10px">no access assigned</p>{% endif %}
       </details>
-      <p class="oc-hint" style="margin-top:12px">
-        one configuration is meant for one device: a WireGuard peer keeps one session,
-        two devices with the same config will keep taking it over from each other.
-      </p>
     </div>
   </section>
 
@@ -167,7 +153,6 @@
         </form>
         <a class="oc-btn oc-btn--ghost-muted oc-btn--sm" href="/configs">back</a>
       </div>
-      <p class="oc-hint" style="margin-top:10px">disable keeps the peer and lets you turn it back on; delete erases the keys.</p>
     </div>
   </section>
 </div>

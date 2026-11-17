@@ -534,6 +534,96 @@ class AccountTests(PanelTestCase):
         location = response.headers["location"]
         return int(location.split("/accounts/")[1].split("?")[0])
 
+    def seed_orphan(self, name="old", ip="10.80.0.9"):
+        """A configuration from before accounts existed: no account_id."""
+        with app.db() as conn:
+            cid = conn.execute(
+                "INSERT INTO clients (name, ip, public_key, private_key, "
+                "preshared_key, enabled, created_at, internet, table_num) "
+                "VALUES (?, ?, 'pub', 'priv', 'psk', 1, 'now', 1, 0)",
+                (name, ip),
+            ).lastrowid
+            conn.execute("UPDATE clients SET table_num = ? WHERE id = ?",
+                         (app.routing.allocate_table(conn), cid))
+            return cid
+
+    def test_orphan_config_is_assigned_keeping_its_keys(self):
+        aid = self.seed_account(email="owner@example.com")
+        cid = self.seed_orphan()
+        first = self.seed_exit("e1", "awg1", priority=10)
+        second = self.seed_exit("e2", "awg2", priority=20)
+        self.login_admin()
+        csrf = self.csrf(f"/configs/{cid}")
+        self.client.post(f"/accounts/{aid}/exits", data={
+            "exits": [second, first], "csrf_token": csrf,
+        })
+        with app.db() as conn:
+            before = conn.execute(
+                "SELECT public_key, ip FROM clients WHERE id = ?", (cid,)).fetchone()
+        response = self.client.post(f"/configs/{cid}/account", data={
+            "account_id": aid, "csrf_token": csrf,
+        })
+        self.assertEqual(response.status_code, 303)
+        self.assertIn("ok=", response.headers["location"])
+        with app.db() as conn:
+            row = conn.execute(
+                "SELECT account_id, public_key, ip FROM clients WHERE id = ?",
+                (cid,)).fetchone()
+        self.assertEqual(row["account_id"], aid)
+        self.assertEqual(row["public_key"], before["public_key"])
+        self.assertEqual(row["ip"], before["ip"])
+        # The account order replaces the legacy per-client rows.
+        self.assertEqual([e for e, _ in self.grants(cid)], [first, second])
+
+    def test_assigned_config_is_refused_a_second_time(self):
+        aid, cid = self.seed_client()
+        other = self.seed_account(email="other@example.com")
+        self.login_admin()
+        csrf = self.csrf(f"/configs/{cid}")
+        response = self.client.post(f"/configs/{cid}/account", data={
+            "account_id": other, "csrf_token": csrf,
+        })
+        self.assertEqual(response.status_code, 303)
+        self.assertIn("err=", response.headers["location"])
+        with app.db() as conn:
+            self.assertEqual(conn.execute(
+                "SELECT account_id FROM clients WHERE id = ?", (cid,)).fetchone()[0], aid)
+
+    def test_assignment_rejects_a_missing_account(self):
+        cid = self.seed_orphan()
+        self.login_admin()
+        csrf = self.csrf(f"/configs/{cid}")
+        response = self.client.post(f"/configs/{cid}/account", data={
+            "account_id": 999999, "csrf_token": csrf,
+        })
+        self.assertEqual(response.status_code, 404)
+        with app.db() as conn:
+            self.assertIsNone(conn.execute(
+                "SELECT account_id FROM clients WHERE id = ?", (cid,)).fetchone()[0])
+
+    def test_assignment_of_a_missing_config_is_404(self):
+        aid = self.seed_account(email="owner@example.com")
+        self.login_admin()
+        csrf = self.csrf("/configs/new")
+        response = self.client.post("/configs/999999/account", data={
+            "account_id": aid, "csrf_token": csrf,
+        })
+        self.assertEqual(response.status_code, 404)
+
+    def test_assignment_respects_the_limit(self):
+        aid, _ = self.seed_client(email="full@example.com", max_configs=1)
+        cid = self.seed_orphan()
+        self.login_admin()
+        csrf = self.csrf(f"/configs/{cid}")
+        response = self.client.post(f"/configs/{cid}/account", data={
+            "account_id": aid, "csrf_token": csrf,
+        })
+        self.assertEqual(response.status_code, 303)
+        self.assertIn("err=", response.headers["location"])
+        with app.db() as conn:
+            self.assertIsNone(conn.execute(
+                "SELECT account_id FROM clients WHERE id = ?", (cid,)).fetchone()[0])
+
     def test_create_account_and_config(self):
         aid = self.create_account()
         with app.db() as conn:
@@ -692,6 +782,20 @@ class ConfigPingTests(PanelTestCase):
         })
         self.assertIn("exit 40 ms", text)
         self.assertIn("S1 to exit only", text)
+
+
+class NavigationTests(PanelTestCase):
+    def test_current_page_is_marked_for_screen_readers(self):
+        self.login_admin()
+        text = self.client.get("/accounts").text
+        self.assertIn('aria-current="page"', text)
+        self.assertEqual(text.count('aria-current="page"'), 1)
+
+    def test_cabinet_has_no_sidebar(self):
+        self.seed_client(email="c1@example.com")
+        self.login("c1@example.com", USER_PASSWORD)
+        text = self.client.get("/me").text
+        self.assertNotIn('<aside class="side">', text)
 
 
 class GrantTests(PanelTestCase):

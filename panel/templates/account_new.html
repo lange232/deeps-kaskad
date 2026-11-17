@@ -4,9 +4,6 @@
 <div class="crumbs"><a href="/accounts">Accounts</a><span>/</span><span>new</span></div>
 <div class="page-head">
   <h1>New account</h1>
-  <p class="oc-muted">
-    accounts are created by the administrator; the password is shown once after creation
-  </p>
 </div>
 
 {% if err %}<div class="oc-alert oc-alert--danger" style="margin-bottom:16px"><span class="oc-dot" style="margin-top:7px"></span><div class="oc-alert__body">{{ err }}</div></div>{% endif %}
@@ -18,19 +15,17 @@
       <span class="oc-field__label">email</span>
       <input class="oc-input" type="email" name="email" placeholder="alice@example.com" required
              autocapitalize="none" spellcheck="false">
-      <span class="oc-hint">the login for the panel and for the app</span>
     </label>
     <label class="oc-field" style="margin-top:12px">
       <span class="oc-field__label">password</span>
       <input class="oc-input" type="text" name="password" autocomplete="off"
              placeholder="leave empty to generate">
-      <span class="oc-hint">at least 12 characters; generated passwords are shown once</span>
+      <span class="oc-hint">at least 12 characters</span>
     </label>
     <label class="oc-field" style="margin-top:12px">
       <span class="oc-field__label">configurations limit</span>
       <input class="oc-input" type="number" name="max_configs" min="1"
              placeholder="{{ default_limit }}">
-      <span class="oc-hint">empty means the server default; the administrator can change it later</span>
     </label>
     <div class="actions" style="margin-top:24px">
       <button class="oc-btn oc-btn--contrast">create</button>

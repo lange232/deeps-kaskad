@@ -5,6 +5,26 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.1] - 2026-11-17
+
+### Added
+
+- `/configs/{id}` offers "assign to account" for a configuration created
+  before accounts existed: the keys and the address stay, the account's
+  exits and their order replace the legacy per-client grants, so the device
+  keeps working without a new `.conf`.
+
+### Changed
+
+- The sidebar groups by task (overview, accounts, configs, exits, then the
+  journal and settings), marks the current page with `aria-current`, wraps
+  into two rows on a phone instead of scrolling out of sight, and the
+  cabinet has no one-item sidebar. The topbar drops the redundant "panel"
+  badge and links the current object (email, address, interface).
+- The panel keeps labels, states and warnings but drops most of the
+  explanatory paragraphs and hints: page subtitles, section prose and field
+  notes that repeated what the UI already shows.
+
 ## [0.4.0] - 2026-11-16
 
 ### Added

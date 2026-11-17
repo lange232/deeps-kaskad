@@ -718,6 +718,15 @@ def account_row(aid: int):
         return conn.execute("SELECT * FROM accounts WHERE id = ?", (aid,)).fetchone()
 
 
+def account_rows(conn: sqlite3.Connection | None = None):
+    """Every account, ordered by email: the pickers and the account list."""
+    sql = "SELECT * FROM accounts ORDER BY email"
+    if conn is not None:
+        return conn.execute(sql).fetchall()
+    with db() as own:
+        return own.execute(sql).fetchall()
+
+
 def require_user(request: Request) -> tuple[str, object]:
     """Returns (session token, account row)."""
     token = request.cookies.get(COOKIE)
@@ -1815,7 +1824,7 @@ def configs_page(request: Request, q: str | None = None):
 def config_new_page(request: Request, err: str | None = None):
     token = require_admin(request)
     with db() as conn:
-        rows = conn.execute("SELECT * FROM accounts ORDER BY email").fetchall()
+        rows = account_rows(conn)
         counts = {
             r["account_id"]: r["n"] for r in conn.execute(
                 "SELECT account_id, count(*) AS n FROM clients "
@@ -1896,12 +1905,16 @@ def config_page(
         conf = mask_conf(config_conf(c, cl))
     except ValueError:
         conf = None
+    accounts = []
+    if not account:
+        accounts = account_rows()
     return render_page(
         request, "config_detail.html", "configs",
         csrf=csrf(token), err=err, ok=ok, config=view,
         account=account, routed=config_routed_exits(cl),
         internet_exits=config_internet_exits(cl),
         latency=latency, alive=alive, client_rtt=client_rtt, conf=conf,
+        accounts=accounts,
     )
 
 
@@ -1929,6 +1942,61 @@ def toggle_config(request: Request, cid: int, csrf_token: str = Form(...)):
     audit("config_toggle", f"{row['name']} -> {0 if row['enabled'] else 1}")
     apply_routing()
     return RedirectResponse(f"/configs/{cid}", status_code=303)
+
+
+@app.post("/configs/{cid}/account")
+def assign_config(
+    request: Request, cid: int, account_id: int = Form(...),
+    csrf_token: str = Form(...),
+):
+    """Attaches a configuration created before accounts existed to an account.
+
+    The keys and the address stay, so the device keeps its tunnel. Only the
+    source of the grants changes: the account's exits and their order replace
+    the legacy per-client rows. If the access class differs (for example the
+    account has subnets only), the generated `.conf` changes AllowedIPs and
+    DNS, so the device needs the file again.
+    """
+    token = require_admin(request)
+    if not hmac.compare_digest(csrf_token, csrf(token)):
+        raise HTTPException(status_code=400, detail="csrf")
+    cl = config_row(cid)
+    if not cl:
+        raise HTTPException(status_code=404)
+    if cl["account_id"]:
+        return RedirectResponse(
+            f"/configs/{cid}?err={quote('this configuration already belongs to an account')}",
+            status_code=303,
+        )
+    account = account_row(account_id)
+    if not account:
+        raise HTTPException(status_code=404)
+    problem = config_limit_error(account)
+    if problem:
+        return RedirectResponse(
+            f"/configs/{cid}?err={quote(problem)}", status_code=303
+        )
+    with db() as conn:
+        conn.execute(
+            "UPDATE clients SET account_id = ? WHERE id = ?", (account["id"], cid)
+        )
+        order = [
+            r["exit_id"] for r in conn.execute(
+                "SELECT ae.exit_id FROM account_exits ae "
+                "JOIN exits e ON e.id = ae.exit_id "
+                "WHERE ae.account_id = ? AND e.mode = 'internet' "
+                "ORDER BY ae.priority, e.priority, e.id",
+                (account["id"],),
+            )
+        ]
+        write_config_order(conn, cid, order)
+        # Routed grants came from the legacy table; the account has its own.
+        conn.execute("DELETE FROM client_exits WHERE client_id = ?", (cid,))
+    apply_routing()
+    audit("config_assigned", f"{cl['name']} -> {account['email']}")
+    return RedirectResponse(
+        f"/configs/{cid}?ok={quote('assigned to ' + account['email'])}", status_code=303
+    )
 
 
 @app.post("/configs/{cid}/delete")
@@ -2074,7 +2142,7 @@ def qr(request: Request, cid: int):
 def accounts_page(request: Request, q: str | None = None):
     token = require_admin(request)
     with db() as conn:
-        rows = conn.execute("SELECT * FROM accounts ORDER BY email").fetchall()
+        rows = account_rows(conn)
         counts = {
             r["account_id"]: r["n"] for r in conn.execute(
                 "SELECT account_id, count(*) AS n FROM clients "

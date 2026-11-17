@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 {% block title %}{{ cl.name }} — deeps kaskad{% endblock %}
-{% block topbar %}<span class="oc-mono oc-muted">{{ email }}</span>{% endblock %}
+{% block topbar %}<a class="oc-mono topbar-link" href="/me">{{ email }}</a>{% endblock %}
 {% block body %}
 <div class="crumbs"><a href="/me">My access</a><span>/</span><span>{{ cl.name }}</span></div>
 <div class="page-head">
@@ -34,10 +34,6 @@
   <section>
     <h2 class="oc-section__title">exit priority</h2>
     <div class="oc-panel" style="padding:16px">
-      <p class="oc-muted" style="margin:0 0 12px">
-        internet traffic uses the first available exit in this list; if none of them is up,
-        there is no internet.
-      </p>
       {% if current_exit %}
       <p style="margin:0 0 12px">
         in use now: <span class="oc-badge oc-badge--accent">{{ current_exit.comment or current_exit.name }}</span>
@@ -48,10 +44,6 @@
         none of the granted exits is up
       </p>
       {% endif %}
-      <p class="oc-hint" style="margin:0 0 10px">
-        ping = your device to the panel (<span id="client-rtt">measuring…</span>)
-        + panel to the exit
-      </p>
       <div class="table-scroll">
       <table class="oc-table">
         <thead>
@@ -122,40 +114,21 @@
       <details style="margin-top:14px">
         <summary class="oc-btn oc-btn--ghost oc-btn--sm" style="display:inline-flex">show config</summary>
         <pre class="conf" style="margin-top:12px">{{ conf }}</pre>
-        <p class="oc-hint" style="margin-top:8px">keys are hidden here; the downloaded file is complete</p>
       </details>
-      {% else %}
-      <p class="oc-muted" style="margin:0">
-        this configuration has no internet or subnet access assigned yet — contact the administrator.
+      <p class="oc-hint" style="margin-top:12px">
+        any WireGuard client works, or
+        <a href="https://www.wireguard.com/install/">wireguard.com/install</a>
       </p>
+      {% else %}
+      <p class="oc-muted" style="margin:0">no access assigned</p>
       {% endif %}
     </div>
   </section>
 
   {% if conf %}
   <section>
-    <h2 class="oc-section__title">wireguard client</h2>
-    <div class="oc-panel" style="padding:16px">
-      <p class="oc-muted" style="margin:0 0 12px">
-        use the standard WireGuard app; Amnezia is not required.
-        install it from <a href="https://www.wireguard.com/install/">wireguard.com/install</a>.
-      </p>
-      <ol class="oc-muted" style="margin:0; padding-left:20px; line-height:1.9">
-        <li>install WireGuard for Windows, macOS, Android, iOS or Linux;</li>
-        <li>create a tunnel: scan the QR code or import the downloaded <span class="oc-mono">.conf</span> file;</li>
-        <li>switch the tunnel on — all traffic listed above goes through deeps kaskad;</li>
-        <li>download the config again after reissuing the key.</li>
-      </ol>
-    </div>
-  </section>
-
-  <section>
     <h2 class="oc-section__title">reissue key</h2>
     <div class="oc-panel" style="padding:16px">
-      <p class="oc-muted" style="margin:0 0 12px">
-        generates new keys on the server. the current config stops working immediately,
-        so download the new one and update the device.
-      </p>
       <form method="post" action="/me/configs/{{ cl.id }}/reissue"
             onsubmit="return confirm('reissue the key? the current config will stop working')">
         <input type="hidden" name="csrf_token" value="{{ csrf }}">
@@ -180,9 +153,6 @@
         </form>
         <a class="oc-btn oc-btn--ghost-muted oc-btn--sm" href="/me">back</a>
       </div>
-      <p class="oc-hint" style="margin-top:10px">
-        disable keeps the peer and lets you turn it back on; delete erases the keys.
-      </p>
     </div>
   </section>
 </div>

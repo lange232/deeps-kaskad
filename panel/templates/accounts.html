@@ -3,12 +3,11 @@
 {% block body %}
 <div class="page-head">
   <h1>Accounts</h1>
-  <p class="oc-muted">an account is an email; it owns configurations and the access to exits</p>
 </div>
 
-<div class="toolbar">
-  <form method="get" action="/accounts" class="actions" style="flex:1; max-width:360px">
-    <input class="oc-input oc-input--sm" type="text" name="q" value="{{ q }}" placeholder="search by email" style="flex:1; min-width:0">
+<div class="toolbar toolbar--list">
+  <form method="get" action="/accounts" class="actions list-search">
+    <input class="oc-input oc-input--sm" type="text" name="q" value="{{ q }}" placeholder="search by email">
     <button class="oc-btn oc-btn--neutral oc-btn--sm">search</button>
     {% if q %}<a class="oc-btn oc-btn--ghost oc-btn--sm" href="/accounts">reset</a>{% endif %}
   </form>
