@@ -246,6 +246,23 @@ def migrate(conn: sqlite3.Connection, existing: set[str]) -> None:
         "DELETE FROM account_exits WHERE account_id NOT IN (SELECT id FROM accounts) "
         "OR exit_id NOT IN (SELECT id FROM exits)"
     )
+    # The subnets a configuration uses are now an explicit choice. The first
+    # start on an older database writes the old default — everything the
+    # account grants — once; the marker keeps a later opt-out from being
+    # undone on every start.
+    if setting("routed_selection", conn) is None:
+        conn.execute(
+            "INSERT INTO client_exits (client_id, exit_id) "
+            "SELECT c.id, ae.exit_id FROM clients c "
+            "JOIN account_exits ae ON ae.account_id = c.account_id "
+            "JOIN exits e ON e.id = ae.exit_id AND e.mode = 'routes' "
+            "WHERE c.account_id IS NOT NULL AND NOT EXISTS ("
+            "  SELECT 1 FROM client_exits ce "
+            "  WHERE ce.client_id = c.id AND ce.exit_id = ae.exit_id)"
+        )
+        conn.execute(
+            "INSERT INTO settings (key, value) VALUES ('routed_selection', '1')"
+        )
 
     # One table per object across both kinds: duplicates would make a client
     # and a routed exit fight over the same routes. The registry is rebuilt
@@ -964,9 +981,23 @@ def account_exits(aid: int, mode: str | None = None) -> list:
 
 
 def config_routed_exits(cl) -> list:
-    """Subnet exits of a configuration: from its account, or legacy grants."""
+    """Subnet exits this configuration uses.
+
+    The account decides which subnets are allowed; the configuration picks
+    the ones it needs (client_exits). Rows from before accounts existed keep
+    their own grants.
+    """
     if cl["account_id"]:
-        return account_exits(int(cl["account_id"]), "routes")
+        with db() as conn:
+            return conn.execute(
+                "SELECT e.* FROM client_exits ce "
+                "JOIN exits e ON e.id = ce.exit_id "
+                "AND e.enabled = 1 AND e.mode = 'routes' "
+                "JOIN account_exits ae ON ae.account_id = ? "
+                "AND ae.exit_id = ce.exit_id "
+                "WHERE ce.client_id = ? ORDER BY e.priority, e.id",
+                (int(cl["account_id"]), cl["id"]),
+            ).fetchall()
     with db() as conn:
         return conn.execute(
             "SELECT e.* FROM client_exits ce "
@@ -1066,6 +1097,69 @@ def sync_account_configs(conn, aid: int, reset_order: bool = False) -> None:
                 "VALUES (?, ?, ?)",
                 (row["id"], eid, (position + 1) * 10),
             )
+
+    granted_routed = {
+        r["exit_id"] for r in conn.execute(
+            "SELECT ae.exit_id FROM account_exits ae "
+            "JOIN exits e ON e.id = ae.exit_id "
+            "WHERE ae.account_id = ? AND e.mode = 'routes'",
+            (aid,),
+        )
+    }
+    for row in conn.execute(
+        "SELECT id FROM clients WHERE account_id = ?", (aid,)
+    ).fetchall():
+        cid = row["id"]
+        current = {
+            r["exit_id"] for r in conn.execute(
+                "SELECT exit_id FROM client_exits WHERE client_id = ?", (cid,)
+            )
+        }
+        for eid in current - granted_routed:
+            conn.execute(
+                "DELETE FROM client_exits WHERE client_id = ? AND exit_id = ?",
+                (cid, eid),
+            )
+        for eid in granted_routed - current:
+            conn.execute(
+                "INSERT INTO client_exits (client_id, exit_id) VALUES (?, ?)",
+                (cid, eid),
+            )
+
+
+def routed_grants(conn, account_id: int) -> list[int]:
+    """Routed exits the account allows, in its order."""
+    return [
+        r["exit_id"] for r in conn.execute(
+            "SELECT ae.exit_id FROM account_exits ae "
+            "JOIN exits e ON e.id = ae.exit_id "
+            "WHERE ae.account_id = ? AND e.mode = 'routes' AND e.enabled = 1 "
+            "ORDER BY ae.priority, e.priority, e.id",
+            (account_id,),
+        )
+    ]
+
+
+def config_routed_choices(account) -> list:
+    """The account's routed exits: what a configuration may switch on."""
+    with db() as conn:
+        return conn.execute(
+            "SELECT e.* FROM account_exits ae "
+            "JOIN exits e ON e.id = ae.exit_id "
+            "WHERE ae.account_id = ? AND e.mode = 'routes' AND e.enabled = 1 "
+            "ORDER BY ae.priority, e.priority, e.id",
+            (int(account["id"]),),
+        ).fetchall()
+
+
+def write_routed_choice(conn, cl, chosen: set[int]) -> None:
+    """Stores which of the account's subnets this configuration uses."""
+    conn.execute("DELETE FROM client_exits WHERE client_id = ?", (cl["id"],))
+    for eid in chosen:
+        conn.execute(
+            "INSERT INTO client_exits (client_id, exit_id) VALUES (?, ?)",
+            (cl["id"], eid),
+        )
 
 
 def config_access(c: dict, cl) -> tuple[str, list[str]]:
@@ -1738,6 +1832,17 @@ def spawn_config(conn, account, name: str = "") -> int:
             "VALUES (?, ?, ?)",
             (cid, eid, (position + 1) * 10),
         )
+    # Subnets are picked per configuration; a new one starts with all of them.
+    for row in conn.execute(
+        "SELECT ae.exit_id FROM account_exits ae "
+        "JOIN exits e ON e.id = ae.exit_id "
+        "WHERE ae.account_id = ? AND e.mode = 'routes'",
+        (account["id"],),
+    ).fetchall():
+        conn.execute(
+            "INSERT INTO client_exits (client_id, exit_id) VALUES (?, ?)",
+            (cid, row["exit_id"]),
+        )
     apply_conf(c, conn)
     return cid
 
@@ -1908,6 +2013,7 @@ def config_page(
     accounts = []
     if not account:
         accounts = account_rows()
+    chosen_routed = {e["id"] for e in config_routed_exits(cl)}
     return render_page(
         request, "config_detail.html", "configs",
         csrf=csrf(token), err=err, ok=ok, config=view,
@@ -1915,7 +2021,38 @@ def config_page(
         internet_exits=config_internet_exits(cl),
         latency=latency, alive=alive, client_rtt=client_rtt, conf=conf,
         accounts=accounts,
+        routed_choices=[
+            {"id": r["id"], "name": r["comment"] or r["name"], "routes": r["routes"],
+             "chosen": r["id"] in chosen_routed}
+            for r in (config_routed_choices(account) if account else [])
+        ],
     )
+
+
+@app.post("/configs/{cid}/routed")
+def config_routed_update(
+    request: Request, cid: int, exits: list[int] = Form([]),
+    csrf_token: str = Form(...),
+):
+    """Which of the account's subnets this configuration uses."""
+    token = require_admin(request)
+    if not hmac.compare_digest(csrf_token, csrf(token)):
+        raise HTTPException(status_code=400, detail="csrf")
+    cl = config_row(cid)
+    if not cl:
+        raise HTTPException(status_code=404)
+    if not cl["account_id"]:
+        return RedirectResponse(
+            f"/configs/{cid}?err={quote('a configuration without an account cannot pick subnets')}",
+            status_code=303,
+        )
+    with db() as conn:
+        allowed = set(routed_grants(conn, int(cl["account_id"])))
+        wanted = {int(e) for e in exits} & allowed
+        write_routed_choice(conn, cl, wanted)
+    audit("config_routed", f"{cl['name']} {sorted(wanted)}")
+    apply_routing()
+    return RedirectResponse(f"/configs/{cid}?ok=subnets+updated", status_code=303)
 
 
 @app.post("/configs/{cid}/toggle")
@@ -1990,8 +2127,18 @@ def assign_config(
             )
         ]
         write_config_order(conn, cid, order)
-        # Routed grants came from the legacy table; the account has its own.
+        # The legacy routed rows are replaced by the account's grants.
         conn.execute("DELETE FROM client_exits WHERE client_id = ?", (cid,))
+        for row in conn.execute(
+            "SELECT ae.exit_id FROM account_exits ae "
+            "JOIN exits e ON e.id = ae.exit_id "
+            "WHERE ae.account_id = ? AND e.mode = 'routes'",
+            (account["id"],),
+        ).fetchall():
+            conn.execute(
+                "INSERT INTO client_exits (client_id, exit_id) VALUES (?, ?)",
+                (cid, row["exit_id"]),
+            )
     apply_routing()
     audit("config_assigned", f"{cl['name']} -> {account['email']}")
     return RedirectResponse(
@@ -2624,13 +2771,37 @@ def me_config_page(
         conf = mask_conf(config_conf(c, cl))
     except ValueError:
         conf = None
+    chosen_routed = {e["id"] for e in config_routed_exits(cl)}
     return render_page(
         request, "me_config.html", "me", role="user",
         csrf=csrf(token), err=err, ok=ok, email=account["email"],
         cl=config_view(cl, live),
         conf=conf, internet_exits=granted, current_exit=current,
         alive=alive, latency=latency, has_app=ANDROID_APK.exists(),
+        routed_choices=[
+            {"id": r["id"], "name": r["comment"] or r["name"], "routes": r["routes"],
+             "chosen": r["id"] in chosen_routed}
+            for r in config_routed_choices(account)
+        ],
     )
+
+
+@app.post("/me/configs/{cid}/routed")
+def me_config_routed(
+    request: Request, cid: int, exits: list[int] = Form([]),
+    csrf_token: str = Form(...),
+):
+    token, account = require_user(request)
+    if not hmac.compare_digest(csrf_token, csrf(token)):
+        raise HTTPException(status_code=400, detail="csrf")
+    cl = user_config(account, cid)
+    with db() as conn:
+        allowed = set(routed_grants(conn, int(account["id"])))
+        wanted = {int(e) for e in exits} & allowed
+        write_routed_choice(conn, cl, wanted)
+    audit("user_config_routed", f"{account['email']} {cl['name']} {sorted(wanted)}")
+    apply_routing()
+    return RedirectResponse(f"/me/configs/{cid}?ok=subnets+updated", status_code=303)
 
 
 @app.get("/me/configs/{cid}/conf")

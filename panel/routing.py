@@ -463,16 +463,17 @@ def desired_state() -> tuple[set[Rule], dict[int, set[Route]], dict[int, list[st
                 (INTERNET_PRIORITY,
                  ("from", cl["ip"], "iif", "awg0", "lookup", str(internet_table)))
             )
-    routed_links = list(legacy_links)
-    by_account: dict[int, list[dict]] = {}
-    for cl in configs:
-        if cl["account_id"]:
-            by_account.setdefault(cl["account_id"], []).append(cl)
-    for grant in account_grants:
-        for cl in by_account.get(grant["account_id"], []):
-            routed_links.append(
-                {"client_id": cl["id"], "exit_id": grant["exit_id"]}
-            )
+    # Subnets are chosen per configuration (client_exits); for a
+    # configuration of an account the exit must still be granted there.
+    chosen_routed = rows(
+        db,
+        "SELECT ce.client_id, ce.exit_id FROM client_exits ce "
+        "JOIN clients c ON c.id = ce.client_id "
+        "JOIN account_exits ae ON ae.account_id = c.account_id "
+        "AND ae.exit_id = ce.exit_id "
+        "WHERE c.account_id IS NOT NULL",
+    )
+    routed_links = list(legacy_links) + list(chosen_routed)
     for link in routed_links:
         cl = next((x for x in configs if x["id"] == link["client_id"]), None)
         ex = next((x for x in exits if x["id"] == link["exit_id"]), None)
