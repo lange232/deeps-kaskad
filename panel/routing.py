@@ -397,6 +397,16 @@ def desired_state() -> tuple[set[Rule], dict[int, set[Route]], dict[int, list[st
             "WHERE e.enabled = 1 AND e.mode = 'internet' "
             "ORDER BY ci.priority, e.priority, e.id",
         )
+        # Subnets are chosen per configuration (client_exits); for a
+        # configuration of an account the exit must still be granted there.
+        chosen_routed = rows(
+            db,
+            "SELECT ce.client_id, ce.exit_id FROM client_exits ce "
+            "JOIN clients c ON c.id = ce.client_id "
+            "JOIN account_exits ae ON ae.account_id = c.account_id "
+            "AND ae.exit_id = ce.exit_id "
+            "WHERE c.account_id IS NOT NULL",
+        )
     finally:
         db.close()
 
@@ -463,17 +473,7 @@ def desired_state() -> tuple[set[Rule], dict[int, set[Route]], dict[int, list[st
                 (INTERNET_PRIORITY,
                  ("from", cl["ip"], "iif", "awg0", "lookup", str(internet_table)))
             )
-    # Subnets are chosen per configuration (client_exits); for a
-    # configuration of an account the exit must still be granted there.
-    chosen_routed = rows(
-        db,
-        "SELECT ce.client_id, ce.exit_id FROM client_exits ce "
-        "JOIN clients c ON c.id = ce.client_id "
-        "JOIN account_exits ae ON ae.account_id = c.account_id "
-        "AND ae.exit_id = ce.exit_id "
-        "WHERE c.account_id IS NOT NULL",
-    )
-    routed_links = list(legacy_links) + list(chosen_routed)
+    routed_links = list(legacy_links)
     for link in routed_links:
         cl = next((x for x in configs if x["id"] == link["client_id"]), None)
         ex = next((x for x in exits if x["id"] == link["exit_id"]), None)

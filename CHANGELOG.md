@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- `panel/routing.py` queried `client_exits` after closing its own database
+  connection, so `kaskad-failover` failed every cycle with "Cannot operate on
+  a closed database" and stopped updating the active exit. The query runs
+  inside the open connection again; a test now calls `desired_state()` on a
+  real database.
+
+
 ### Changed
 
 - Lists open an object by clicking its row: the "open" button and its
