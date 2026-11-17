@@ -473,7 +473,7 @@ def desired_state() -> tuple[set[Rule], dict[int, set[Route]], dict[int, list[st
                 (INTERNET_PRIORITY,
                  ("from", cl["ip"], "iif", "awg0", "lookup", str(internet_table)))
             )
-    routed_links = list(legacy_links)
+    routed_links = list(legacy_links) + list(chosen_routed)
     for link in routed_links:
         cl = next((x for x in configs if x["id"] == link["client_id"]), None)
         ex = next((x for x in exits if x["id"] == link["exit_id"]), None)
