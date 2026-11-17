@@ -327,8 +327,8 @@ class RenderTests(unittest.TestCase):
         with app.db() as conn:
             conn.execute(
                 "INSERT INTO exits (name, iface, priority, enabled, conf, created_at,"
-                " mode, routes, dns, comment, nat) VALUES ('sub', 'awg2', 10, 1, 'x',"
-                " 'now', 'routes', '10.9.0.0/24', '', '', 1)")
+                " mode, routes, dns, comment, nat, table_num) VALUES ('sub', 'awg2',"
+                " 10, 1, 'x', 'now', 'routes', '10.9.0.0/24', '', '', 1, 1005)")
             conn.execute(
                 "INSERT INTO accounts (email, password_hash, enabled, token_version,"
                 " created_at) VALUES ('a@example.com', 'x', 1, 1, 'now')")
@@ -338,11 +338,19 @@ class RenderTests(unittest.TestCase):
                 " VALUES (1, 'c', '10.80.0.2', 'pub', 'priv', 'psk', 1, 'now', 1, 0)")
             conn.execute("INSERT INTO account_exits VALUES (1, 1, 10)")
             conn.execute("INSERT INTO client_exits VALUES (1, 1)")
+        # The host has no awg2; the rule is only planned for a live interface.
+        live = mock.Mock()
+        live.exists.return_value = True
         with mock.patch.object(routing, "DB_PATH", app.DB_PATH), \
-             mock.patch.object(routing, "cfg", lambda: c):
+             mock.patch.object(routing, "cfg", lambda: c), \
+             mock.patch.object(routing, "Path", lambda *args: live):
             rules, routes, tables, table, nat, net = routing.desired_state()
         self.assertIsInstance(rules, set)
         self.assertEqual(net, "10.80.0.0/24")
+        routed = [rule for rule in rules if rule[0] == routing.ROUTE_PRIORITY]
+        self.assertEqual(len(routed), 1)
+        self.assertIn("to", routed[0][1])
+        self.assertIn("10.9.0.0/24", routed[0][1])
 
     @unittest.skipUnless(app, "fastapi is not installed")
     def test_renderer_does_not_filter_enabled(self):
