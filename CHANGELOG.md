@@ -32,6 +32,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The panel keeps labels, states and warnings but drops most of the
+  explanatory paragraphs and hints: page subtitles, section prose and field
+  notes that repeated what the UI already shows.
 - `kaskad_client_keepalive` (25 seconds by default) sets
   `PersistentKeepalive` in every generated client config instead of the
   hard-coded 25.

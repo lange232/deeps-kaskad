@@ -4,7 +4,6 @@
 <div class="crumbs"><a href="/exits">Exits</a><span>/</span><span>new</span></div>
 <div class="page-head">
   <h1>New exit</h1>
-  <p class="oc-muted">AmneziaWG or plain WireGuard</p>
 </div>
 
 {% if err %}<div class="oc-alert oc-alert--danger" style="margin-bottom:16px"><span class="oc-dot" style="margin-top:7px"></span><div class="oc-alert__body">{{ err }}</div></div>{% endif %}
@@ -37,23 +36,17 @@
         <span class="oc-field__label">comment</span>
         <input class="oc-input" type="text" name="comment" maxlength="120"
                value="{{ form.comment or '' }}" placeholder="Finland, Helsinki">
-        <span class="oc-hint">shown to clients instead of the interface name</span>
       </label>
       <label class="oc-field" id="exit-routes-row">
         <span class="oc-field__label">subnets</span>
         <input class="oc-input" type="text" name="routes" id="exit-routes"
                value="{{ form.routes }}"
                placeholder="192.168.50.0/24, 10.20.0.0/24">
-        <span class="oc-hint">
-          filled from AllowedIPs in the provider config, or from the Address
-          network when AllowedIPs is 0.0.0.0/0; edit if needed
-        </span>
       </label>
       <label class="oc-field" id="exit-dns-row">
         <span class="oc-field__label">DNS from the subnet</span>
         <input class="oc-input" type="text" name="dns" value="{{ form.dns }}"
                placeholder="192.168.50.1">
-        <span class="oc-hint">for clients without internet</span>
       </label>
       <label class="oc-field" id="exit-nat-row">
         <span class="oc-field__label">NAT</span>
@@ -62,15 +55,11 @@
           <span class="oc-check__box"></span>
           masquerade client addresses
         </span>
-        <span class="oc-hint">
-          turn off when the far side has a route back to {{ clients_net }}
-        </span>
       </label>
       <label class="oc-field full">
         <span class="oc-field__label">provider config</span>
         <textarea class="oc-input oc-textarea" name="conf" required
           placeholder="[Interface]&#10;Address = ...&#10;PrivateKey = ...&#10;&#10;[Peer]&#10;PublicKey = ...&#10;Endpoint = host:port"></textarea>
-        <span class="oc-hint">DNS, PostUp and IPv6 are stripped automatically; neutral parameters are added for plain WG.</span>
       </label>
     </div>
     <div class="actions" style="margin-top:16px">

@@ -4,18 +4,13 @@
 <div class="crumbs"><a href="/me">My access</a><span>/</span><span>new configuration</span></div>
 <div class="page-head">
   <h1>New configuration</h1>
-  <p class="oc-muted">the server generates the keys; you get a .conf and a QR code</p>
 </div>
 
 {% if err %}<div class="oc-alert oc-alert--danger" style="margin-bottom:16px"><span class="oc-dot" style="margin-top:7px"></span><div class="oc-alert__body">{{ err }}</div></div>{% endif %}
 
 <div class="oc-alert oc-alert--warning" style="margin-bottom:16px">
   <span class="oc-dot" style="margin-top:7px"></span>
-  <div class="oc-alert__body">
-    one configuration is meant for one device. a WireGuard peer keeps one session: if the
-    same config is imported on a second device, the devices will keep taking the session
-    over from each other. to connect another device, create another configuration.
-  </div>
+  <div class="oc-alert__body">one configuration per device</div>
 </div>
 
 <div class="oc-panel" style="padding:16px; max-width:640px">
@@ -25,7 +20,7 @@
       <span class="oc-field__label">name (optional)</span>
       <input class="oc-input" type="text" name="name" maxlength="32" spellcheck="false"
              placeholder="for example: laptop">
-      <span class="oc-hint">latin letters, digits, dot, dash; empty means it is generated</span>
+      <span class="oc-hint">latin letters, digits, dot, dash</span>
     </label>
     <p class="oc-hint" style="margin-top:10px">
       you have {{ have }} of {{ limit }} configurations.
