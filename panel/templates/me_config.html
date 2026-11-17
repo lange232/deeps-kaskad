@@ -115,6 +115,10 @@
         <summary class="oc-btn oc-btn--ghost oc-btn--sm" style="display:inline-flex">show config</summary>
         <pre class="conf" style="margin-top:12px">{{ conf }}</pre>
       </details>
+      <p class="oc-hint" style="margin-top:12px">
+        any WireGuard client works, or
+        <a href="https://www.wireguard.com/install/">wireguard.com/install</a>
+      </p>
       {% else %}
       <p class="oc-muted" style="margin:0">no access assigned</p>
       {% endif %}
@@ -122,16 +126,6 @@
   </section>
 
   {% if conf %}
-  <section>
-    <h2 class="oc-section__title">wireguard client</h2>
-    <div class="oc-panel" style="padding:16px">
-      <p class="oc-muted" style="margin:0">
-        use any WireGuard client, or
-        <a href="https://www.wireguard.com/install/">wireguard.com/install</a>.
-      </p>
-    </div>
-  </section>
-
   <section>
     <h2 class="oc-section__title">reissue key</h2>
     <div class="oc-panel" style="padding:16px">

@@ -589,6 +589,27 @@ class AccountTests(PanelTestCase):
             self.assertEqual(conn.execute(
                 "SELECT account_id FROM clients WHERE id = ?", (cid,)).fetchone()[0], aid)
 
+    def test_assignment_rejects_a_missing_account(self):
+        cid = self.seed_orphan()
+        self.login_admin()
+        csrf = self.csrf(f"/configs/{cid}")
+        response = self.client.post(f"/configs/{cid}/account", data={
+            "account_id": 999999, "csrf_token": csrf,
+        })
+        self.assertEqual(response.status_code, 404)
+        with app.db() as conn:
+            self.assertIsNone(conn.execute(
+                "SELECT account_id FROM clients WHERE id = ?", (cid,)).fetchone()[0])
+
+    def test_assignment_of_a_missing_config_is_404(self):
+        aid = self.seed_account(email="owner@example.com")
+        self.login_admin()
+        csrf = self.csrf("/configs/new")
+        response = self.client.post("/configs/999999/account", data={
+            "account_id": aid, "csrf_token": csrf,
+        })
+        self.assertEqual(response.status_code, 404)
+
     def test_assignment_respects_the_limit(self):
         aid, _ = self.seed_client(email="full@example.com", max_configs=1)
         cid = self.seed_orphan()
@@ -761,6 +782,20 @@ class ConfigPingTests(PanelTestCase):
         })
         self.assertIn("exit 40 ms", text)
         self.assertIn("S1 to exit only", text)
+
+
+class NavigationTests(PanelTestCase):
+    def test_current_page_is_marked_for_screen_readers(self):
+        self.login_admin()
+        text = self.client.get("/accounts").text
+        self.assertIn('aria-current="page"', text)
+        self.assertEqual(text.count('aria-current="page"'), 1)
+
+    def test_cabinet_has_no_sidebar(self):
+        self.seed_client(email="c1@example.com")
+        self.login("c1@example.com", USER_PASSWORD)
+        text = self.client.get("/me").text
+        self.assertNotIn('<aside class="side">', text)
 
 
 class GrantTests(PanelTestCase):

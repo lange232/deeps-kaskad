@@ -273,9 +273,15 @@ account now owns several configurations. There is no automatic data migration:
 3. open `/accounts`, recreate the accounts by hand, grant the exits and create
    the configurations (this generates new keys, so devices need the new
    `.conf`);
-4. delete the old rows: they appear as "unassigned" on `/configs` and keep
-   working (with their old grants) until deleted. Deleting a configuration
-   erases its keys and releases its routing table.
+4. deal with the old rows: they appear as "unassigned" on `/configs` and keep
+   working with their old grants. Each one can be either
+
+   - attached to an account from its page ("assign to account"): the keys and
+     the address stay, the account's exits and their order replace the old
+     grants, so the device keeps its tunnel. If the access class changes (for
+     example the account has only subnets), download the `.conf` again — the
+     keys are the same but `AllowedIPs` and `DNS` are not; or
+   - deleted, which erases its keys and releases its routing table.
 
 Account-page and configuration-page paths are `/accounts` and `/configs`; the
 old `/clients*` routes are gone, so bookmarks must be updated.
@@ -309,7 +315,9 @@ The panel has two kinds of sign-in:
   exits per configuration and changes its password.
 
 The administrator manages accounts (`/accounts`), configurations
-(`/configs`), exits, service status and the action journal. On the account
+(`/configs`), exits, service status and the action journal. A configuration
+created before accounts existed shows up as "unassigned" until it is attached
+to an account from its page. On the account
 page: grants, exit order with "apply to all", the configuration limit, login
 state, password reset, delete. On the configuration page: download, QR, key
 reissue, link to the account, internet order, disable, delete.

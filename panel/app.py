@@ -718,6 +718,15 @@ def account_row(aid: int):
         return conn.execute("SELECT * FROM accounts WHERE id = ?", (aid,)).fetchone()
 
 
+def account_rows(conn: sqlite3.Connection | None = None):
+    """Every account, ordered by email: the pickers and the account list."""
+    sql = "SELECT * FROM accounts ORDER BY email"
+    if conn is not None:
+        return conn.execute(sql).fetchall()
+    with db() as own:
+        return own.execute(sql).fetchall()
+
+
 def require_user(request: Request) -> tuple[str, object]:
     """Returns (session token, account row)."""
     token = request.cookies.get(COOKIE)
@@ -1815,7 +1824,7 @@ def configs_page(request: Request, q: str | None = None):
 def config_new_page(request: Request, err: str | None = None):
     token = require_admin(request)
     with db() as conn:
-        rows = conn.execute("SELECT * FROM accounts ORDER BY email").fetchall()
+        rows = account_rows(conn)
         counts = {
             r["account_id"]: r["n"] for r in conn.execute(
                 "SELECT account_id, count(*) AS n FROM clients "
@@ -1898,10 +1907,7 @@ def config_page(
         conf = None
     accounts = []
     if not account:
-        with db() as conn:
-            accounts = conn.execute(
-                "SELECT * FROM accounts ORDER BY email"
-            ).fetchall()
+        accounts = account_rows()
     return render_page(
         request, "config_detail.html", "configs",
         csrf=csrf(token), err=err, ok=ok, config=view,
@@ -1945,9 +1951,11 @@ def assign_config(
 ):
     """Attaches a configuration created before accounts existed to an account.
 
-    The keys and the address stay, so the device keeps its config; only the
-    source of the grants changes — the account's exits replace the legacy
-    per-client rows.
+    The keys and the address stay, so the device keeps its tunnel. Only the
+    source of the grants changes: the account's exits and their order replace
+    the legacy per-client rows. If the access class differs (for example the
+    account has subnets only), the generated `.conf` changes AllowedIPs and
+    DNS, so the device needs the file again.
     """
     token = require_admin(request)
     if not hmac.compare_digest(csrf_token, csrf(token)):
@@ -2134,7 +2142,7 @@ def qr(request: Request, cid: int):
 def accounts_page(request: Request, q: str | None = None):
     token = require_admin(request)
     with db() as conn:
-        rows = conn.execute("SELECT * FROM accounts ORDER BY email").fetchall()
+        rows = account_rows(conn)
         counts = {
             r["account_id"]: r["n"] for r in conn.execute(
                 "SELECT account_id, count(*) AS n FROM clients "

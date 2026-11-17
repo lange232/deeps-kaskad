@@ -5,7 +5,7 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.4.0] - 2026-11-16
+## [Unreleased]
 
 ### Added
 
@@ -13,6 +13,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   before accounts existed: the keys and the address stay, the account's
   exits and their order replace the legacy per-client grants, so the device
   keeps working without a new `.conf`.
+
+### Changed
+
+- The sidebar groups by task (overview, accounts, configs, exits, then the
+  journal and settings), marks the current page with `aria-current`, wraps
+  into two rows on a phone instead of scrolling out of sight, and the
+  cabinet has no one-item sidebar. The topbar drops the redundant "panel"
+  badge and links the current object (email, address, interface).
+- The panel keeps labels, states and warnings but drops most of the
+  explanatory paragraphs and hints: page subtitles, section prose and field
+  notes that repeated what the UI already shows.
+
+## [0.4.0] - 2026-11-16
+
+### Added
+
 - Accounts: the email is now the primary entity. An account owns several
   WireGuard configurations, holds the access to exits and signs in at `/me`
   and in the mobile app. Accounts are created only by the administrator.
@@ -36,14 +52,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- The sidebar groups by task (overview, accounts, configs, exits, then the
-  journal and settings), marks the current page with `aria-current`, wraps
-  into two rows on a phone instead of scrolling out of sight, and the
-  cabinet has no one-item sidebar. The topbar drops the redundant "panel"
-  badge and links the current object (email, address, interface).
-- The panel keeps labels, states and warnings but drops most of the
-  explanatory paragraphs and hints: page subtitles, section prose and field
-  notes that repeated what the UI already shows.
 - `kaskad_client_keepalive` (25 seconds by default) sets
   `PersistentKeepalive` in every generated client config instead of the
   hard-coded 25.
