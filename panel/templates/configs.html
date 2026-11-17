@@ -5,9 +5,9 @@
   <h1>Configs</h1>
 </div>
 
-<div class="toolbar">
-  <form method="get" action="/configs" class="actions" style="flex:1; max-width:360px">
-    <input class="oc-input oc-input--sm" type="text" name="q" value="{{ q }}" placeholder="search by name, address or email" style="flex:1; min-width:0">
+<div class="toolbar toolbar--list">
+  <form method="get" action="/configs" class="actions list-search">
+    <input class="oc-input oc-input--sm" type="text" name="q" value="{{ q }}" placeholder="search by name, address or email">
     <button class="oc-btn oc-btn--neutral oc-btn--sm">search</button>
     {% if q %}<a class="oc-btn oc-btn--ghost oc-btn--sm" href="/configs">reset</a>{% endif %}
   </form>

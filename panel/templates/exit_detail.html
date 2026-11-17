@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 {% block title %}{{ exit.name }} — deeps kaskad{% endblock %}
-{% block topbar %}<span class="oc-mono oc-muted">{{ exit.iface }}</span>{% endblock %}
+{% block topbar %}<a class="oc-mono topbar-link" href="/exits/{{ exit.id }}">{{ exit.iface }}</a>{% endblock %}
 {% block body %}
 <div class="crumbs"><a href="/exits">Exits</a><span>/</span><span>{{ exit.name }}</span></div>
 <div class="page-head">

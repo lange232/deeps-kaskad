@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 {% block title %}{{ account.email }} — deeps kaskad{% endblock %}
-{% block topbar %}<span class="oc-mono oc-muted">{{ account.email }}</span>{% endblock %}
+{% block topbar %}<a class="oc-mono topbar-link" href="/accounts/{{ account.id }}">{{ account.email }}</a>{% endblock %}
 {% block body %}
 <div class="crumbs"><a href="/accounts">Accounts</a><span>/</span><span>{{ account.email }}</span></div>
 <div class="page-head">

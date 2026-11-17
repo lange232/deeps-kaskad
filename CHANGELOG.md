@@ -32,6 +32,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The sidebar groups by task (overview, accounts, configs, exits, then the
+  journal and settings), marks the current page with `aria-current`, wraps
+  into two rows on a phone instead of scrolling out of sight, and the
+  cabinet has no one-item sidebar. The topbar drops the redundant "panel"
+  badge and links the current object (email, address, interface).
 - The panel keeps labels, states and warnings but drops most of the
   explanatory paragraphs and hints: page subtitles, section prose and field
   notes that repeated what the UI already shows.

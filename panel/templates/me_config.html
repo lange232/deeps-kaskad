@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 {% block title %}{{ cl.name }} — deeps kaskad{% endblock %}
-{% block topbar %}<span class="oc-mono oc-muted">{{ email }}</span>{% endblock %}
+{% block topbar %}<a class="oc-mono topbar-link" href="/me">{{ email }}</a>{% endblock %}
 {% block body %}
 <div class="crumbs"><a href="/me">My access</a><span>/</span><span>{{ cl.name }}</span></div>
 <div class="page-head">

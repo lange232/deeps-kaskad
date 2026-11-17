@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 {% block title %}{{ config.name }} — deeps kaskad{% endblock %}
-{% block topbar %}<span class="oc-mono oc-muted">{{ config.ip }}</span>{% endblock %}
+{% block topbar %}<a class="oc-mono topbar-link" href="/configs/{{ config.id }}">{{ config.ip }}</a>{% endblock %}
 {% block body %}
 <div class="crumbs"><a href="/configs">Configs</a><span>/</span><span>{{ config.name }}</span></div>
 <div class="page-head">
