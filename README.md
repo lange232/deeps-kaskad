@@ -252,6 +252,11 @@ scripts/check.sh demo
 
 Tags: `base`, `amneziawg`, `panel`, `entry`.
 
+A production inventory sets `kaskad_production: true`, and then `site.yml`
+refuses to run unless the repository is a clean `main` on a release tag: a
+working tree with half-merged branches must not reach a live host. Stands
+leave the flag out and deploy from any branch.
+
 Tests:
 
 ```bash
