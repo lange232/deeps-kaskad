@@ -19,11 +19,11 @@
   <div class="table-scroll">
   <table class="oc-table">
     <thead>
-      <tr><th>account</th><th style="width:1%">access</th><th style="width:1%"></th></tr>
+      <tr><th>account</th><th style="width:1%">access</th></tr>
     </thead>
     <tbody>
     {% for a in accounts %}
-      <tr>
+      <tr data-href="/accounts/{{ a.id }}" tabindex="0">
         <td>
           <span class="oc-mono">{{ a.email }}</span>
           {% if not a.enabled %}<span class="oc-badge oc-badge--subtle">login off</span>{% endif %}
@@ -39,7 +39,6 @@
             {% if not a.internet and not a.exits %}<span class="oc-badge oc-badge--danger">no access</span>{% endif %}
           </div>
         </td>
-        <td><a class="oc-btn oc-btn--outline oc-btn--sm" href="/accounts/{{ a.id }}">open</a></td>
       </tr>
     {% endfor %}
     </tbody>

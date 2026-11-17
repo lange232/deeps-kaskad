@@ -25,11 +25,11 @@
   <div class="table-scroll">
   <table class="oc-table">
     <thead>
-      <tr><th>name</th><th>mode</th><th>interface</th><th>address</th><th>state</th><th>ping</th><th></th></tr>
+      <tr><th>name</th><th>mode</th><th>interface</th><th>address</th><th>state</th><th>ping</th></tr>
     </thead>
     <tbody>
     {% for e in exits %}
-      <tr>
+      <tr data-href="/exits/{{ e.id }}" tabindex="0">
         <td><span class="name-cell">{{ e.name }}{% if e.comment %}<span class="oc-muted" style="margin-left:8px">{{ e.comment }}</span>{% endif %}{% if e.active %}<span class="oc-badge oc-badge--accent">active</span>{% endif %}
                 {% if e.pinned %}<span class="oc-badge oc-badge--warning">pinned</span>{% endif %}</span></td>
         <td>
@@ -56,7 +56,6 @@
           <div class="cell-sub" data-ping-parts>exit {{ e.rtt_ms }} ms</div>
           {% else %}—{% endif %}
         </td>
-        <td><a class="oc-btn oc-btn--outline oc-btn--sm" href="/exits/{{ e.id }}">open</a></td>
       </tr>
     {% endfor %}
     </tbody>

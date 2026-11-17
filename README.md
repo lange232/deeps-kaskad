@@ -28,11 +28,14 @@ account alice@example.com
 - an account can have several configurations; the default limit is 5 and is
   set on the settings page, while the administrator can override it per
   account;
-- access (internet and subnets) is granted to the **account** and applies to
-  every configuration;
-- the internet exit **order** is per configuration: a new configuration copies
-  the account order, the user can reorder it, and "apply to all" resets every
-  configuration to the account order;
+- access is granted to the **account**: it decides which internet exits and
+  which subnets may be used at all;
+- the configuration picks what it actually uses. The internet **order** is a
+  per-configuration copy of the account order: a new configuration copies it,
+  the user can reorder it, and "apply to all" resets every configuration to
+  the account order. The **subnets** are a checklist: the account grants a
+  set, each configuration switches on the ones that device needs (all of them
+  by default), and the generated `.conf` carries only those;
 - the server generates the keys and the address for every configuration, both
   when the administrator creates it and when the user does it in the cabinet;
 - accounts are created only by the administrator;
@@ -51,11 +54,13 @@ table name is kept for compatibility.
 | Class | What it gets | AllowedIPs | DNS |
 |---|---|---|---|
 | internet | full tunnel via the first alive granted exit | `0.0.0.0/0` | `1.1.1.1, 1.0.0.1` |
-| subnets | only the CIDRs granted to the account | union of subnets | DNS of its exit |
+| subnets | only the CIDRs the configuration switched on | union of subnets | DNS of its exit |
 | both | internet plus subnets | `0.0.0.0/0` | global |
 
 Access is granted per account in the panel: internet exits and routed exits
-are checkboxes on the account page. An account with neither has no access at
+are checkboxes on the account page. Which of the granted subnets a device
+actually uses is a per-configuration checklist on the configuration page (and
+in the cabinet), because a phone rarely needs the office LAN. An account with neither has no access at
 all. A configuration created before accounts existed keeps its old per-client
 grants until it is deleted and recreated under an account.
 

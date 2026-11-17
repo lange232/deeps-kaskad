@@ -16,8 +16,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "panel"))
 
 try:
     import app  # noqa: E402
+    import routing  # noqa: E402
 except ImportError:  # pragma: no cover - local python without fastapi
     app = None
+    routing = None
 
 
 def device_line(prefix: str, fields: int) -> str:
@@ -316,6 +318,31 @@ class RenderTests(unittest.TestCase):
             "address": "10.80.0.1", "net": "10.80.0.0/24", "port": 51820,
             "mtu": 1280, "params": {}, "awg_dir": self.tmp.name, "iface": "awg0",
         }
+
+    @unittest.skipUnless(app, "fastapi is not installed")
+    def test_desired_state_reads_the_database_while_it_is_open(self):
+        """The failover cycle died on a query made after the connection closed."""
+        c = self.config()
+        c["route_table"] = 100
+        with app.db() as conn:
+            conn.execute(
+                "INSERT INTO exits (name, iface, priority, enabled, conf, created_at,"
+                " mode, routes, dns, comment, nat) VALUES ('sub', 'awg2', 10, 1, 'x',"
+                " 'now', 'routes', '10.9.0.0/24', '', '', 1)")
+            conn.execute(
+                "INSERT INTO accounts (email, password_hash, enabled, token_version,"
+                " created_at) VALUES ('a@example.com', 'x', 1, 1, 'now')")
+            conn.execute(
+                "INSERT INTO clients (account_id, name, ip, public_key, private_key,"
+                " preshared_key, enabled, created_at, internet, table_num)"
+                " VALUES (1, 'c', '10.80.0.2', 'pub', 'priv', 'psk', 1, 'now', 1, 0)")
+            conn.execute("INSERT INTO account_exits VALUES (1, 1, 10)")
+            conn.execute("INSERT INTO client_exits VALUES (1, 1)")
+        with mock.patch.object(routing, "DB_PATH", app.DB_PATH), \
+             mock.patch.object(routing, "cfg", lambda: c):
+            rules, routes, tables, table, nat, net = routing.desired_state()
+        self.assertIsInstance(rules, set)
+        self.assertEqual(net, "10.80.0.0/24")
 
     @unittest.skipUnless(app, "fastapi is not installed")
     def test_renderer_does_not_filter_enabled(self):

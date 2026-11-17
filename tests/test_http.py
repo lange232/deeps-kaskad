@@ -757,6 +757,112 @@ class ConfigLimitTests(PanelTestCase):
         self.assertEqual(app.setting("default_max_configs"), "2")
 
 
+class RoutedChoiceTests(PanelTestCase):
+    """Subnets are granted to the account and chosen per configuration."""
+
+    def account_with_routed(self):
+        aid, cid = self.seed_client(internet=0)
+        routed = self.seed_exit("sub", "awg2", mode="routes",
+                                routes="192.168.50.0/24")
+        with app.db() as conn:
+            conn.execute(
+                "INSERT INTO account_exits (account_id, exit_id, priority) "
+                "VALUES (?, ?, 10)", (aid, routed))
+            conn.execute(
+                "INSERT INTO client_exits (client_id, exit_id) VALUES (?, ?)",
+                (cid, routed))
+        return aid, cid, routed
+
+    def chosen(self, cid):
+        with app.db() as conn:
+            return [r[0] for r in conn.execute(
+                "SELECT exit_id FROM client_exits WHERE client_id = ?", (cid,))]
+
+    def test_conf_follows_the_chosen_subnets(self):
+        aid, cid, routed = self.account_with_routed()
+        self.login_admin()
+        text = self.conf_text(cid)
+        self.assertIn("AllowedIPs = 192.168.50.0/24", text)
+        csrf = self.csrf(f"/configs/{cid}")
+        response = self.client.post(f"/configs/{cid}/routed",
+                                    data={"csrf_token": csrf})
+        self.assertEqual(response.status_code, 303)
+        self.assertEqual(self.chosen(cid), [])
+        # Nothing left to route: no config can be issued any more.
+        self.assertEqual(self.client.get(f"/configs/{cid}/conf").status_code, 400)
+
+    def conf_text(self, cid):
+        response = self.client.get(f"/configs/{cid}/conf")
+        self.assertEqual(response.status_code, 200)
+        return response.text
+
+    def test_a_foreign_subnet_is_ignored(self):
+        aid, cid, routed = self.account_with_routed()
+        stranger = self.seed_exit("other", "awg9", mode="routes",
+                                  routes="10.9.0.0/24")
+        self.login_admin()
+        csrf = self.csrf(f"/configs/{cid}")
+        self.client.post(f"/configs/{cid}/routed", data={
+            "exits": [routed, stranger], "csrf_token": csrf,
+        })
+        self.assertEqual(self.chosen(cid), [routed])
+
+    def test_a_new_config_starts_with_every_granted_subnet(self):
+        aid, cid, routed = self.account_with_routed()
+        self.login_admin()
+        csrf = self.csrf(f"/accounts/{aid}")
+        response = self.client.post(f"/accounts/{aid}/configs", data={
+            "name": "second", "csrf_token": csrf,
+        })
+        self.assertEqual(response.status_code, 303)
+        new_cid = int(response.headers["location"].split("/configs/")[1].split("?")[0])
+        self.assertEqual(self.chosen(new_cid), [routed])
+
+    def test_revoking_a_grant_drops_the_row(self):
+        aid, cid, routed = self.account_with_routed()
+        self.login_admin()
+        csrf = self.csrf(f"/accounts/{aid}")
+        self.client.post(f"/accounts/{aid}/exits", data={"csrf_token": csrf})
+        self.assertEqual(self.chosen(cid), [])
+        self.client.post(f"/accounts/{aid}/exits", data={
+            "exits": [routed], "csrf_token": csrf,
+        })
+        self.assertEqual(self.chosen(cid), [routed])
+
+    def test_the_user_can_choose_its_subnets(self):
+        aid, cid, routed = self.account_with_routed()
+        other = self.seed_exit("lab2", "awg3", mode="routes",
+                               routes="10.77.0.0/24")
+        with app.db() as conn:
+            conn.execute(
+                "INSERT INTO account_exits (account_id, exit_id, priority) "
+                "VALUES (?, ?, 20)", (aid, other))
+            conn.execute(
+                "INSERT INTO client_exits (client_id, exit_id) VALUES (?, ?)",
+                (cid, other))
+        self.login("c1@example.com", USER_PASSWORD)
+        csrf = self.csrf(f"/me/configs/{cid}")
+        response = self.client.post(f"/me/configs/{cid}/routed", data={
+            "exits": [routed], "csrf_token": csrf,
+        })
+        self.assertEqual(response.status_code, 303)
+        self.assertIn("ok=", response.headers["location"])
+        self.assertEqual(self.chosen(cid), [routed])
+
+    def test_the_default_is_written_once(self):
+        aid, cid, routed = self.account_with_routed()
+        with app.db() as conn:
+            conn.execute("DELETE FROM client_exits")
+            conn.execute("DELETE FROM settings WHERE key = 'routed_selection'")
+        app.init_db()
+        self.assertEqual(self.chosen(cid), [routed])
+        # A deliberate opt-out must survive the next start.
+        with app.db() as conn:
+            conn.execute("DELETE FROM client_exits")
+        app.init_db()
+        self.assertEqual(self.chosen(cid), [])
+
+
 class ConfigPingTests(PanelTestCase):
     def card(self, status):
         aid, cid = self.seed_client()
