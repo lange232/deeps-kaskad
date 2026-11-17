@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `/configs/{id}` offers "assign to account" for a configuration created
+  before accounts existed: the keys and the address stay, the account's
+  exits and their order replace the legacy per-client grants, so the device
+  keeps working without a new `.conf`.
 - Accounts: the email is now the primary entity. An account owns several
   WireGuard configurations, holds the access to exits and signs in at `/me`
   and in the mobile app. Accounts are created only by the administrator.

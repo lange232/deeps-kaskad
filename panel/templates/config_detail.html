@@ -27,7 +27,20 @@
 {% if not account %}
 <div class="oc-alert oc-alert--warning" style="margin-bottom:16px">
   <span class="oc-dot" style="margin-top:7px"></span>
-  <div class="oc-alert__body">created before accounts existed; no owner</div>
+  <div class="oc-alert__body">
+    no account — created before accounts existed
+    {% if accounts %}
+    <form method="post" action="/configs/{{ config.id }}/account"
+          class="actions" style="margin-top:10px">
+      <input type="hidden" name="csrf_token" value="{{ csrf }}">
+      <select class="oc-input oc-input--sm" name="account_id"
+              aria-label="account" style="flex:1; max-width:280px">
+        {% for a in accounts %}<option value="{{ a.id }}">{{ a.email }}</option>{% endfor %}
+      </select>
+      <button class="oc-btn oc-btn--contrast oc-btn--sm">assign</button>
+    </form>
+    {% endif %}
+  </div>
 </div>
 {% endif %}
 
