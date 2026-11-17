@@ -5,6 +5,16 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.4] - 2026-11-18
+
+### Fixed
+
+- `panel/routing.py` did not add the routed rule for the subnets a
+  configuration chose: `client_exits` was read but never joined into
+  `routed_links`, so the subnet was configured and its table routed, but
+  traffic was never steered into it. Legacy per-client rows were unaffected,
+  which hid the bug on the only host that had them.
+
 ## [0.4.3] - 2026-11-18
 
 ### Added
