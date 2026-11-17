@@ -378,8 +378,15 @@ GET  /api/me/exits?config_id=N    granted internet exits in this configuration's
                                     an empty list means the account has no grants
 POST /api/me/exits/order          exit_id (repeated) + config_id -> sets the order;
                                     the list must contain every granted exit exactly once
+GET  /api/me/subnets?config_id=N  subnets the account grants, with the choice of this
+                                    configuration (id, name, comment, routes, enabled)
+POST /api/me/subnets              subnet_id (repeated) + config_id -> switches subnets on;
+                                    any subset of the grants, an empty list turns all off
 POST /api/logout                  revokes the token
 ```
+
+Changing the subnets changes `AllowedIPs` and `DNS` of the generated `.conf`,
+so the device has to import the file again; the keys stay the same.
 
 `client` is a compatibility field: the account's first configuration (`null`
 while the account has none), for app versions that predate the account model.
