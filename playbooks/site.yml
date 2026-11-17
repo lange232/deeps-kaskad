@@ -18,6 +18,62 @@
       changed_when: false
       when: kaskad_legacy_clients.stat.exists
 
+- name: Deployment guard
+  hosts: all
+  gather_facts: false
+  tags: always
+  vars:
+    kaskad_repo: "{{ playbook_dir | dirname }}"
+  tasks:
+    # Production is deployed from a release, not from whatever happens to be
+    # in the working tree: a half-merged branch once reached the live host.
+    # The flag lives in the (gitignored) production inventory.
+    - name: Production is deployed from a tagged main
+      when: kaskad_production | default(false) | bool
+      block:
+        - name: Repository state
+          ansible.builtin.command:
+            cmd: git -C {{ kaskad_repo }} status --porcelain
+          register: kaskad_git_status
+          changed_when: false
+          check_mode: false
+          delegate_to: localhost
+          run_once: true
+
+        - name: Current branch
+          ansible.builtin.command:
+            cmd: git -C {{ kaskad_repo }} rev-parse --abbrev-ref HEAD
+          register: kaskad_git_branch
+          changed_when: false
+          check_mode: false
+          delegate_to: localhost
+          run_once: true
+
+        - name: Current release tag
+          ansible.builtin.command:
+            cmd: git -C {{ kaskad_repo }} describe --exact-match --tags HEAD
+          register: kaskad_git_tag
+          changed_when: false
+          check_mode: false
+          delegate_to: localhost
+          run_once: true
+          failed_when: false
+
+        - name: Refuse anything but a clean, tagged main
+          ansible.builtin.assert:
+            that:
+              - kaskad_git_status.stdout | trim == ""
+              - kaskad_git_branch.stdout | trim == "main"
+              - kaskad_git_tag.rc == 0
+            fail_msg: >-
+              production runs from a clean main with a release tag; now
+              branch={{ kaskad_git_branch.stdout | trim }},
+              tag={{ kaskad_git_tag.stdout | trim or 'none' }},
+              dirty={{ 'yes' if kaskad_git_status.stdout | trim else 'no' }}
+            success_msg: >-
+              deploying {{ kaskad_git_tag.stdout | trim }} from main
+            quiet: true
+
 - name: Base layer
   hosts: all
   become: true

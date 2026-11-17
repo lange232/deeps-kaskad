@@ -5,6 +5,17 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.3] - 2026-11-18
+
+### Added
+
+- Mobile API: `GET /api/me/subnets?config_id=N` lists the subnets the account
+  grants with this configuration's choice, and `POST /api/me/subnets` switches
+  them on (`subnet_id` repeated, any subset of the grants, empty means none).
+- `playbooks/site.yml` refuses to deploy a production inventory
+  (`kaskad_production: true`) from a dirty tree, a branch other than `main`
+  or a commit without a release tag. Stands are not affected.
+
 ## [0.4.2] - 2026-11-18
 
 ### Fixed

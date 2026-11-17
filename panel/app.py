@@ -3266,6 +3266,65 @@ def api_exits_order(
     return {"ok": True}
 
 
+@app.get("/api/me/subnets")
+def api_subnets(request: Request, config_id: int | None = None):
+    """Subnet exits the account allows, with the choice of this configuration.
+
+    A configuration uses only the subnets switched on here: they end up in the
+    AllowedIPs of its .conf, and routing installs a rule for each of them.
+    """
+    _, account = api_user(request)
+    cl = api_config(account, config_id)
+    chosen = {e["id"] for e in config_routed_exits(cl)}
+    return [
+        {
+            "id": e["id"],
+            "name": e["name"],
+            "comment": e["comment"],
+            "routes": e["routes"],
+            "enabled": e["id"] in chosen,
+        }
+        for e in config_routed_choices(account)
+    ]
+
+
+@app.post("/api/me/subnets")
+def api_subnets_update(
+    request: Request,
+    subnet_id: list[int] = Form([]),
+    config_id: int = Form(0),
+):
+    """Switches subnets on for one configuration.
+
+    A subset of the account's grants is enough (unlike the exit order, a
+    subnet is simply on or off); an empty list turns all of them off.
+    """
+    _, account = api_user(request)
+    cl = api_config(account, config_id)
+    with db() as conn:
+        allowed = set(routed_grants(conn, int(account["id"])))
+        wanted = {int(s) for s in subnet_id}
+        if not wanted <= allowed:
+            raise HTTPException(
+                status_code=400,
+                detail="the account does not grant all of these subnets",
+            )
+        write_routed_choice(conn, cl, wanted)
+    audit(
+        "user_subnets",
+        f"{account['email']} {cl['name']} {' '.join(str(s) for s in sorted(wanted))} via=api",
+    )
+    apply_routing()
+    chosen = {e["id"] for e in config_routed_exits(cl)}
+    return {
+        "ok": True,
+        "subnets": [
+            {"id": e["id"], "name": e["name"], "enabled": e["id"] in chosen}
+            for e in config_routed_choices(account)
+        ],
+    }
+
+
 # ---------------------------------------------------------------- journal
 
 @app.get("/journal", response_class=HTMLResponse)

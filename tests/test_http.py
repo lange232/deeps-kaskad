@@ -863,6 +863,71 @@ class RoutedChoiceTests(PanelTestCase):
         self.assertEqual(self.chosen(cid), [])
 
 
+class SubnetApiTests(PanelTestCase):
+    def api_login(self, email="c1@example.com"):
+        response = self.client.post("/api/login", data={
+            "email": email, "password": USER_PASSWORD,
+        })
+        self.assertEqual(response.status_code, 200, response.text)
+        return {"Authorization": "Bearer " + response.json()["token"]}
+
+    def account_with_subnets(self):
+        aid, cid = self.seed_client(internet=0)
+        first = self.seed_exit("sub1", "awg2", mode="routes", routes="192.168.50.0/24")
+        second = self.seed_exit("sub2", "awg3", mode="routes", routes="10.77.0.0/24")
+        with app.db() as conn:
+            conn.execute("INSERT INTO account_exits VALUES (?, ?, 10)", (aid, first))
+            conn.execute("INSERT INTO account_exits VALUES (?, ?, 20)", (aid, second))
+            conn.execute("INSERT INTO client_exits VALUES (?, ?)", (cid, first))
+        return aid, cid, first, second
+
+    def test_list_shows_the_choice(self):
+        aid, cid, first, second = self.account_with_subnets()
+        headers = self.api_login()
+        response = self.client.get(f"/api/me/subnets?config_id={cid}", headers=headers)
+        self.assertEqual(response.status_code, 200, response.text)
+        body = {row["id"]: row["enabled"] for row in response.json()}
+        self.assertEqual(body, {first: True, second: False})
+        self.assertEqual(response.json()[0]["routes"], "192.168.50.0/24")
+
+    def test_switch_on_and_off(self):
+        aid, cid, first, second = self.account_with_subnets()
+        headers = self.api_login()
+        response = self.client.post("/api/me/subnets", data={
+            "config_id": str(cid), "subnet_id": [str(first), str(second)],
+        }, headers=headers)
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual({r["id"]: r["enabled"] for r in response.json()["subnets"]},
+                         {first: True, second: True})
+        response = self.client.post("/api/me/subnets", data={
+            "config_id": str(cid),
+        }, headers=headers)
+        self.assertEqual(response.status_code, 200)
+        with app.db() as conn:
+            self.assertEqual(conn.execute(
+                "SELECT count(*) FROM client_exits WHERE client_id = ?",
+                (cid,)).fetchone()[0], 0)
+
+    def test_a_subnet_the_account_does_not_grant_is_rejected(self):
+        aid, cid, first, second = self.account_with_subnets()
+        stranger = self.seed_exit("other", "awg9", mode="routes", routes="10.9.0.0/24")
+        headers = self.api_login()
+        response = self.client.post("/api/me/subnets", data={
+            "config_id": str(cid), "subnet_id": [str(stranger)],
+        }, headers=headers)
+        self.assertEqual(response.status_code, 400)
+        with app.db() as conn:
+            self.assertEqual([r[0] for r in conn.execute(
+                "SELECT exit_id FROM client_exits WHERE client_id = ?", (cid,))], [first])
+
+    def test_another_accounts_config_is_404(self):
+        self.seed_client("mine", "10.80.0.2", "mine@example.com")
+        _, other = self.seed_client("other", "10.80.0.3", "other@example.com")
+        headers = self.api_login("mine@example.com")
+        response = self.client.get(f"/api/me/subnets?config_id={other}", headers=headers)
+        self.assertEqual(response.status_code, 404)
+
+
 class ConfigPingTests(PanelTestCase):
     def card(self, status):
         aid, cid = self.seed_client()
