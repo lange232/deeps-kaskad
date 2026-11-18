@@ -51,6 +51,7 @@
       <div><div class="k">received</div><div class="v oc-num"><span data-live="rx|{{ config.ip }}">{{ (config.rx / 1048576) | round(1) }}</span> MiB</div></div>
       <div><div class="k">sent</div><div class="v oc-num"><span data-live="tx|{{ config.ip }}">{{ (config.tx / 1048576) | round(1) }}</span> MiB</div></div>
       <div><div class="k">address</div><div class="v oc-mono">{{ config.ip }}</div></div>
+      {% if config.device_id %}<div><div class="k">device id</div><div class="v oc-mono">{{ config.device_id }}</div></div>{% endif %}
     </div>
   </div>
 
@@ -133,6 +134,14 @@
   <section>
     <h2 class="oc-section__title">configuration</h2>
     <div class="oc-panel" style="padding:16px">
+      <form method="post" action="/configs/{{ config.id }}/name"
+            class="actions" style="margin-bottom:14px">
+        <input type="hidden" name="csrf_token" value="{{ csrf }}">
+        <input class="oc-input oc-input--sm" type="text" name="name"
+               value="{{ config.name }}" maxlength="32" spellcheck="false"
+               aria-label="name" style="max-width:220px">
+        <button class="oc-btn oc-btn--outline oc-btn--sm">rename</button>
+      </form>
       <div class="actions">
         <a class="oc-btn oc-btn--outline oc-btn--sm" href="/configs/{{ config.id }}/conf">download .conf</a>
         <form method="post" action="/configs/{{ config.id }}/reissue"

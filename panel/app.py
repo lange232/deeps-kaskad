@@ -56,6 +56,8 @@ ANDROID_APK = Path(os.environ.get("KASKAD_ANDROID_APK", "/var/lib/kaskad/app.apk
 COOKIE = "kaskad_session"
 SESSION_TTL = auth.SESSION_TTL
 NAME_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,31}$")
+# The app's device identifier: an Android id or a uuid, never shown as a name.
+DEVICE_ID_RE = re.compile(r"^[A-Za-z0-9-]{8,64}$")
 # Configurations per account unless the administrator sets a personal value.
 DEFAULT_MAX_CONFIGS = 5
 
@@ -117,6 +119,7 @@ def init_db() -> None:
                 id INTEGER PRIMARY KEY,
                 account_id INTEGER,
                 name TEXT UNIQUE NOT NULL,
+                device_id TEXT,
                 ip TEXT UNIQUE NOT NULL,
                 public_key TEXT NOT NULL,
                 private_key TEXT NOT NULL,
@@ -220,6 +223,14 @@ def migrate(conn: sqlite3.Connection, existing: set[str]) -> None:
     # administrator re-creates the accounts and their configurations by hand.
     if "account_id" not in cols:
         conn.execute("ALTER TABLE clients ADD COLUMN account_id INTEGER")
+    # The device identifier the app sends on login: kept apart from the name,
+    # which is meant for people. One account cannot hold the same device twice.
+    if "device_id" not in cols:
+        conn.execute("ALTER TABLE clients ADD COLUMN device_id TEXT")
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS clients_device ON clients "
+        "(account_id, device_id) WHERE device_id IS NOT NULL"
+    )
     # First start on an old database: accounts replace users and account ids
     # can collide with old users ids, so a session from before the upgrade
     # must not sign in as a freshly created account.
@@ -953,6 +964,26 @@ def account_configs(aid: int):
         ).fetchall()
 
 
+def config_by_device(aid: int, device_id: str):
+    """The configuration this account already has for the device, if any."""
+    with db() as conn:
+        return conn.execute(
+            "SELECT * FROM clients WHERE account_id = ? AND device_id = ?",
+            (aid, device_id),
+        ).fetchone()
+
+
+def created_config_view(cl) -> dict:
+    return {
+        "id": cl["id"],
+        "name": cl["name"],
+        "device_id": (cl["device_id"] if "device_id" in cl.keys() else "") or "",
+        "ip": cl["ip"],
+        "internet": config_has_internet(cl),
+        "enabled": bool(cl["enabled"]),
+    }
+
+
 def max_configs_for(account) -> int:
     """The per-account override, or the server default from settings."""
     value = account["max_configs"]
@@ -1265,6 +1296,7 @@ def config_view(cl, live: dict, assigned=None) -> dict:
         "id": cl["id"],
         "account_id": cl["account_id"],
         "name": cl["name"],
+        "device_id": (cl["device_id"] if "device_id" in cl.keys() else "") or "",
         "ip": cl["ip"],
         "enabled": bool(cl["enabled"]),
         "internet": config_has_internet(cl),
@@ -1789,7 +1821,9 @@ def config_limit_error(account) -> str:
     return ""
 
 
-def spawn_config(conn, account, name: str = "") -> int:
+def spawn_config(
+    conn, account, name: str = "", device_id: str = "", uniquify: bool = False
+) -> int:
     """Creates one configuration with server-generated keys in this transaction.
 
     The caller commits: the peer must exist in awg0.conf by the time the row
@@ -1799,6 +1833,11 @@ def spawn_config(conn, account, name: str = "") -> int:
     rows = conn.execute("SELECT ip, name FROM clients").fetchall()
     taken_ips = {r["ip"] for r in rows}
     taken_names = {r["name"] for r in rows}
+    device_id = device_id.strip()
+    if device_id and not DEVICE_ID_RE.match(device_id):
+        raise ValueError(
+            "device_id: latin letters, digits, dash; 8 to 64 characters"
+        )
     name = name.strip()
     if name:
         if not NAME_RE.match(name):
@@ -1806,7 +1845,18 @@ def spawn_config(conn, account, name: str = "") -> int:
                 "name: latin letters, digits, dot, dash; up to 32 characters"
             )
         if name in taken_names:
-            raise ValueError("a configuration with this name already exists")
+            if not uniquify:
+                raise ValueError("a configuration with this name already exists")
+            # Two phones of one model would otherwise fight over the name the
+            # app sends; the response carries the name that was actually used.
+            base, n = name, 2
+            while True:
+                suffix = f"-{n}"
+                candidate = base[: 32 - len(suffix)] + suffix
+                if candidate not in taken_names:
+                    break
+                n += 1
+            name = candidate
     else:
         local = re.sub(r"[^a-z0-9]+", "-", account["email"].split("@")[0].lower())
         local = local.strip("-") or "config"
@@ -1817,10 +1867,11 @@ def spawn_config(conn, account, name: str = "") -> int:
     ip = ip_free(c["net"], taken_ips)
     private = genkey()
     cur = conn.execute(
-        "INSERT INTO clients (account_id, name, ip, public_key, private_key, "
-        "preshared_key, enabled, created_at, internet, table_num) "
-        "VALUES (?, ?, ?, ?, ?, ?, 1, ?, 1, 0)",
-        (account["id"], name, ip, pubkey(private), private, genpsk(), _now_iso()),
+        "INSERT INTO clients (account_id, name, device_id, ip, public_key, "
+        "private_key, preshared_key, enabled, created_at, internet, table_num) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, 1, 0)",
+        (account["id"], name, device_id or None, ip, pubkey(private), private,
+         genpsk(), _now_iso()),
     )
     cid = cur.lastrowid
     conn.execute(
@@ -1990,6 +2041,35 @@ def create_config(
     audit("config_added", f"{account['email']} {name or cid}")
     apply_routing()
     return RedirectResponse(f"/configs/{cid}?ok=configuration+created", status_code=303)
+
+
+@app.post("/configs/{cid}/name")
+def config_rename(
+    request: Request, cid: int, name: str = Form(""),
+    csrf_token: str = Form(...),
+):
+    token = require_admin(request)
+    if not hmac.compare_digest(csrf_token, csrf(token)):
+        raise HTTPException(status_code=400, detail="csrf")
+    cl = config_row(cid)
+    if not cl:
+        raise HTTPException(status_code=404)
+    name = name.strip()
+    if not NAME_RE.match(name):
+        problem = "name: latin letters, digits, dot, dash; up to 32 characters"
+        return RedirectResponse(f"/configs/{cid}?err=" + quote(problem), status_code=303)
+    with db() as conn:
+        taken = conn.execute(
+            "SELECT id FROM clients WHERE name = ? AND id != ?", (name, cid)
+        ).fetchone()
+        if taken:
+            problem = "a configuration with this name already exists"
+            return RedirectResponse(
+                f"/configs/{cid}?err=" + quote(problem), status_code=303
+            )
+        conn.execute("UPDATE clients SET name = ? WHERE id = ?", (name, cid))
+    audit("config_renamed", f"{cl['name']} -> {name}")
+    return RedirectResponse(f"/configs/{cid}?ok=name+updated", status_code=303)
 
 
 @app.get("/configs/{cid}", response_class=HTMLResponse)
@@ -2755,6 +2835,37 @@ def me_create_config(
     )
 
 
+@app.post("/me/configs/{cid}/name")
+def me_config_rename(
+    request: Request, cid: int, name: str = Form(""),
+    csrf_token: str = Form(...),
+):
+    token, account = require_user(request)
+    if not hmac.compare_digest(csrf_token, csrf(token)):
+        raise HTTPException(status_code=400, detail="csrf")
+    cl = user_config(account, cid)
+    name = name.strip()
+    if not NAME_RE.match(name):
+        problem = "name: latin letters, digits, dot, dash; up to 32 characters"
+        return RedirectResponse(
+            f"/me/configs/{cid}?err=" + quote(problem), status_code=303
+        )
+    with db() as conn:
+        taken = conn.execute(
+            "SELECT id FROM clients WHERE name = ? AND id != ?", (name, cid)
+        ).fetchone()
+        if taken:
+            problem = "a configuration with this name already exists"
+            return RedirectResponse(
+                f"/me/configs/{cid}?err=" + quote(problem), status_code=303
+            )
+        conn.execute("UPDATE clients SET name = ? WHERE id = ?", (name, cid))
+    audit("user_config_renamed", f"{account['email']} {cl['name']} -> {name}")
+    return RedirectResponse(
+        f"/me/configs/{cid}?ok=name+updated", status_code=303
+    )
+
+
 @app.get("/me/configs/{cid}", response_class=HTMLResponse)
 def me_config_page(
     request: Request,
@@ -3142,29 +3253,54 @@ def api_me(request: Request):
 
 
 @app.post("/api/me/configs")
-def api_create_config(request: Request, name: str = Form("")):
+def api_create_config(
+    request: Request, name: str = Form(""), device_id: str = Form("")
+):
+    """Creates a configuration, or returns the one this device already has.
+
+    The app sends the device identifier on every first connect, so a reinstall
+    must not leave the account with a second configuration of the same phone.
+    """
     _, account = api_user(request)
+    device_id = device_id.strip()
+    if device_id:
+        if not DEVICE_ID_RE.match(device_id):
+            raise HTTPException(
+                status_code=400,
+                detail="device_id: latin letters, digits, dash; 8 to 64 characters",
+            )
+        known = config_by_device(int(account["id"]), device_id)
+        if known:
+            audit("user_config_reused", f"{account['email']} {known['name']} via=api")
+            return {
+                "config": created_config_view(known),
+                "configs": api_configs(account),
+            }
     problem = config_limit_error(account)
     if problem:
         raise HTTPException(status_code=409, detail=problem)
     try:
         with db() as conn:
-            cid = spawn_config(conn, account, name)
+            cid = spawn_config(conn, account, name, device_id, uniquify=True)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+    except sqlite3.IntegrityError:
+        # Two first connects of one device raced: the unique index kept one
+        # row, and the loser answers with it instead of an error.
+        known = config_by_device(int(account["id"]), device_id) if device_id else None
+        if not known:
+            raise HTTPException(status_code=409, detail="configuration already exists")
+        audit("user_config_reused", f"{account['email']} {known['name']} via=api")
+        return {
+            "config": created_config_view(known),
+            "configs": api_configs(account),
+        }
     except RuntimeError as exc:
         raise HTTPException(status_code=500, detail=apply_error_message(exc, "not saved"))
     audit("user_config_added", f"{account['email']} {name or cid} via=api")
     apply_routing()
-    cl = config_row(cid)
     return {
-        "config": {
-            "id": cid,
-            "name": cl["name"],
-            "ip": cl["ip"],
-            "internet": config_has_internet(cl),
-            "enabled": True,
-        },
+        "config": created_config_view(config_row(cid)),
         "configs": api_configs(account),
     }
 

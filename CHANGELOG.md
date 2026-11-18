@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Configurations have a `device_id` apart from the name. The mobile app sends
+  the device identifier when it creates the configuration and gets the
+  existing one back when the same account connects with the same device, so a
+  reinstall no longer leaves a duplicate. Two devices of one model get
+  `pixel-8` and `pixel-8-2` instead of a name collision. The panel shows the
+  identifier in the configuration card.
+- A configuration can be renamed: `POST /configs/{id}/name` in the panel and
+  `POST /me/configs/{id}/name` in the cabinet, with the same name rules. This
+  fixes the old glued names like `sm-s921b-ba9bcded` by hand.
+
 ### Changed
 
 - The latency in the exit list of a configuration is two lines again: the

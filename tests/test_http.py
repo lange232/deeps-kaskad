@@ -1210,6 +1210,169 @@ class UserPageTests(PanelTestCase):
                 "SELECT token_version FROM accounts").fetchone()[0], 1)
 
 
+class DeviceIdTests(PanelTestCase):
+    def api_login(self, email="c1@example.com", password=USER_PASSWORD):
+        response = self.client.post("/api/login", data={
+            "email": email, "password": password,
+        })
+        self.assertEqual(response.status_code, 200, response.text)
+        return {"Authorization": "Bearer " + response.json()["token"]}, response.json()
+
+    def create(self, headers, **data):
+        return self.client.post("/api/me/configs", data=data, headers=headers)
+
+    def test_device_is_stored_and_listed(self):
+        self.seed_client(max_configs=5)
+        headers, _ = self.api_login()
+        response = self.create(headers, name="pixel", device_id="a1b2c3d4e5f6")
+        self.assertEqual(response.status_code, 200, response.text)
+        config = response.json()["config"]
+        self.assertEqual(config["name"], "pixel")
+        self.assertEqual(config["device_id"], "a1b2c3d4e5f6")
+        # A fresh login must tell the app which configuration is its own.
+        _, payload = self.api_login()
+        self.assertEqual(payload["configs"][1]["device_id"], "a1b2c3d4e5f6")
+
+    def test_same_device_does_not_create_a_second_config(self):
+        self.seed_client(max_configs=5)
+        headers, _ = self.api_login()
+        first = self.create(headers, name="pixel", device_id="device-aaaa1111")
+        again = self.create(headers, name="other", device_id="device-aaaa1111")
+        self.assertEqual(again.status_code, 200, again.text)
+        self.assertEqual(again.json()["config"]["id"], first.json()["config"]["id"])
+        self.assertEqual(self.client_count(), 2)  # the seeded one plus this one
+
+    def test_known_device_is_returned_when_the_limit_is_reached(self):
+        self.seed_client(max_configs=2)
+        headers, _ = self.api_login()
+        first = self.create(headers, name="pixel", device_id="device-limit-0001")
+        self.assertEqual(first.status_code, 200, first.text)
+        blocked = self.create(headers, name="third")
+        self.assertEqual(blocked.status_code, 409)
+        again = self.create(headers, device_id="device-limit-0001")
+        self.assertEqual(again.status_code, 200, again.text)
+        self.assertEqual(again.json()["config"]["id"], first.json()["config"]["id"])
+
+    def test_two_devices_with_one_model_get_distinct_names(self):
+        self.seed_client(max_configs=5)
+        headers, _ = self.api_login()
+        first = self.create(headers, name="pixel-8", device_id="device-model-0001")
+        second = self.create(headers, name="pixel-8", device_id="device-model-0002")
+        self.assertEqual(first.status_code, 200, first.text)
+        self.assertEqual(second.status_code, 200, second.text)
+        self.assertEqual(second.json()["config"]["name"], "pixel-8-2")
+
+    def test_bad_device_id_is_rejected(self):
+        self.seed_client(max_configs=5)
+        headers, _ = self.api_login()
+        for value in ("short", "x" * 65, "has space here"):
+            response = self.create(headers, device_id=value)
+            self.assertEqual(response.status_code, 400, value)
+
+    def test_the_same_device_id_belongs_to_each_account(self):
+        self.seed_client(max_configs=2)
+        self.seed_client(name="c2", ip="10.80.0.9", email="c2@example.com")
+        first, _ = self.api_login()
+        mine = self.create(first, name="pixel", device_id="shared-device-1")
+        self.assertEqual(mine.status_code, 200, mine.text)
+        second, _ = self.api_login("c2@example.com")
+        other = self.create(second, name="pixel2", device_id="shared-device-1")
+        self.assertEqual(other.status_code, 200, other.text)
+        self.assertNotEqual(other.json()["config"]["id"], mine.json()["config"]["id"])
+
+
+class DeviceMigrationTests(PanelTestCase):
+    def test_old_database_gains_the_device_column(self):
+        with app.db() as conn:
+            conn.execute("DROP TABLE clients")
+            conn.execute(
+                "CREATE TABLE clients (id INTEGER PRIMARY KEY, account_id INTEGER, "
+                "name TEXT UNIQUE NOT NULL, ip TEXT UNIQUE NOT NULL, "
+                "public_key TEXT NOT NULL, private_key TEXT NOT NULL, "
+                "preshared_key TEXT NOT NULL, enabled INTEGER NOT NULL DEFAULT 1, "
+                "created_at TEXT NOT NULL, internet INTEGER NOT NULL DEFAULT 1, "
+                "table_num INTEGER NOT NULL DEFAULT 0)"
+            )
+        app.init_db()
+        with app.db() as conn:
+            cols = {r[1] for r in conn.execute("PRAGMA table_info(clients)")}
+            self.assertIn("device_id", cols)
+            index = conn.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'index' "
+                "AND name = 'clients_device'"
+            ).fetchone()
+            self.assertIsNotNone(index)
+
+
+class RenameTests(PanelTestCase):
+    def second_config(self, aid, name="taken", ip="10.80.0.9"):
+        with app.db() as conn:
+            table = app.routing.allocate_table(conn)
+            cur = conn.execute(
+                "INSERT INTO clients (account_id, name, ip, public_key, "
+                "private_key, preshared_key, enabled, created_at, internet, "
+                "table_num) VALUES (?, ?, ?, 'pubkey2', 'privkey2', 'psk2', 1, "
+                "'now', 1, ?)", (aid, name, ip, table),
+            )
+            return cur.lastrowid
+
+    def test_admin_renames_a_configuration(self):
+        aid, cid = self.seed_client()
+        self.login_admin()
+        csrf = self.csrf(f"/configs/{cid}")
+        response = self.client.post(f"/configs/{cid}/name", data={
+            "name": "pixel-8", "csrf_token": csrf,
+        })
+        self.assertEqual(response.status_code, 303)
+        self.assertEqual(app.config_row(cid)["name"], "pixel-8")
+
+    def test_admin_cannot_take_a_name_of_another_configuration(self):
+        aid, cid = self.seed_client()
+        other = self.second_config(aid)
+        self.login_admin()
+        csrf = self.csrf(f"/configs/{cid}")
+        response = self.client.post(f"/configs/{cid}/name", data={
+            "name": "taken", "csrf_token": csrf,
+        })
+        self.assertEqual(response.status_code, 303)
+        self.assertIn("err=", response.headers["location"])
+        self.assertEqual(app.config_row(cid)["name"], "c1")
+        self.assertEqual(app.config_row(other)["name"], "taken")
+
+    def test_bad_name_is_rejected(self):
+        aid, cid = self.seed_client()
+        self.login_admin()
+        csrf = self.csrf(f"/configs/{cid}")
+        response = self.client.post(f"/configs/{cid}/name", data={
+            "name": "with space", "csrf_token": csrf,
+        })
+        self.assertEqual(response.status_code, 303)
+        self.assertIn("err=", response.headers["location"])
+        self.assertEqual(app.config_row(cid)["name"], "c1")
+
+    def test_user_renames_own_configuration(self):
+        aid, cid = self.seed_client()
+        self.login("c1@example.com", USER_PASSWORD)
+        csrf = self.csrf(f"/me/configs/{cid}")
+        response = self.client.post(f"/me/configs/{cid}/name", data={
+            "name": "my-phone", "csrf_token": csrf,
+        })
+        self.assertEqual(response.status_code, 303)
+        self.assertEqual(app.config_row(cid)["name"], "my-phone")
+
+    def test_user_cannot_rename_a_foreign_configuration(self):
+        aid, cid = self.seed_client()
+        aid2, cid2 = self.seed_client(name="c2", ip="10.80.0.9",
+                                      email="c2@example.com")
+        self.login("c1@example.com", USER_PASSWORD)
+        csrf = self.csrf(f"/me/configs/{cid}")
+        response = self.client.post(f"/me/configs/{cid2}/name", data={
+            "name": "stolen", "csrf_token": csrf,
+        })
+        self.assertEqual(response.status_code, 404)
+        self.assertEqual(app.config_row(cid2)["name"], "c2")
+
+
 class MobileApiTests(PanelTestCase):
     def api_login(self, email="c1@example.com", password=USER_PASSWORD):
         response = self.client.post("/api/login", data={

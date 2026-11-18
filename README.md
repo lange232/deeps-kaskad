@@ -372,7 +372,9 @@ logging as the web login (`via=api` in the journal line).
 ```
 POST /api/login                   email, password -> {token, expires_at, email, client, configs}
 GET  /api/me                      -> account and its configurations
-POST /api/me/configs              name (optional) -> creates a configuration
+POST /api/me/configs              name, device_id (optional) -> creates a configuration;
+                                    the same device_id on the same account returns the
+                                    existing configuration instead of a second one
 GET  /api/me/conf?config_id=N     the awg0 config of that configuration (first by default)
 GET  /api/me/configs/{id}/conf    the same, addressed by configuration
 POST /api/me/configs/{id}/toggle  enable or disable one configuration
@@ -395,6 +397,14 @@ so the device has to import the file again; the keys stay the same.
 `client` is a compatibility field: the account's first configuration (`null`
 while the account has none), for app versions that predate the account model.
 New code should use `configs`.
+
+Each configuration carries `device_id`, the identifier the app sends on its
+first connect (`[A-Za-z0-9-]`, 8 to 64 characters). The name stays human: the
+app sends the device model there, and the panel can rename a configuration
+(`/configs/{id}` and `/me/configs/{id}`), so the two never have to be glued
+into one ugly string. `device_id` is unique per account. If the name the app
+sends is already taken, creation through the API appends `-2`, `-3`; the
+response carries the name that was actually used.
 
 API tokens live 30 days, are stored server-side like web sessions, and die
 with a password change or "sign out everywhere".

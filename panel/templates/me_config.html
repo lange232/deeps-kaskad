@@ -27,6 +27,7 @@
       <div><div class="k">received</div><div class="v oc-num"><span data-live="rx|{{ cl.ip }}">{{ (cl.rx / 1048576) | round(1) }}</span> MiB</div></div>
       <div><div class="k">sent</div><div class="v oc-num"><span data-live="tx|{{ cl.ip }}">{{ (cl.tx / 1048576) | round(1) }}</span> MiB</div></div>
       <div><div class="k">address</div><div class="v oc-mono">{{ cl.ip }}</div></div>
+      {% if cl.device_id %}<div><div class="k">device id</div><div class="v oc-mono">{{ cl.device_id }}</div></div>{% endif %}
     </div>
   </div>
 
@@ -118,6 +119,14 @@
   <section>
     <h2 class="oc-section__title">configuration</h2>
     <div class="oc-panel" style="padding:16px">
+      <form method="post" action="/me/configs/{{ cl.id }}/name"
+            class="actions" style="margin-bottom:14px">
+        <input type="hidden" name="csrf_token" value="{{ csrf }}">
+        <input class="oc-input oc-input--sm" type="text" name="name"
+               value="{{ cl.name }}" maxlength="32" spellcheck="false"
+               aria-label="name" style="max-width:220px">
+        <button class="oc-btn oc-btn--outline oc-btn--sm">rename</button>
+      </form>
       {% if conf %}
       <div class="actions">
         <a class="oc-btn oc-btn--outline oc-btn--sm" href="/me/configs/{{ cl.id }}/conf">download .conf</a>
