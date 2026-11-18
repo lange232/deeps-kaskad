@@ -176,6 +176,8 @@
   ansible.builtin.stat:
     path: "{{ kaskad_repo_dir }}/state/seed.json"
   delegate_to: localhost
+  # A local lookup must not ask for root: sudo is not always available here.
+  become: false
   run_once: true
   register: kaskad_seed_stat
 
