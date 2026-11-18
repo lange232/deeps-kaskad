@@ -48,7 +48,7 @@
           <div class="cell-sub" data-live="lastok|{{ e.iface }}"></div>
         </td>
         <td class="oc-mono oc-muted">
-          <span data-live="ping|{{ e.iface }}">—</span>
+          <span class="ping-cell" data-live="ping|{{ e.iface }}">{% if e.alive and e.rtt_ms %}{{ e.rtt_ms }} ms{% else %}—{% endif %}</span>
         </td>
       </tr>
     {% endfor %}

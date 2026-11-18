@@ -11,7 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - The latency in the exit list of a configuration is two lines again: the
   total in normal text, the split ("client 212 + exit 50 ms") faint under it,
-  instead of one grey line with a separator.
+  instead of one grey line with a separator. Both lines keep their height and
+  the single-value cells keep their width while the ticker fills them, so rows
+  no longer change size when the numbers arrive; the configuration page also
+  measures the device round-trip, so the split appears there too.
 - Pages no longer reload themselves. A small ticker asks `/status.json` every
   20 seconds and rewrites only handshakes, traffic, exit state and latency, so
   scroll position, focus and an open `<details>` (QR, config) stay as they

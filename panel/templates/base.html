@@ -65,6 +65,10 @@
   /* The latency is two lines: the total, then how it splits. */
   .ping { display: inline-flex; flex-direction: column; gap: 2px; line-height: 1.35; }
   .ping__total { font-size: 12px; color: var(--ui-text-base); }
+  /* Both lines keep their height while the ticker fills them in. */
+  .ping .cell-sub { min-height: 15px; }
+  /* A single latency keeps its width between "-" and "≈ 262 ms". */
+  .ping-cell { display: inline-block; min-width: 11ch; }
   /* A row of a list is its own link; the button that used to open it is gone. */
   tr[data-href] { cursor: pointer; }
   tr[data-href]:focus-visible { outline: 2px solid var(--ui-border-focus); outline-offset: -2px; }
@@ -164,7 +168,7 @@
     };
     var pingParts = function (el, exit) {
       if (!exit || !exit.enabled || !exit.alive || !exit.rtt_ms || rtt === null) {
-        put(el, '');
+        put(el, '\u00a0');
         return;
       }
       put(el, 'client ' + rtt + ' + exit ' + exit.rtt_ms + ' ms');

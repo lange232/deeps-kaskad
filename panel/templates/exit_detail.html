@@ -31,7 +31,7 @@
       <div><div class="k">priority</div><div class="v oc-num">{{ exit.priority }}</div></div>
       <div><div class="k">ping</div><div class="v">
         {% if exit.mode == 'routes' %}<span class="oc-muted" data-live="ping|{{ exit.iface }}">n/a (handshake only)</span>
-        {% else %}<span data-live="ping|{{ exit.iface }}">—</span>{% endif %}
+        {% else %}<span class="ping-cell" data-live="ping|{{ exit.iface }}">{% if exit.alive and exit.rtt_ms %}{{ exit.rtt_ms }} ms{% else %}—{% endif %}</span>{% endif %}
       </div></div>
       <div><div class="k">NAT</div><div class="v">
         {% if exit.mode == 'internet' %}

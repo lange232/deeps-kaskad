@@ -60,7 +60,7 @@
                 <span class="oc-badge {% if alive.get(e.iface) %}oc-badge--success{% else %}oc-badge--subtle{% endif %}" data-live="exit|{{ e.iface }}">{% if alive.get(e.iface) %}up{% else %}down{% endif %}</span>
                 <span class="ping">
                   <span class="oc-mono ping__total" data-live="ping|{{ e.iface }}">—</span>
-                  <span class="cell-sub oc-mono" data-live="pingparts|{{ e.iface }}"></span>
+                  <span class="cell-sub oc-mono" data-live="pingparts|{{ e.iface }}">&nbsp;</span>
                 </span>
               </div>
             </td>

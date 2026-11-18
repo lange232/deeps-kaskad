@@ -80,7 +80,7 @@
             <td>
               <span class="oc-badge {% if not e.enabled %}oc-badge--subtle{% elif e.alive %}oc-badge--success{% else %}oc-badge--danger{% endif %}" data-live="exit|{{ e.iface }}">{% if not e.enabled %}disabled{% elif e.alive %}up{% else %}down{% endif %}</span>
             </td>
-            <td class="oc-mono oc-muted"><span data-live="ping|{{ e.iface }}">—</span></td>
+            <td class="oc-mono oc-muted"><span class="ping-cell" data-live="ping|{{ e.iface }}">{% if e.alive and e.rtt_ms %}{{ e.rtt_ms }} ms{% else %}—{% endif %}</span></td>
           </tr>
         {% else %}
           <tr><td colspan="5" class="oc-muted">no exits — clients will have no internet.</td></tr>

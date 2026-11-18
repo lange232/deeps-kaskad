@@ -75,7 +75,7 @@
                   <span class="oc-mono ping__total" data-live="ping|{{ e.iface }}"
                     {% if exit_ms and client_rtt is not none %}title="client to S1 {{ client_rtt }} ms + S1 to exit {{ exit_ms }} ms"{% elif exit_ms %}title="S1 to exit only; the client does not answer ping"{% endif %}
                     >{% if exit_ms and client_rtt is not none %}≈ {{ client_rtt + exit_ms }} ms{% elif exit_ms %}exit {{ exit_ms }} ms{% else %}—{% endif %}</span>
-                  <span class="cell-sub oc-mono" data-live="pingparts|{{ e.iface }}">{% if exit_ms and client_rtt is not none %}client {{ client_rtt }} + exit {{ exit_ms }} ms{% endif %}</span>
+                  <span class="cell-sub oc-mono" data-live="pingparts|{{ e.iface }}">{% if exit_ms and client_rtt is not none %}client {{ client_rtt }} + exit {{ exit_ms }} ms{% else %}&nbsp;{% endif %}</span>
                 </span>
               </div>
             </td>
@@ -175,6 +175,25 @@
 </div>
 
 <script>
-kaskadLive(20, {{ client_rtt if client_rtt is not none else 'null' }});
+(function () {
+  // The split under the total needs this device's own round-trip; the server
+  // value is a fallback for when the browser cannot measure it.
+  const fallback = {{ client_rtt if client_rtt is not none else 'null' }};
+  function sample(left, values) {
+    if (left <= 0) {
+      if (!values.length) { kaskadLive(20, fallback); return; }
+      values.sort((a, b) => a - b);
+      kaskadLive(20, Math.round(values[Math.floor(values.length / 2)]));
+      return;
+    }
+    const started = performance.now();
+    fetch('/ping', {cache: 'no-store'})
+      .then((r) => r.text())
+      .then(() => values.push(performance.now() - started))
+      .catch(() => {})
+      .finally(() => sample(left - 1, values));
+  }
+  sample(4, []);
+})();
 </script>
 {% endblock %}
