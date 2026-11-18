@@ -516,10 +516,11 @@ class AdminPingTests(PanelTestCase):
         with mock.patch.object(app, "read_status", return_value=status):
             response = self.client.get("/")
         self.assertEqual(response.status_code, 200)
-        self.assertIn('data-exit-ping="40"', response.text)
+        self.assertIn('data-live="ping|awg1"', response.text)
         self.assertIn('id="client-rtt"', response.text)
         self.assertIn("fetch('/ping'", response.text)
-        self.assertIn("kaskadAutoRefresh = function", response.text)
+        self.assertIn("kaskadLive = function", response.text)
+        self.assertNotIn("location.reload", response.text)
 
 
 class AccountTests(PanelTestCase):
@@ -926,6 +927,29 @@ class SubnetApiTests(PanelTestCase):
         headers = self.api_login("mine@example.com")
         response = self.client.get(f"/api/me/subnets?config_id={other}", headers=headers)
         self.assertEqual(response.status_code, 404)
+
+
+class StatusJsonTests(PanelTestCase):
+    def test_admin_sees_every_configuration(self):
+        aid, cid = self.seed_client("one", "10.80.0.2", "one@example.com")
+        self.seed_client("two", "10.80.0.3", "two@example.com")
+        self.login_admin()
+        response = self.client.get("/status.json")
+        self.assertEqual(response.status_code, 200, response.text)
+        body = response.json()
+        self.assertEqual(sorted(body["configs"]), ["10.80.0.2", "10.80.0.3"])
+        self.assertIn("exits", body)
+        self.assertNotIn("private_key", response.text)
+
+    def test_account_sees_only_its_own(self):
+        self.seed_client("mine", "10.80.0.2", "mine@example.com")
+        self.seed_client("other", "10.80.0.3", "other@example.com")
+        self.login("mine@example.com", USER_PASSWORD)
+        body = self.client.get("/status.json").json()
+        self.assertEqual(sorted(body["configs"]), ["10.80.0.2"])
+
+    def test_anonymous_is_rejected(self):
+        self.assertEqual(self.client.get("/status.json").status_code, 401)
 
 
 class ConfigPingTests(PanelTestCase):

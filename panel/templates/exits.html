@@ -44,17 +44,11 @@
         <td class="oc-mono">{{ e.iface }}{% if e.mode == 'internet' %}<span class="cell-sub"> · {{ e.priority }}</span>{% endif %}</td>
         <td class="oc-mono oc-muted">{{ e.endpoint }}</td>
         <td>
-          {% if not e.enabled %}<span class="oc-badge oc-badge--subtle">disabled</span>
-          {% elif e.alive %}<span class="oc-badge oc-badge--success"><span class="oc-dot"></span>up</span>
-          {% elif e.alive is none %}<span class="oc-badge">no data</span>
-          {% else %}<span class="oc-badge oc-badge--danger"><span class="oc-dot"></span>down</span>{% endif %}
-          {% if e.last_ok %}<div class="cell-sub" data-hs="{{ e.last_ok }}"></div>{% endif %}
+          <span class="oc-badge {% if not e.enabled %}oc-badge--subtle{% elif e.alive %}oc-badge--success{% elif e.alive is none %}{% else %}oc-badge--danger{% endif %}" data-live="exit|{{ e.iface }}">{% if not e.enabled %}disabled{% elif e.alive %}up{% elif e.alive is none %}no data{% else %}down{% endif %}</span>
+          <div class="cell-sub" data-live="lastok|{{ e.iface }}"></div>
         </td>
         <td class="oc-mono oc-muted">
-          {% if e.alive and e.rtt_ms %}
-          <span data-exit-ping="{{ e.rtt_ms }}" title="panel to exit {{ e.rtt_ms }} ms">{{ e.rtt_ms }} ms</span>
-          <div class="cell-sub" data-ping-parts>exit {{ e.rtt_ms }} ms</div>
-          {% else %}—{% endif %}
+          <span data-live="ping|{{ e.iface }}">—</span>
         </td>
       </tr>
     {% endfor %}
@@ -70,44 +64,19 @@
 {% endif %}
 
 <script>
-function rel(ts) {
-  if (!ts || Number(ts) <= 0) return 'no data';
-  const d = Math.floor(Date.now() / 1000 - Number(ts));
-  if (d < 60) return d + 's ago';
-  if (d < 3600) return Math.floor(d / 60) + 'm ago';
-  if (d < 86400) return Math.floor(d / 3600) + 'h ago';
-  return Math.floor(d / 86400) + 'd ago';
-}
-for (const el of document.querySelectorAll('[data-hs]')) el.textContent = rel(el.dataset.hs);
-// Same measurement as /me, inline on purpose: page scripts run before the
-// script at the end of base.html, so external helpers are not available yet.
 (function () {
-  const targets = document.querySelectorAll('[data-exit-ping]');
-  const label = document.getElementById('client-rtt');
-  if (!targets.length && !label) return;
-
-  function apply(clientMs) {
-    if (label) label.textContent = clientMs === null ? 'unavailable' : clientMs + ' ms';
-    for (const el of targets) {
-      const exitMs = Number(el.dataset.exitPing);
-      if (!Number.isFinite(exitMs)) continue;
-      if (clientMs === null) {
-        el.textContent = 'exit ' + exitMs + ' ms';
-        el.title = 'panel to exit only; the device round-trip could not be measured';
-        continue;
-      }
-      el.textContent = '≈ ' + (clientMs + exitMs) + ' ms';
-      el.title = 'your device ' + clientMs + ' ms + exit ' + exitMs + ' ms';
-      const parts = el.parentElement.querySelector('[data-ping-parts]');
-      if (parts) parts.textContent = 'exit ' + exitMs + ' + device ' + clientMs + ' ms';
-    }
-  }
-
   function sample(left, values) {
     if (left <= 0) {
-      if (!values.length) { apply(null); return; }
+      const label = document.getElementById('client-rtt');
+      if (!values.length) {
+        if (label) label.textContent = 'unavailable';
+        kaskadLive(20, null);
+        return;
+      }
       values.sort((a, b) => a - b);
-      apply(Math.round(values[Math.floor(values.length / 2)]));
+      const ms = Math.round(values[Math.floor(values.length / 2)]);
+      if (label) label.textContent = ms + ' ms';
+      kaskadLive(20, ms);
       return;
     }
     const started = performance.now();
@@ -117,10 +86,7 @@ for (const el of document.querySelectorAll('[data-hs]')) el.textContent = rel(el
       .catch(() => {})
       .finally(() => sample(left - 1, values));
   }
-
   sample(4, []);
 })();
-
-kaskadAutoRefresh(15);
 </script>
 {% endblock %}

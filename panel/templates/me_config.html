@@ -23,9 +23,9 @@
 <div class="stack">
   <div class="oc-panel" style="padding:16px">
     <div class="kv-grid">
-      <div><div class="k">handshake</div><div class="v" data-hs="{{ cl.handshake }}">—</div></div>
-      <div><div class="k">received</div><div class="v oc-num">{{ (cl.rx / 1048576) | round(1) }} MiB</div></div>
-      <div><div class="k">sent</div><div class="v oc-num">{{ (cl.tx / 1048576) | round(1) }} MiB</div></div>
+      <div><div class="k">handshake</div><div class="v" data-live="hs|{{ cl.ip }}">—</div></div>
+      <div><div class="k">received</div><div class="v oc-num"><span data-live="rx|{{ cl.ip }}">{{ (cl.rx / 1048576) | round(1) }}</span> MiB</div></div>
+      <div><div class="k">sent</div><div class="v oc-num"><span data-live="tx|{{ cl.ip }}">{{ (cl.tx / 1048576) | round(1) }}</span> MiB</div></div>
       <div><div class="k">address</div><div class="v oc-mono">{{ cl.ip }}</div></div>
     </div>
   </div>
@@ -57,13 +57,8 @@
               {{ e.comment or e.name }}
               <div class="actions" style="margin-top:4px; gap:8px">
                 {% if current_exit and current_exit.id == e.id %}<span class="oc-badge oc-badge--accent">in use</span>{% endif %}
-                {% if alive.get(e.iface) %}<span class="oc-badge oc-badge--success">up</span>
-                {% else %}<span class="oc-badge oc-badge--subtle">down</span>{% endif %}
-                {% if alive.get(e.iface) and latency.get(e.iface) %}
-                <span class="cell-sub oc-mono" data-exit-ping="{{ latency.get(e.iface) }}"
-                      title="panel to exit only; measuring your device...">{{ latency.get(e.iface) }} ms</span>
-                <span class="cell-sub oc-mono" data-ping-parts="{{ latency.get(e.iface) }}">exit {{ latency.get(e.iface) }} ms</span>
-                {% endif %}
+                <span class="oc-badge {% if alive.get(e.iface) %}oc-badge--success{% else %}oc-badge--subtle{% endif %}" data-live="exit|{{ e.iface }}">{% if alive.get(e.iface) %}up{% else %}down{% endif %}</span>
+                <span class="cell-sub oc-mono" data-live="ping|{{ e.iface }}">—</span>
               </div>
             </td>
             <td>
@@ -180,52 +175,19 @@
 </div>
 
 <script>
-function rel(ts) {
-  if (!ts || Number(ts) <= 0) return 'no data';
-  const d = Math.floor(Date.now() / 1000 - Number(ts));
-  if (d < 60) return d + 's ago';
-  if (d < 3600) return Math.floor(d / 60) + 'm ago';
-  if (d < 86400) return Math.floor(d / 3600) + 'h ago';
-  return Math.floor(d / 86400) + 'd ago';
-}
-for (const el of document.querySelectorAll('[data-hs]')) el.textContent = rel(el.dataset.hs);
-
-// The exit ping comes from the server; the part from this device to the panel
-// is measured here, a few samples, median. Total = both.
 (function () {
-  const targets = document.querySelectorAll('[data-exit-ping]');
-  if (!targets.length) return;
-
-  function apply(clientMs) {
-    const label = document.getElementById('client-rtt');
-    if (label) label.textContent = clientMs + ' ms';
-    for (const el of targets) {
-      const exitMs = Number(el.dataset.exitPing);
-      if (!Number.isFinite(exitMs)) continue;
-      el.textContent = '≈ ' + (clientMs + exitMs) + ' ms';
-      el.title = 'device to panel ' + clientMs + ' ms + panel to exit ' + exitMs + ' ms';
-      const parts = el.parentElement.querySelector('[data-ping-parts]');
-      if (parts) parts.textContent = 'exit ' + exitMs + ' + device ' + clientMs + ' ms';
-    }
-  }
-
-  function unavailable() {
-    const label = document.getElementById('client-rtt');
-    if (label) label.textContent = 'unavailable';
-    for (const el of targets) {
-      el.textContent = Number(el.dataset.exitPing) + ' ms';
-      el.title = 'panel to exit only; the device round-trip could not be measured';
-    }
-  }
-
   function sample(left, values) {
     if (left <= 0) {
+      const label = document.getElementById('client-rtt');
       if (!values.length) {
-        unavailable();
+        if (label) label.textContent = 'unavailable';
+        kaskadLive(20, null);
         return;
       }
       values.sort((a, b) => a - b);
-      apply(Math.round(values[Math.floor(values.length / 2)]));
+      const ms = Math.round(values[Math.floor(values.length / 2)]);
+      if (label) label.textContent = ms + ' ms';
+      kaskadLive(20, ms);
       return;
     }
     const started = performance.now();
@@ -235,10 +197,7 @@ for (const el of document.querySelectorAll('[data-hs]')) el.textContent = rel(el
       .catch(() => {})
       .finally(() => sample(left - 1, values));
   }
-
   sample(4, []);
 })();
-
-kaskadAutoRefresh(30);
 </script>
 {% endblock %}

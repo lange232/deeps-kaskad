@@ -30,12 +30,8 @@
       <div><div class="k">comment</div><div class="v">{{ exit.comment or '—' }}</div></div>
       <div><div class="k">priority</div><div class="v oc-num">{{ exit.priority }}</div></div>
       <div><div class="k">ping</div><div class="v">
-        {% if exit.alive and exit.rtt_ms %}
-          <span data-exit-ping="{{ exit.rtt_ms }}" title="panel to exit {{ exit.rtt_ms }} ms">{{ exit.rtt_ms }} ms</span>
-          <div class="cell-sub" data-ping-parts>exit {{ exit.rtt_ms }} ms</div>
-          {% if exit.rtt_ts %}<span class="cell-sub" data-hs="{{ exit.rtt_ts }}"></span>{% endif %}
-        {% elif exit.mode == 'routes' %}<span class="oc-muted">n/a (handshake only)</span>
-        {% else %}<span class="oc-muted">—</span>{% endif %}
+        {% if exit.mode == 'routes' %}<span class="oc-muted" data-live="ping|{{ exit.iface }}">n/a (handshake only)</span>
+        {% else %}<span data-live="ping|{{ exit.iface }}">—</span>{% endif %}
       </div></div>
       <div><div class="k">NAT</div><div class="v">
         {% if exit.mode == 'internet' %}
@@ -60,7 +56,7 @@
       <div><div class="k">subnets</div><div class="v oc-mono">{{ exit.routes }}</div></div>
       <div><div class="k">DNS</div><div class="v oc-mono">{{ exit.dns or '—' }}</div></div>
       {% endif %}
-      <div><div class="k">last check</div><div class="v" data-hs="{{ exit.last_ok }}">—</div></div>
+      <div><div class="k">last check</div><div class="v" data-live="lastok|{{ exit.iface }}">—</div></div>
     </div>
 
     <form method="post" action="/exits/{{ exit.id }}/comment" style="margin-top:18px; max-width:420px">
@@ -135,44 +131,19 @@
 </div>
 
 <script>
-function rel(ts) {
-  if (!ts || Number(ts) <= 0) return 'no data';
-  const d = Math.floor(Date.now() / 1000 - Number(ts));
-  if (d < 60) return d + 's ago';
-  if (d < 3600) return Math.floor(d / 60) + 'm ago';
-  if (d < 86400) return Math.floor(d / 3600) + 'h ago';
-  return Math.floor(d / 86400) + 'd ago';
-}
-for (const el of document.querySelectorAll('[data-hs]')) el.textContent = rel(el.dataset.hs);
-// Same measurement as /me, inline on purpose: page scripts run before the
-// script at the end of base.html, so external helpers are not available yet.
 (function () {
-  const targets = document.querySelectorAll('[data-exit-ping]');
-  const label = document.getElementById('client-rtt');
-  if (!targets.length && !label) return;
-
-  function apply(clientMs) {
-    if (label) label.textContent = clientMs === null ? 'unavailable' : clientMs + ' ms';
-    for (const el of targets) {
-      const exitMs = Number(el.dataset.exitPing);
-      if (!Number.isFinite(exitMs)) continue;
-      if (clientMs === null) {
-        el.textContent = 'exit ' + exitMs + ' ms';
-        el.title = 'panel to exit only; the device round-trip could not be measured';
-        continue;
-      }
-      el.textContent = '≈ ' + (clientMs + exitMs) + ' ms';
-      el.title = 'your device ' + clientMs + ' ms + exit ' + exitMs + ' ms';
-      const parts = el.parentElement.querySelector('[data-ping-parts]');
-      if (parts) parts.textContent = 'exit ' + exitMs + ' + device ' + clientMs + ' ms';
-    }
-  }
-
   function sample(left, values) {
     if (left <= 0) {
-      if (!values.length) { apply(null); return; }
+      const label = document.getElementById('client-rtt');
+      if (!values.length) {
+        if (label) label.textContent = 'unavailable';
+        kaskadLive(20, null);
+        return;
+      }
       values.sort((a, b) => a - b);
-      apply(Math.round(values[Math.floor(values.length / 2)]));
+      const ms = Math.round(values[Math.floor(values.length / 2)]);
+      if (label) label.textContent = ms + ' ms';
+      kaskadLive(20, ms);
       return;
     }
     const started = performance.now();
@@ -182,10 +153,7 @@ for (const el of document.querySelectorAll('[data-hs]')) el.textContent = rel(el
       .catch(() => {})
       .finally(() => sample(left - 1, values));
   }
-
   sample(4, []);
 })();
-
-kaskadAutoRefresh(15);
 </script>
 {% endblock %}

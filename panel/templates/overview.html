@@ -20,17 +20,17 @@
     </div>
     <div class="stat-tile">
       <div class="stat-label">configurations online</div>
-      <div class="stat-value">{{ online }}<span class="of">of {{ clients | length }}</span></div>
+      <div class="stat-value"><span data-live="online">{{ online }}</span><span class="of">of {{ clients | length }}</span></div>
       <div class="stat-sub">handshake younger than 3 minutes</div>
     </div>
     <div class="stat-tile">
       <div class="stat-label">client traffic</div>
-      <div class="stat-value oc-num">{{ (rx / 1048576) | round(1) }}<span class="of">/ {{ (tx / 1048576) | round(1) }} MiB</span></div>
+      <div class="stat-value oc-num"><span data-live="rx-total">{{ (rx / 1048576) | round(1) }}</span><span class="of">/ <span data-live="tx-total">{{ (tx / 1048576) | round(1) }}</span> MiB</span></div>
       <div class="stat-sub">received / sent</div>
     </div>
     <div class="stat-tile">
       <div class="stat-label">exits</div>
-      <div class="stat-value">{{ exits | selectattr('alive') | list | length }}<span class="of">of {{ exits | length }}</span></div>
+      <div class="stat-value"><span data-live="exits-alive">{{ exits | selectattr('alive') | list | length }}</span><span class="of">of {{ exits | length }}</span></div>
       <div class="stat-sub">alive by health-check</div>
     </div>
   </div>
@@ -78,16 +78,9 @@
             <td>{% if e.mode == 'routes' %}<span class="oc-badge oc-badge--info">subnets</span>{% else %}<span class="oc-badge oc-badge--success">internet</span>{% endif %}</td>
             <td class="oc-mono">{{ e.iface }}</td>
             <td>
-              {% if not e.enabled %}<span class="oc-badge oc-badge--subtle">disabled</span>
-              {% elif e.alive %}<span class="oc-badge oc-badge--success"><span class="oc-dot"></span>up</span>
-              {% else %}<span class="oc-badge oc-badge--danger"><span class="oc-dot"></span>down</span>{% endif %}
+              <span class="oc-badge {% if not e.enabled %}oc-badge--subtle{% elif e.alive %}oc-badge--success{% else %}oc-badge--danger{% endif %}" data-live="exit|{{ e.iface }}">{% if not e.enabled %}disabled{% elif e.alive %}up{% else %}down{% endif %}</span>
             </td>
-            <td class="oc-mono oc-muted">
-              {% if e.alive and e.rtt_ms %}
-              <span data-exit-ping="{{ e.rtt_ms }}" title="panel to exit {{ e.rtt_ms }} ms">{{ e.rtt_ms }} ms</span>
-              <div class="cell-sub" data-ping-parts>exit {{ e.rtt_ms }} ms</div>
-              {% else %}—{% endif %}
-            </td>
+            <td class="oc-mono oc-muted"><span data-live="ping|{{ e.iface }}">—</span></td>
           </tr>
         {% else %}
           <tr><td colspan="5" class="oc-muted">no exits — clients will have no internet.</td></tr>
@@ -121,43 +114,19 @@
 </div>
 
 <script>
-function rel(ts) {
-  if (!ts || Number(ts) <= 0) return 'no data';
-  const d = Math.floor(Date.now() / 1000 - Number(ts));
-  if (d < 60) return d + 's ago';
-  if (d < 3600) return Math.floor(d / 60) + 'm ago';
-  if (d < 86400) return Math.floor(d / 3600) + 'h ago';
-  return Math.floor(d / 86400) + 'd ago';
-}
-// Same measurement as /me, inline on purpose: page scripts run before the
-// script at the end of base.html, so external helpers are not available yet.
 (function () {
-  const targets = document.querySelectorAll('[data-exit-ping]');
-  const label = document.getElementById('client-rtt');
-  if (!targets.length && !label) return;
-
-  function apply(clientMs) {
-    if (label) label.textContent = clientMs === null ? 'unavailable' : clientMs + ' ms';
-    for (const el of targets) {
-      const exitMs = Number(el.dataset.exitPing);
-      if (!Number.isFinite(exitMs)) continue;
-      if (clientMs === null) {
-        el.textContent = 'exit ' + exitMs + ' ms';
-        el.title = 'panel to exit only; the device round-trip could not be measured';
-        continue;
-      }
-      el.textContent = '≈ ' + (clientMs + exitMs) + ' ms';
-      el.title = 'your device ' + clientMs + ' ms + exit ' + exitMs + ' ms';
-      const parts = el.parentElement.querySelector('[data-ping-parts]');
-      if (parts) parts.textContent = 'exit ' + exitMs + ' + device ' + clientMs + ' ms';
-    }
-  }
-
   function sample(left, values) {
     if (left <= 0) {
-      if (!values.length) { apply(null); return; }
+      const label = document.getElementById('client-rtt');
+      if (!values.length) {
+        if (label) label.textContent = 'unavailable';
+        kaskadLive(20, null);
+        return;
+      }
       values.sort((a, b) => a - b);
-      apply(Math.round(values[Math.floor(values.length / 2)]));
+      const ms = Math.round(values[Math.floor(values.length / 2)]);
+      if (label) label.textContent = ms + ' ms';
+      kaskadLive(20, ms);
       return;
     }
     const started = performance.now();
@@ -167,10 +136,7 @@ function rel(ts) {
       .catch(() => {})
       .finally(() => sample(left - 1, values));
   }
-
   sample(4, []);
 })();
-
-kaskadAutoRefresh(15);
 </script>
 {% endblock %}

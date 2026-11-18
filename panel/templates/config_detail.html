@@ -47,9 +47,9 @@
 <div class="stack">
   <div class="oc-panel" style="padding:16px">
     <div class="kv-grid">
-      <div><div class="k">handshake</div><div class="v" data-hs="{{ config.handshake }}">—</div></div>
-      <div><div class="k">received</div><div class="v oc-num">{{ (config.rx / 1048576) | round(1) }} MiB</div></div>
-      <div><div class="k">sent</div><div class="v oc-num">{{ (config.tx / 1048576) | round(1) }} MiB</div></div>
+      <div><div class="k">handshake</div><div class="v" data-live="hs|{{ config.ip }}">—</div></div>
+      <div><div class="k">received</div><div class="v oc-num"><span data-live="rx|{{ config.ip }}">{{ (config.rx / 1048576) | round(1) }}</span> MiB</div></div>
+      <div><div class="k">sent</div><div class="v oc-num"><span data-live="tx|{{ config.ip }}">{{ (config.tx / 1048576) | round(1) }}</span> MiB</div></div>
       <div><div class="k">address</div><div class="v oc-mono">{{ config.ip }}</div></div>
     </div>
   </div>
@@ -68,16 +68,12 @@
             <td>
               {{ e.comment or e.name }}
               <div class="actions" style="margin-top:4px; gap:8px">
-                {% if alive.get(e.iface) %}<span class="oc-badge oc-badge--success">up</span>
-                {% else %}<span class="oc-badge oc-badge--subtle">down</span>{% endif %}
+                {% if alive.get(e.iface) %}<span class="oc-badge oc-badge--success" data-live="exit|{{ e.iface }}">up</span>
+                {% else %}<span class="oc-badge oc-badge--subtle" data-live="exit|{{ e.iface }}">down</span>{% endif %}
                 {% set exit_ms = latency.get(e.iface) %}
-                {% if exit_ms %}
-                  {% if client_rtt is not none %}
-                  <span class="cell-sub oc-mono" title="client to S1 {{ client_rtt }} ms + S1 to exit {{ exit_ms }} ms">≈ {{ client_rtt + exit_ms }} ms · client {{ client_rtt }} + exit {{ exit_ms }} ms</span>
-                  {% else %}
-                  <span class="cell-sub oc-mono" title="S1 to exit only; the client does not answer ping">exit {{ exit_ms }} ms</span>
-                  {% endif %}
-                {% endif %}
+                <span class="cell-sub oc-mono" data-live="ping|{{ e.iface }}"
+                  {% if exit_ms and client_rtt is not none %}title="client to S1 {{ client_rtt }} ms + S1 to exit {{ exit_ms }} ms"{% elif exit_ms %}title="S1 to exit only; the client does not answer ping"{% endif %}
+                  >{% if exit_ms and client_rtt is not none %}≈ {{ client_rtt + exit_ms }} ms · client {{ client_rtt }} + exit {{ exit_ms }} ms{% elif exit_ms %}exit {{ exit_ms }} ms{% else %}—{% endif %}</span>
               </div>
             </td>
             <td>
@@ -176,15 +172,6 @@
 </div>
 
 <script>
-function rel(ts) {
-  if (!ts || Number(ts) <= 0) return 'no data';
-  const d = Math.floor(Date.now() / 1000 - Number(ts));
-  if (d < 60) return d + 's ago';
-  if (d < 3600) return Math.floor(d / 60) + 'm ago';
-  if (d < 86400) return Math.floor(d / 3600) + 'h ago';
-  return Math.floor(d / 86400) + 'd ago';
-}
-for (const el of document.querySelectorAll('[data-hs]')) el.textContent = rel(el.dataset.hs);
-kaskadAutoRefresh(30);
+kaskadLive(20, {{ client_rtt if client_rtt is not none else 'null' }});
 </script>
 {% endblock %}

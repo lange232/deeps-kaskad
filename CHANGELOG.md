@@ -5,6 +5,15 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- Pages no longer reload themselves. A small ticker asks `/status.json` every
+  20 seconds and rewrites only handshakes, traffic, exit state and latency, so
+  scroll position, focus and an open `<details>` (QR, config) stay as they
+  were. `/status.json` returns the account's own configurations only.
+
 ## [0.4.4] - 2026-11-18
 
 ### Fixed

@@ -37,7 +37,7 @@
               {% if not c.enabled %}<span class="oc-badge oc-badge--subtle">disabled</span>{% endif %}
               <div class="cell-sub oc-mono" style="display:flex; flex-wrap:wrap; gap:4px 10px">
                 <span>{{ c.ip }}</span>
-                <span>handshake <span data-hs="{{ c.handshake }}">—</span></span>
+                <span>handshake <span data-live="hs|{{ c.ip }}">—</span></span>
               </div>
             </td>
             <td>
@@ -97,15 +97,6 @@
 </div>
 
 <script>
-function rel(ts) {
-  if (!ts || Number(ts) <= 0) return 'no data';
-  const d = Math.floor(Date.now() / 1000 - Number(ts));
-  if (d < 60) return d + 's ago';
-  if (d < 3600) return Math.floor(d / 60) + 'm ago';
-  if (d < 86400) return Math.floor(d / 3600) + 'h ago';
-  return Math.floor(d / 86400) + 'd ago';
-}
-for (const el of document.querySelectorAll('[data-hs]')) el.textContent = rel(el.dataset.hs);
-kaskadAutoRefresh(30);
+kaskadLive(20);
 </script>
 {% endblock %}

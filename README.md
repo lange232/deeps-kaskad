@@ -344,6 +344,10 @@ Sessions are stored server-side: signing out revokes the cookie, changing the
 password or resetting it kills every session of that account, and an account can
 press "sign out everywhere" on `/me`.
 
+Pages update handshakes, traffic and exit state in place every 20 seconds
+(`/status.json`, the account's own numbers only): the page itself is not
+reloaded, so scroll, focus and an open QR or config stay.
+
 `/healthz` answers without authentication and returns
 `{"ok": true, "version": ..., "active": ...}`; it is meant for monitoring and
 returns 503 when the database cannot be read.

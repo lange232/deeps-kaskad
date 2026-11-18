@@ -120,20 +120,102 @@
 <script>
   // Reload only when nobody is typing and the tab is visible. Defined in the
   // head because page scripts run before the body-end script.
-  window.kaskadAutoRefresh = function (seconds) {
-    var dirty = false;
-    document.addEventListener('input', function () { dirty = true; });
-    document.addEventListener('change', function () { dirty = true; });
-    function tick() {
-      var el = document.activeElement;
-      var typing = el && el.matches && el.matches('input, textarea, select');
-      if (!dirty && !typing && document.visibilityState === 'visible') {
-        location.reload();
+  // "2m ago" for a handshake timestamp; shared by the pages and the ticker.
+  window.kaskadRel = function (ts) {
+    if (!ts || Number(ts) <= 0) return 'no data';
+    var d = Math.floor(Date.now() / 1000 - Number(ts));
+    if (d < 60) return d + 's ago';
+    if (d < 3600) return Math.floor(d / 60) + 'm ago';
+    if (d < 86400) return Math.floor(d / 3600) + 'h ago';
+    return Math.floor(d / 86400) + 'd ago';
+  };
+
+  // Live numbers without a page reload: fetch /status.json and rewrite only
+  // the elements marked data-live. Scroll, focus and an open <details> stay.
+  window.kaskadLive = function (seconds, clientRtt) {
+    var rtt = typeof clientRtt === 'number' ? clientRtt : null;
+    var mb = function (bytes) { return (Number(bytes) / 1048576).toFixed(1); };
+    var put = function (el, text) {
+      if (el.textContent !== text) el.textContent = text;
+    };
+    var badge = function (el, exit) {
+      var cls = 'oc-badge ';
+      var text;
+      if (!exit) { cls += 'oc-badge--subtle'; text = 'no data'; }
+      else if (!exit.enabled) { cls += 'oc-badge--subtle'; text = 'disabled'; }
+      else if (exit.alive) { cls += 'oc-badge--success'; text = 'up'; }
+      else { cls += 'oc-badge--danger'; text = 'down'; }
+      if (el.className !== cls) el.className = cls;
+      put(el, text);
+    };
+    var ping = function (el, exit) {
+      if (!exit || !exit.enabled || !exit.alive || !exit.rtt_ms) {
+        put(el, '—');
         return;
+      }
+      if (rtt === null) {
+        put(el, 'exit ' + exit.rtt_ms + ' ms');
+        return;
+      }
+      put(el, '≈ ' + (rtt + exit.rtt_ms) + ' ms · client ' + rtt +
+          ' + exit ' + exit.rtt_ms + ' ms');
+    };
+    function apply(data) {
+      var exits = data.exits || {};
+      var configs = data.configs || {};
+      var nodes = document.querySelectorAll('[data-live]');
+      for (var i = 0; i < nodes.length; i++) {
+        var el = nodes[i];
+        var parts = el.dataset.live.split('|');
+        var kind = parts[0];
+        var key = parts[1];
+        var item;
+        if (kind === 'hs') {
+          item = configs[key];
+          put(el, item ? kaskadRel(item.handshake) : 'no data');
+        } else if (kind === 'rx') {
+          item = configs[key];
+          put(el, mb(item ? item.rx : 0));
+        } else if (kind === 'tx') {
+          item = configs[key];
+          put(el, mb(item ? item.tx : 0));
+        } else if (kind === 'kb') {
+          item = configs[key];
+          put(el, item && item.enabled ? 'enabled' : 'disabled');
+        } else if (kind === 'exit') {
+          badge(el, exits[key]);
+        } else if (kind === 'ping') {
+          ping(el, exits[key]);
+        } else if (kind === 'lastok') {
+          item = exits[key];
+          put(el, item && item.last_ok ? kaskadRel(item.last_ok) : 'no data');
+        } else if (kind === 'current') {
+          item = configs[key];
+          put(el, (item && item.iface) || 'none');
+        } else if (kind === 'online') {
+          put(el, String(data.online));
+        } else if (kind === 'rx-total') {
+          put(el, mb(data.rx));
+        } else if (kind === 'tx-total') {
+          put(el, mb(data.tx));
+        } else if (kind === 'exits-alive') {
+          put(el, String(data.exits_alive));
+        }
+      }
+    }
+    function tick() {
+      if (document.visibilityState === 'visible') {
+        fetch('/status.json', {cache: 'no-store', credentials: 'same-origin'})
+          .then(function (r) {
+            if (r.status === 401) { window.location.href = '/login'; return null; }
+            return r.ok ? r.json() : null;
+          })
+          .then(function (data) { if (data) apply(data); })
+          .catch(function () {});
       }
       setTimeout(tick, seconds * 1000);
     }
-    setTimeout(tick, seconds * 1000);
+    tick();
   };
 </script>
 </head>

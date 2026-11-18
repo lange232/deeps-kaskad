@@ -3325,6 +3325,72 @@ def api_subnets_update(
     }
 
 
+@app.get("/status.json")
+def status_json(request: Request):
+    """Live numbers for the page scripts.
+
+    The pages render everything server-side; this endpoint only feeds the
+    ticker that updates handshakes, traffic and exit health in place, so the
+    browse does not reload and lose scroll, focus or an open <details>.
+    """
+    token = request.cookies.get(COOKIE)
+    data = session_data(token)
+    if not data or not session_alive(data):
+        raise HTTPException(status_code=401, detail="sign in again")
+    role = data.get("role")
+    account = None
+    if role == "user":
+        account = account_row(int(data.get("uid", 0)))
+        if (not account or not account["enabled"]
+                or account["token_version"] != data.get("tv")):
+            raise HTTPException(status_code=401, detail="account disabled")
+    elif role != "admin":
+        raise HTTPException(status_code=401, detail="sign in again")
+
+    c = cfg()
+    status = read_status()
+    live = iface_dump(c["iface"])["peers"]
+    now = int(time.time())
+    views = [
+        config_view(cl, live) for cl in (
+            account_configs(int(account["id"])) if account else config_rows()
+        )
+    ]
+    exits = {
+        e["iface"]: {
+            "name": e["name"],
+            "enabled": bool(e["enabled"]),
+            "mode": e["mode"],
+            "alive": bool((status.get("exits") or {}).get(e["iface"], {}).get("alive")),
+            "rtt_ms": (status.get("exits") or {}).get(e["iface"], {}).get("rtt_ms"),
+            "last_ok": (status.get("exits") or {}).get(e["iface"], {}).get("last_ok", 0),
+        }
+        for e in exits_rows()
+    }
+    current = status.get("clients") or {}
+    return {
+        "ts": now,
+        "active": status.get("active"),
+        "online": sum(1 for v in views if v["handshake"] and now - v["handshake"] < 180),
+        "rx": sum(v["rx"] for v in views),
+        "tx": sum(v["tx"] for v in views),
+        "exits_alive": sum(1 for e in exits.values() if e["alive"]),
+        "exits_total": len(exits),
+        "exits": exits,
+        "configs": {
+            v["ip"]: {
+                "name": v["name"],
+                "enabled": v["enabled"],
+                "handshake": v["handshake"],
+                "rx": v["rx"],
+                "tx": v["tx"],
+                "iface": current.get(v["ip"], ""),
+            }
+            for v in views
+        },
+    }
+
+
 # ---------------------------------------------------------------- journal
 
 @app.get("/journal", response_class=HTMLResponse)
