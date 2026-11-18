@@ -337,6 +337,13 @@ class SessionTests(PanelTestCase):
             self.assertEqual(conn.execute(
                 "SELECT count(*) FROM sessions").fetchone()[0], 0)
 
+    def test_pages_are_not_cached_by_the_browser(self):
+        # The pages do not reload themselves, so a cached copy would hide a
+        # deploy until the user clears it.
+        self.login_admin()
+        response = self.client.get("/configs")
+        self.assertEqual(response.headers.get("cache-control"), "no-store")
+
     def test_healthz_is_public(self):
         fresh = {"ts": int(time.time())}
         with mock.patch.object(app, "read_status", return_value=fresh):

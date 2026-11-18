@@ -72,6 +72,17 @@ app = FastAPI(title="deeps kaskad", docs_url=None, redoc_url=None, openapi_url=N
 app.mount("/static", StaticFiles(directory=str(BASE / "static")), name="static")
 
 
+# A page must never come from the browser cache: the panel changes on deploy,
+# the pages no longer reload themselves, and a stale copy looks like the
+# change never arrived.
+@app.middleware("http")
+async def no_store_pages(request, call_next):
+    response = await call_next(request)
+    if response.headers.get("content-type", "").startswith("text/html"):
+        response.headers["Cache-Control"] = "no-store"
+    return response
+
+
 # ---------------------------------------------------------------- config / db
 
 def cfg() -> dict:
