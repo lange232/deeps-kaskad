@@ -71,9 +71,12 @@
                 {% if alive.get(e.iface) %}<span class="oc-badge oc-badge--success" data-live="exit|{{ e.iface }}">up</span>
                 {% else %}<span class="oc-badge oc-badge--subtle" data-live="exit|{{ e.iface }}">down</span>{% endif %}
                 {% set exit_ms = latency.get(e.iface) %}
-                <span class="cell-sub oc-mono" data-live="ping|{{ e.iface }}"
-                  {% if exit_ms and client_rtt is not none %}title="client to S1 {{ client_rtt }} ms + S1 to exit {{ exit_ms }} ms"{% elif exit_ms %}title="S1 to exit only; the client does not answer ping"{% endif %}
-                  >{% if exit_ms and client_rtt is not none %}≈ {{ client_rtt + exit_ms }} ms · client {{ client_rtt }} + exit {{ exit_ms }} ms{% elif exit_ms %}exit {{ exit_ms }} ms{% else %}—{% endif %}</span>
+                <span class="ping">
+                  <span class="oc-mono ping__total" data-live="ping|{{ e.iface }}"
+                    {% if exit_ms and client_rtt is not none %}title="client to S1 {{ client_rtt }} ms + S1 to exit {{ exit_ms }} ms"{% elif exit_ms %}title="S1 to exit only; the client does not answer ping"{% endif %}
+                    >{% if exit_ms and client_rtt is not none %}≈ {{ client_rtt + exit_ms }} ms{% elif exit_ms %}exit {{ exit_ms }} ms{% else %}—{% endif %}</span>
+                  <span class="cell-sub oc-mono" data-live="pingparts|{{ e.iface }}">{% if exit_ms and client_rtt is not none %}client {{ client_rtt }} + exit {{ exit_ms }} ms{% endif %}</span>
+                </span>
               </div>
             </td>
             <td>

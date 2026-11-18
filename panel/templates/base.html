@@ -62,6 +62,9 @@
   .oc-textarea { min-height: 180px; resize: vertical; font-family: var(--ui-font-mono, ui-monospace, monospace); font-size: 12px; }
   .name-cell { display: flex; align-items: center; gap: 8px; }
   .cell-sub { font-size: 11px; color: var(--ui-text-faint); }
+  /* The latency is two lines: the total, then how it splits. */
+  .ping { display: inline-flex; flex-direction: column; gap: 2px; line-height: 1.35; }
+  .ping__total { font-size: 12px; color: var(--ui-text-base); }
   /* A row of a list is its own link; the button that used to open it is gone. */
   tr[data-href] { cursor: pointer; }
   tr[data-href]:focus-visible { outline: 2px solid var(--ui-border-focus); outline-offset: -2px; }
@@ -157,8 +160,14 @@
         put(el, 'exit ' + exit.rtt_ms + ' ms');
         return;
       }
-      put(el, '≈ ' + (rtt + exit.rtt_ms) + ' ms · client ' + rtt +
-          ' + exit ' + exit.rtt_ms + ' ms');
+      put(el, '≈ ' + (rtt + exit.rtt_ms) + ' ms');
+    };
+    var pingParts = function (el, exit) {
+      if (!exit || !exit.enabled || !exit.alive || !exit.rtt_ms || rtt === null) {
+        put(el, '');
+        return;
+      }
+      put(el, 'client ' + rtt + ' + exit ' + exit.rtt_ms + ' ms');
     };
     function apply(data) {
       var exits = data.exits || {};
@@ -186,6 +195,8 @@
           badge(el, exits[key]);
         } else if (kind === 'ping') {
           ping(el, exits[key]);
+        } else if (kind === 'pingparts') {
+          pingParts(el, exits[key]);
         } else if (kind === 'lastok') {
           item = exits[key];
           put(el, item && item.last_ok ? kaskadRel(item.last_ok) : 'no data');
