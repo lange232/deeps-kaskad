@@ -368,5 +368,19 @@ class RenderTests(unittest.TestCase):
         self.assertIn("pk-off", text)  # the caller filters by enabled, not the renderer
 
 
+@unittest.skipUnless(app, "fastapi is not installed")
+class RemoteIpTests(unittest.TestCase):
+    def test_the_port_is_dropped(self):
+        self.assertEqual(app.remote_ip("77.88.99.3:51820"), "77.88.99.3")
+
+    def test_ipv6_keeps_its_colons(self):
+        self.assertEqual(app.remote_ip("[2001:db8::1]:51820"), "2001:db8::1")
+
+    def test_a_peer_that_never_connected_has_no_address(self):
+        self.assertEqual(app.remote_ip("(none)"), "")
+        self.assertEqual(app.remote_ip(""), "")
+        self.assertEqual(app.remote_ip(None), "")
+
+
 if __name__ == "__main__":
     unittest.main()

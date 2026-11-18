@@ -398,6 +398,10 @@ so the device has to import the file again; the keys stay the same.
 while the account has none), for app versions that predate the account model.
 New code should use `configs`.
 
+Each configuration in `configs` carries `remote_ip`: the peer's address as the
+host sees it, without the port. It is an empty string while the peer has never
+connected, and the current address after a roam.
+
 Each configuration carries `device_id`, the identifier the app sends on its
 first connect (`[A-Za-z0-9-]`, 8 to 64 characters). The name stays human: the
 app sends the device model there, and the panel can rename a configuration

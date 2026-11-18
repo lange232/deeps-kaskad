@@ -1451,6 +1451,29 @@ class MobileApiTests(PanelTestCase):
                                    headers=headers)
         self.assertEqual(response.status_code, 404)
 
+    def test_configs_carry_the_remote_address(self):
+        aid, cid = self.seed_client()
+        with app.db() as conn:
+            pub = conn.execute(
+                "SELECT public_key FROM clients WHERE id = ?", (cid,)
+            ).fetchone()[0]
+        peers = {pub: {"endpoint": "77.88.99.3:51820", "handshake": 1,
+                       "rx": 1, "tx": 1}}
+        live = {"ok": True, "device": {}, "peers": peers}
+        with mock.patch.object(app, "iface_dump", return_value=live):
+            response = self.client.post("/api/login", data={
+                "email": "c1@example.com", "password": USER_PASSWORD,
+            })
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["configs"][0]["remote_ip"], "77.88.99.3")
+
+    def test_a_silent_peer_has_an_empty_remote_address(self):
+        self.seed_client()
+        headers, payload = self.api_login()
+        self.assertEqual(payload["configs"][0]["remote_ip"], "")
+        response = self.client.get("/api/me", headers=headers)
+        self.assertEqual(response.json()["configs"][0]["remote_ip"], "")
+
     def test_conf_is_plain_text_for_the_app(self):
         # The app reads the body as text; only browser downloads changed.
         aid, cid = self.seed_client()

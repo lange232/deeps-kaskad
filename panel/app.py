@@ -629,6 +629,20 @@ def iface_dump(name: str) -> dict:
     return {"device": device, "peers": peers, "ok": True}
 
 
+def remote_ip(endpoint: str) -> str:
+    """The peer address without the port, as the host sees it.
+
+    An empty string means the peer never connected (awg prints "(none)"):
+    there is no address to show, and the client hides the field.
+    """
+    value = (endpoint or "").strip()
+    if not value or value == "(none)":
+        return ""
+    if value.startswith("["):  # [2001:db8::1]:51820
+        return value[1:].split("]", 1)[0]
+    return value.rsplit(":", 1)[0] if ":" in value else value
+
+
 def apply_routing() -> None:
     try:
         result = routing.apply()
@@ -1301,6 +1315,7 @@ def config_view(cl, live: dict, assigned=None) -> dict:
         "enabled": bool(cl["enabled"]),
         "internet": config_has_internet(cl),
         "exits": [e["name"] for e in assigned],
+        "remote_ip": remote_ip(st.get("endpoint", "")),
         "handshake": st.get("handshake", 0),
         "rx": st.get("rx", 0),
         "tx": st.get("tx", 0),
