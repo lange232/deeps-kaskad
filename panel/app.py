@@ -2324,13 +2324,22 @@ def config_order_reset(request: Request, cid: int, csrf_token: str = Form(...)):
     return RedirectResponse(f"/configs/{cid}?ok=order+reset+to+account", status_code=303)
 
 
-def conf_response(cl) -> PlainTextResponse:
+def conf_response(cl, download: bool = True) -> Response:
+    """The client config as a download, or as text for the mobile API.
+
+    A browser download must not be text/plain: Android Chrome then ignores the
+    .conf extension and saves the file as .txt. The API keeps text/plain, so
+    the app reads the body exactly as before.
+    """
     try:
         body = config_conf(cfg(), cl)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
-    return PlainTextResponse(
+    if not download:
+        return PlainTextResponse(body)
+    return Response(
         body,
+        media_type="application/octet-stream",
         headers={"Content-Disposition": f'attachment; filename="{cl["name"]}.conf"'},
     )
 
@@ -3347,7 +3356,7 @@ def api_conf(request: Request, config_id: int | None = None):
     _, account = api_user(request)
     cl = api_config(account, config_id)
     audit("config_downloaded", f"{account['email']} {cl['name']} via=api")
-    return conf_response(cl)
+    return conf_response(cl, download=False)
 
 
 @app.get("/api/me/configs/{cid}/conf")
@@ -3355,7 +3364,7 @@ def api_config_conf(request: Request, cid: int):
     _, account = api_user(request)
     cl = api_config(account, cid)
     audit("config_downloaded", f"{account['email']} {cl['name']} via=api")
-    return conf_response(cl)
+    return conf_response(cl, download=False)
 
 
 @app.post("/api/logout")

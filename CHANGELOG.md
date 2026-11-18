@@ -32,6 +32,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   scroll position, focus and an open `<details>` (QR, config) stay as they
   were. `/status.json` returns the account's own configurations only.
 
+### Fixed
+
+- Downloading a `.conf` from the panel no longer ends up as `name.conf.txt` on
+  Android: the browser download is sent as `application/octet-stream`, so
+  Chrome keeps the extension from `Content-Disposition`. The mobile API still
+  returns `text/plain`, unchanged for the app.
+
 ## [0.4.4] - 2026-11-18
 
 ### Fixed

@@ -804,6 +804,17 @@ class RoutedChoiceTests(PanelTestCase):
         self.assertEqual(response.status_code, 200)
         return response.text
 
+    def test_the_download_keeps_the_conf_extension(self):
+        # Android Chrome turns a text/plain download into .txt, so the panel
+        # hands the file over as a generic binary stream.
+        aid, cid, routed = self.account_with_routed()
+        self.login_admin()
+        response = self.client.get(f"/configs/{cid}/conf")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.headers["content-type"], "application/octet-stream")
+        self.assertEqual(response.headers["content-disposition"],
+                         'attachment; filename="c1.conf"')
+
     def test_a_foreign_subnet_is_ignored(self):
         aid, cid, routed = self.account_with_routed()
         stranger = self.seed_exit("other", "awg9", mode="routes",
@@ -1439,6 +1450,15 @@ class MobileApiTests(PanelTestCase):
         response = self.client.get(f"/api/me/configs/{new_cid}/conf",
                                    headers=headers)
         self.assertEqual(response.status_code, 404)
+
+    def test_conf_is_plain_text_for_the_app(self):
+        # The app reads the body as text; only browser downloads changed.
+        aid, cid = self.seed_client()
+        self.grant(aid, cid, self.seed_exit())
+        headers, _ = self.api_login()
+        response = self.client.get("/api/me/conf", headers=headers)
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertTrue(response.headers["content-type"].startswith("text/plain"))
 
     def test_limit_is_enforced(self):
         self.seed_client(max_configs=1)
