@@ -48,6 +48,7 @@ from fastapi.templating import Jinja2Templates
 import auth
 import awgconf
 import routing
+import traffic
 
 BASE = Path(__file__).resolve().parent
 CONFIG_PATH = Path(os.environ.get("KASKAD_CONFIG", "/etc/kaskad/panel.json"))
@@ -182,6 +183,23 @@ def init_db() -> None:
                 ts TEXT NOT NULL,
                 action TEXT NOT NULL,
                 detail TEXT
+            );
+            -- Traffic history written by kaskad-traffic: five-minute deltas
+            -- kept for a week and hourly deltas kept for 90 days.
+            CREATE TABLE IF NOT EXISTS traffic (
+                client_id INTEGER NOT NULL,
+                ts INTEGER NOT NULL,
+                step INTEGER NOT NULL,
+                rx INTEGER NOT NULL,
+                tx INTEGER NOT NULL,
+                PRIMARY KEY (client_id, ts, step)
+            );
+            CREATE TABLE IF NOT EXISTS traffic_state (
+                client_id INTEGER PRIMARY KEY,
+                public_key TEXT NOT NULL,
+                rx INTEGER NOT NULL,
+                tx INTEGER NOT NULL,
+                ts INTEGER NOT NULL
             );
             CREATE TABLE IF NOT EXISTS sessions (
                 jti TEXT PRIMARY KEY,
@@ -985,6 +1003,12 @@ def config_by_device(aid: int, device_id: str):
             "SELECT * FROM clients WHERE account_id = ? AND device_id = ?",
             (aid, device_id),
         ).fetchone()
+
+
+def drop_traffic(conn, cid: int) -> None:
+    """Removes a deleted configuration's history and sampler baseline."""
+    conn.execute("DELETE FROM traffic WHERE client_id = ?", (cid,))
+    conn.execute("DELETE FROM traffic_state WHERE client_id = ?", (cid,))
 
 
 def created_config_view(cl) -> dict:
@@ -2773,6 +2797,7 @@ def account_delete(request: Request, aid: int, csrf_token: str = Form(...)):
                 conn.execute(
                     "DELETE FROM client_internet_exits WHERE client_id = ?", (cid,)
                 )
+                drop_traffic(conn, cid)
             conn.execute("DELETE FROM account_exits WHERE account_id = ?", (aid,))
             conn.execute("DELETE FROM accounts WHERE id = ?", (aid,))
             apply_conf(cfg(), conn)
@@ -3357,6 +3382,7 @@ def api_delete_config(request: Request, cid: int):
             conn.execute("DELETE FROM clients WHERE id = ?", (cid,))
             conn.execute("DELETE FROM client_exits WHERE client_id = ?", (cid,))
             conn.execute("DELETE FROM client_internet_exits WHERE client_id = ?", (cid,))
+            drop_traffic(conn, cid)
             apply_conf(cfg(), conn)
     except RuntimeError as exc:
         raise HTTPException(status_code=500, detail=apply_error_message(exc, "not deleted"))
@@ -3380,6 +3406,33 @@ def api_config_conf(request: Request, cid: int):
     cl = api_config(account, cid)
     audit("config_downloaded", f"{account['email']} {cl['name']} via=api")
     return conf_response(cl, download=False)
+
+
+@app.get("/api/me/configs/{cid}/traffic")
+def api_config_traffic(request: Request, cid: int, hours: int = 24):
+    """Traffic deltas of one configuration.
+
+    Five-minute points for a week, hourly beyond that; a gap means the
+    sampler was not running, an empty list means there is no history yet.
+    """
+    _, account = api_user(request)
+    cl = api_config(account, cid)
+    hours = max(1, min(hours, 2160))
+    step = traffic.STEP if hours <= 7 * 24 else traffic.HOUR
+    since = int(time.time()) - hours * 3600
+    with db() as conn:
+        rows = conn.execute(
+            "SELECT ts, rx, tx FROM traffic WHERE client_id = ? AND step = ? "
+            "AND ts >= ? ORDER BY ts",
+            (cl["id"], step, since),
+        ).fetchall()
+    return {
+        "config_id": cl["id"],
+        "step_seconds": step,
+        "points": [
+            {"ts": r["ts"], "rx": r["rx"], "tx": r["tx"]} for r in rows
+        ],
+    }
 
 
 @app.post("/api/logout")

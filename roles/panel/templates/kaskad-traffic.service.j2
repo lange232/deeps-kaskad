@@ -1,0 +1,11 @@
+# {{ ansible_managed }}
+[Unit]
+Description=kaskad traffic history sampler
+After=kaskad-panel.service
+
+[Service]
+Type=oneshot
+User=root
+Environment=KASKAD_CONFIG=/etc/kaskad/panel.json
+Environment=KASKAD_DB=/var/lib/kaskad/panel.db
+ExecStart=/opt/kaskad/venv/bin/python /opt/kaskad/app/traffic.py

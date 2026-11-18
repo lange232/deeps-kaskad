@@ -388,6 +388,10 @@ GET  /api/me/subnets?config_id=N  subnets the account grants, with the choice of
                                     configuration (id, name, comment, routes, enabled)
 POST /api/me/subnets              subnet_id (repeated) + config_id -> switches subnets on;
                                     any subset of the grants, an empty list turns all off
+GET  /api/me/configs/{id}/traffic?hours=24
+                                    traffic history: {config_id, step_seconds, points};
+                                    points are {ts, rx, tx} deltas in ascending order,
+                                    five-minute buckets up to a week, hourly up to 90 days
 POST /api/logout                  revokes the token
 ```
 
@@ -401,6 +405,14 @@ New code should use `configs`.
 Each configuration in `configs` carries `remote_ip`: the peer's address as the
 host sees it, without the port. It is an empty string while the peer has never
 connected, and the current address after a roam.
+
+`kaskad-traffic.timer` runs every five minutes: it reads the peer counters
+from `awg show awg0 dump`, stores the delta per configuration and keeps
+five-minute points for a week and hourly points for 90 days. A counter that
+went backwards (reboot, reissued peer) starts a new baseline instead of a
+negative delta; a gap in the history means the sampler was down. The endpoint
+uses 300-second points for `hours` up to 168 and 3600 beyond, and `step_seconds`
+in the response tells the client which one it got.
 
 Each configuration carries `device_id`, the identifier the app sends on its
 first connect (`[A-Za-z0-9-]`, 8 to 64 characters). The name stays human: the

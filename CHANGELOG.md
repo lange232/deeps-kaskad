@@ -18,6 +18,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A configuration can be renamed: `POST /configs/{id}/name` in the panel and
   `POST /me/configs/{id}/name` in the cabinet, with the same name rules. This
   fixes the old glued names like `sm-s921b-ba9bcded` by hand.
+- Traffic history: `kaskad-traffic.timer` samples the peer counters every
+  five minutes and stores per-configuration deltas (five-minute points for a
+  week, hourly for 90 days). `GET /api/me/configs/{id}/traffic?hours=24`
+  returns them as ascending `{ts, rx, tx}` points with `step_seconds`.
 - The mobile API returns `remote_ip` for every configuration: the peer's
   address as the host sees it, without the port (empty while it never
   connected, the current address after a roam). The app shows it next to the

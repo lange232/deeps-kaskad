@@ -1474,6 +1474,83 @@ class MobileApiTests(PanelTestCase):
         response = self.client.get("/api/me", headers=headers)
         self.assertEqual(response.json()["configs"][0]["remote_ip"], "")
 
+    def seed_traffic(self, cid):
+        now = int(time.time())
+        with app.db() as conn:
+            conn.executemany(
+                "INSERT INTO traffic (client_id, ts, step, rx, tx) "
+                "VALUES (?, ?, ?, ?, ?)",
+                [
+                    (cid, now - 600, 300, 100, 200),
+                    (cid, now - 300, 300, 300, 400),
+                    (cid, now - 600, 3600, 100, 200),
+                ],
+            )
+        return now
+
+    def test_traffic_history_is_returned_in_order(self):
+        aid, cid = self.seed_client()
+        now = self.seed_traffic(cid)
+        headers, _ = self.api_login()
+        response = self.client.get(
+            f"/api/me/configs/{cid}/traffic?hours=1", headers=headers
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        payload = response.json()
+        self.assertEqual(payload["config_id"], cid)
+        self.assertEqual(payload["step_seconds"], 300)
+        self.assertEqual(
+            payload["points"],
+            [
+                {"ts": now - 600, "rx": 100, "tx": 200},
+                {"ts": now - 300, "rx": 300, "tx": 400},
+            ],
+        )
+
+    def test_traffic_switches_to_hourly_beyond_a_week(self):
+        aid, cid = self.seed_client()
+        self.seed_traffic(cid)
+        headers, _ = self.api_login()
+        response = self.client.get(
+            f"/api/me/configs/{cid}/traffic?hours=200", headers=headers
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["step_seconds"], 3600)
+        self.assertEqual(len(response.json()["points"]), 1)
+
+    def test_empty_history_is_an_empty_list(self):
+        aid, cid = self.seed_client()
+        headers, _ = self.api_login()
+        response = self.client.get(
+            f"/api/me/configs/{cid}/traffic", headers=headers
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["points"], [])
+
+    def test_deleting_a_configuration_drops_its_history(self):
+        aid, cid = self.seed_client()
+        self.seed_traffic(cid)
+        headers, _ = self.api_login()
+        response = self.client.delete(f"/api/me/configs/{cid}", headers=headers)
+        self.assertEqual(response.status_code, 200, response.text)
+        with app.db() as conn:
+            self.assertEqual(
+                conn.execute("SELECT count(*) FROM traffic").fetchone()[0], 0
+            )
+            self.assertEqual(
+                conn.execute("SELECT count(*) FROM traffic_state").fetchone()[0], 0
+            )
+
+    def test_traffic_of_a_foreign_configuration_is_not_found(self):
+        self.seed_client()
+        aid2, cid2 = self.seed_client(name="c2", ip="10.80.0.9",
+                                      email="c2@example.com")
+        headers, _ = self.api_login()
+        response = self.client.get(
+            f"/api/me/configs/{cid2}/traffic", headers=headers
+        )
+        self.assertEqual(response.status_code, 404)
+
     def test_conf_is_plain_text_for_the_app(self):
         # The app reads the body as text; only browser downloads changed.
         aid, cid = self.seed_client()
