@@ -553,7 +553,7 @@ class AdminPingTests(PanelTestCase):
     def test_overview_measures_the_device_round_trip(self):
         self.seed_exit("e1", "awg1", mode="internet")
         status = {"exits": {"awg1": {"alive": True, "rtt_ms": 40}},
-                  "active": "awg1", "clients": {}, "ts": 0}
+                  "active": "awg1", "clients": {}, "ts": int(time.time())}
         self.login_admin()
         with mock.patch.object(app, "read_status", return_value=status), mock.patch.object(app, "run_dir", return_value="awg1"):
             response = self.client.get("/")
@@ -1034,6 +1034,7 @@ class ConfigPingTests(PanelTestCase):
 
     def test_card_shows_the_total_latency(self):
         text = self.card({
+            "ts": int(time.time()),
             "exits": {"awg1": {"alive": True, "rtt_ms": 40}},
             "client_ping": {"10.80.0.2": 10},
         })
@@ -1042,11 +1043,21 @@ class ConfigPingTests(PanelTestCase):
 
     def test_card_falls_back_to_the_exit_latency(self):
         text = self.card({
+            "ts": int(time.time()),
             "exits": {"awg1": {"alive": True, "rtt_ms": 40}},
             "client_ping": {},
         })
         self.assertIn("exit 40 ms", text)
         self.assertIn("S1 to exit only", text)
+
+    def test_card_does_not_claim_a_stale_exit_is_up(self):
+        text = self.card({
+            "ts": int(time.time()) - 300,
+            "exits": {"awg1": {"alive": True, "rtt_ms": 40}},
+        })
+        self.assertIn(">no data</span>", text)
+        self.assertNotIn(">up</span>", text)
+        self.assertNotIn("40 ms", text)
 
 
 class NavigationTests(PanelTestCase):
@@ -1067,7 +1078,8 @@ class NavigationTests(PanelTestCase):
     def test_overview_status_tracks_failover_and_is_admin_only(self):
         first = self.seed_exit("first", "awg1")
         second = self.seed_exit("second", "awg2")
-        status = {"exits": {"awg1": {"alive": False}, "awg2": {"alive": True}}}
+        status = {"ts": int(time.time()),
+                  "exits": {"awg1": {"alive": False}, "awg2": {"alive": True}}}
         self.login_admin()
         with mock.patch.object(app, "read_status", return_value=status), \
                 mock.patch.object(app, "run_dir", return_value="awg2"), \
@@ -1079,6 +1091,40 @@ class NavigationTests(PanelTestCase):
         self.seed_account()
         self.login("c1@example.com", USER_PASSWORD)
         self.assertNotIn("overview", self.client.get("/status.json?overview=true").json())
+
+    def test_expired_failover_status_is_not_reported_as_healthy(self):
+        self.seed_exit("first", "awg1")
+        self.login_admin()
+        status = {"ts": int(time.time()) - 120, "active": "awg1",
+                  "exits": {"awg1": {"alive": True, "rtt_ms": 23}}}
+        with mock.patch.object(app, "read_status", return_value=status), \
+                mock.patch.object(app, "run_dir", return_value="awg1"), \
+                mock.patch.object(app, "services", return_value={}):
+            response = self.client.get("/status.json?overview=true")
+            page = self.client.get("/")
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertFalse(data["status_fresh"])
+        self.assertIsNone(data["active"])
+        self.assertIsNone(data["exits"]["awg1"]["alive"])
+        self.assertIsNone(data["overview"]["active"])
+        self.assertIn("Exit status unavailable", data["overview"]["issues"][0]["text"])
+        self.assertIn('role="status">Stale · exit status unavailable', page.text)
+        self.assertNotIn('href="/exits/1">first</a>', page.text)
+
+    def test_the_exit_list_does_not_claim_a_stale_status(self):
+        self.seed_exit("first", "awg1")
+        self.login_admin()
+        status = {"ts": int(time.time()) - 300, "active": "awg1",
+                  "exits": {"awg1": {"alive": True, "rtt_ms": 23}}}
+        with mock.patch.object(app, "read_status", return_value=status), \
+                mock.patch.object(app, "run_dir", return_value="awg1"):
+            page = self.client.get("/exits")
+        self.assertEqual(page.status_code, 200)
+        self.assertIn('data-live="status">status unavailable', page.text)
+        self.assertIn(">no data</span>", page.text)
+        self.assertNotIn(">up</span>", page.text)
+        self.assertNotIn('oc-badge--accent">active', page.text)
 
     def test_current_page_is_marked_for_screen_readers(self):
         self.login_admin()
@@ -1488,6 +1534,54 @@ class CabinetTrafficTests(PanelTestCase):
             )
         return now
 
+    def assert_history_removed(self, cid):
+        with app.db() as conn:
+            self.assertEqual(conn.execute(
+                "SELECT count(*) FROM traffic WHERE client_id = ?", (cid,)
+            ).fetchone()[0], 0)
+            self.assertEqual(conn.execute(
+                "SELECT count(*) FROM traffic_state WHERE client_id = ?", (cid,)
+            ).fetchone()[0], 0)
+
+    def test_admin_delete_clears_history_and_baseline(self):
+        _, cid = self.seed_client()
+        self.seed_traffic(cid)
+        with app.db() as conn:
+            conn.execute("INSERT INTO traffic_state VALUES (?, ?, 1, 2, ?)",
+                         (cid, app.config_row(cid)["public_key"], int(time.time())))
+        self.login_admin()
+        response = self.client.post(f"/configs/{cid}/delete", data={
+            "csrf_token": self.csrf(f"/configs/{cid}"),
+        })
+        self.assertEqual(response.status_code, 303)
+        self.assert_history_removed(cid)
+
+    def test_stale_status_does_not_claim_an_exit_is_in_use(self):
+        aid, cid = self.seed_client()
+        self.grant(aid, cid, self.seed_exit("first", "awg1"))
+        self.login("c1@example.com", USER_PASSWORD)
+        stale = {"ts": int(time.time()) - 300,
+                 "clients": {"10.80.0.2": "awg1"},
+                 "exits": {"awg1": {"alive": True, "rtt_ms": 23}}}
+        with mock.patch.object(app, "read_status", return_value=stale):
+            text = self.client.get(f"/me/configs/{cid}").text
+        self.assertRegex(text, r"no data</span>\s*exit status unavailable")
+        self.assertNotIn("in use now", text)
+        self.assertNotIn('data-live="exit|awg1">up', text)
+
+    def test_cabinet_delete_clears_history_and_baseline(self):
+        _, cid = self.seed_client()
+        self.seed_traffic(cid)
+        with app.db() as conn:
+            conn.execute("INSERT INTO traffic_state VALUES (?, ?, 1, 2, ?)",
+                         (cid, app.config_row(cid)["public_key"], int(time.time())))
+        self.login("c1@example.com", USER_PASSWORD)
+        response = self.client.post(f"/me/configs/{cid}/delete", data={
+            "csrf_token": self.csrf(f"/me/configs/{cid}"),
+        })
+        self.assertEqual(response.status_code, 303)
+        self.assert_history_removed(cid)
+
     def test_the_cabinet_draws_the_chart(self):
         aid, cid = self.seed_client()
         self.seed_traffic(cid)
@@ -1531,6 +1625,24 @@ class MobileApiTests(PanelTestCase):
         _, payload = self.api_login()
         self.assertEqual(payload["client"]["id"], cid)
         self.assertEqual([c["id"] for c in payload["configs"]], [cid])
+
+    def test_exits_api_says_unknown_when_the_daemon_is_silent(self):
+        aid, cid = self.seed_client()
+        self.grant(aid, cid, self.seed_exit("first", "awg1"))
+        headers, _ = self.api_login()
+        fresh = {"ts": int(time.time()),
+                 "exits": {"awg1": {"alive": True, "rtt_ms": 12}}}
+        with mock.patch.object(app, "read_status", return_value=fresh):
+            live = self.client.get("/api/me/exits", headers=headers).json()[0]
+        self.assertTrue(live["alive"])
+        self.assertTrue(live["status_fresh"])
+        old = {"ts": int(time.time()) - 300,
+               "exits": {"awg1": {"alive": True, "rtt_ms": 12}}}
+        with mock.patch.object(app, "read_status", return_value=old):
+            silent = self.client.get("/api/me/exits", headers=headers).json()[0]
+        self.assertIsNone(silent["alive"])
+        self.assertIsNone(silent["rtt_ms"])
+        self.assertFalse(silent["status_fresh"])
 
     def test_create_conf_order_and_delete(self):
         aid, cid = self.seed_client(max_configs=5)

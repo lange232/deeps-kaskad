@@ -88,7 +88,8 @@ def sample(conn: sqlite3.Connection, peers: dict, now: int | None = None) -> dic
 
     The first run of a configuration only stores its counters as the
     baseline: the traffic that happened before the panel knew the peer is
-    not history.
+    not history. A late run also resets the baseline rather than assigning
+    an unknown period's traffic to the current five-minute interval.
     """
     now = int(time.time()) if now is None else int(now)
     state = {
@@ -101,7 +102,8 @@ def sample(conn: sqlite3.Connection, peers: dict, now: int | None = None) -> dic
             continue
         rx, tx = int(peer["rx"]), int(peer["tx"])
         prev = state.get(cl["id"])
-        if prev is None or prev["public_key"] != cl["public_key"]:
+        if (prev is None or prev["public_key"] != cl["public_key"]
+                or not 0 <= now - prev["ts"] <= STEP + 60):
             conn.execute(
                 "INSERT INTO traffic_state (client_id, public_key, rx, tx, ts) "
                 "VALUES (?, ?, ?, ?, ?) ON CONFLICT(client_id) DO UPDATE SET "

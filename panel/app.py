@@ -727,16 +727,12 @@ def build_traffic_chart(step: int, since: int, now: int, rows) -> dict | None:
     for key in range(math.ceil(span / bucket)):
         start = since + key * bucket
         end = min(now, start + bucket)
-        label = f"{traffic_time_label(start)} – {traffic_time_label(end)}"
-        if key in sums:
-            rx, tx = sums[key]
-            label += f" · Downloaded {human_bytes(tx)} · Uploaded {human_bytes(rx)}"
-        else:
-            label += " · No sample"
-        intervals.append(label)
+        rx, tx = sums.get(key, (None, None))
+        intervals.append({"from": start, "to": end, "rx": rx, "tx": tx})
     return {
         "width": CHART_WIDTH, "height": CHART_HEIGHT,
         "bars": bars, "intervals": intervals, "interval_fraction": bucket / span,
+        "from_ts": since, "to_ts": now,
         "total_rx": human_bytes(total_rx),
         "total_tx": human_bytes(total_tx),
         "peak": human_rate(peak),
@@ -1438,7 +1434,19 @@ def config_view(cl, live: dict, assigned=None) -> dict:
 
 
 def fresh_routing_status(status: dict, now: int) -> bool:
-    return bool(status.get("ts") and 0 <= now - status["ts"] <= 60)
+    ts = status.get("ts")
+    return isinstance(ts, (int, float)) and 0 <= now - ts <= 60
+
+
+def routing_status(now: int | None = None) -> tuple[dict, bool]:
+    """Failover status, emptied when it is too old to describe anything.
+
+    The daemon writes it every ten seconds. A stale file outlives a crash, so
+    every page must treat its exits as unknown rather than as healthy.
+    """
+    status = read_status()
+    fresh = fresh_routing_status(status, int(time.time()) if now is None else now)
+    return (status if fresh else {}), fresh
 
 
 def selected_internet_iface(view: dict, status: dict, shared: bool = False) -> str:
@@ -1627,9 +1635,10 @@ def healthz():
         return JSONResponse({"ok": False, "error": "database"}, status_code=503)
     status = read_status()
     ts = int(status.get("ts") or 0)
-    age = int(time.time()) - ts if ts else None
-    fresh = age is not None and age <= 120
-    active = run_dir("active-exit")
+    now = int(time.time())
+    age = now - ts if ts else None
+    fresh = fresh_routing_status(status, now)
+    active = run_dir("active-exit") if fresh else None
     return JSONResponse({
         "ok": fresh,
         "version": c.get("version", ""),
@@ -1647,8 +1656,8 @@ def overview(request: Request, err: str | None = None, ok: str | None = None):
     c = cfg()
     live = iface_dump(c["iface"])["peers"]
     configs = [config_view(cl, live) for cl in config_rows()]
-    status = read_status()
-    active = run_dir("active-exit")
+    status, fresh = routing_status()
+    active = run_dir("active-exit") if fresh else None
     manual = setting("manual_exit") or ""
     exits = [exit_view(e, status, active, manual) for e in exits_rows()]
     with db() as conn:
@@ -1659,20 +1668,23 @@ def overview(request: Request, err: str | None = None, ok: str | None = None):
     online = sum(1 for cl in configs if cl["handshake"] and now - cl["handshake"] < 180)
     rx = sum(cl["rx"] for cl in configs)
     tx = sum(cl["tx"] for cl in configs)
-    health = overview_health(exits)
+    health = overview_health(exits, fresh)
     return render_page(
         request, "overview.html", "overview",
         csrf=csrf(token), err=err, ok=ok,
-        clients=configs, exits=exits, health=health, online=online, rx=rx, tx=tx,
+        clients=configs, exits=exits, health=health, status_fresh=fresh,
+        online=online, rx=rx, tx=tx,
         events=events,
     )
 
 
-def overview_health(exits: list[dict]) -> dict:
+def overview_health(exits: list[dict], status_fresh: bool) -> dict:
     active = next((e for e in exits if e["active"] and e["enabled"]
                    and e["mode"] == "internet"), None)
     issues = []
-    if not active or not active["alive"]:
+    if not status_fresh:
+        issues.append({"url": "/settings#services", "text": "Exit status unavailable → System"})
+    elif not active or not active["alive"]:
         issues.append({"url": "/exits", "text": "No healthy active internet exit → Exits"})
     for e in exits:
         if e["enabled"] and e["alive"] is False:
@@ -1692,8 +1704,8 @@ EXIT_DEFAULTS = {"name": "", "mode": "internet", "priority": "", "routes": "", "
 @app.get("/exits", response_class=HTMLResponse)
 def exits_page(request: Request, mode: str | None = None):
     token = require_admin(request)
-    status = read_status()
-    active = run_dir("active-exit")
+    status, fresh = routing_status()
+    active = run_dir("active-exit") if fresh else None
     manual = setting("manual_exit") or ""
     items = [exit_view(e, status, active, manual) for e in exits_rows()]
     if mode in ("internet", "routes"):
@@ -1701,6 +1713,7 @@ def exits_page(request: Request, mode: str | None = None):
     return render_page(
         request, "exits.html", "exits",
         csrf=csrf(token), exits=items, mode=mode or "", manual_exit=manual,
+        routing_fresh=fresh,
         counts={
             "all": len(exits_rows()),
             "internet": sum(1 for e in exits_rows() if e["mode"] == "internet"),
@@ -1727,10 +1740,9 @@ def exit_page(request: Request, eid: int, err: str | None = None, ok: str | None
         configs = conn.execute("SELECT * FROM clients WHERE enabled = 1 ORDER BY name").fetchall()
     if not row:
         raise HTTPException(status_code=404)
-    status = read_status()
-    active = run_dir("active-exit")
+    status, fresh = routing_status()
+    active = run_dir("active-exit") if fresh else None
     manual = setting("manual_exit") or ""
-    fresh = fresh_routing_status(status, int(time.time()))
     current, reserve = [], []
     if row["enabled"]:
         for cl in configs:
@@ -2285,15 +2297,17 @@ def config_page(
     account = account_row(int(cl["account_id"])) if cl["account_id"] else None
     live = iface_dump(c["iface"])["peers"]
     view = config_view(cl, live)
-    status = read_status()
+    status, routing_fresh = routing_status()
     client_rtt = (status.get("client_ping") or {}).get(cl["ip"])
+    states = status.get("exits") or {}
+    known = exits_rows()
     latency = {
-        iface: info.get("rtt_ms")
-        for iface, info in (status.get("exits") or {}).items()
+        e["iface"]: (states.get(e["iface"], {}).get("rtt_ms") if routing_fresh else None)
+        for e in known
     }
     alive = {
-        iface: bool(info.get("alive"))
-        for iface, info in (status.get("exits") or {}).items()
+        e["iface"]: (bool(states.get(e["iface"], {}).get("alive")) if routing_fresh else None)
+        for e in known
     }
     try:
         conf = mask_conf(config_conf(c, cl))
@@ -2313,6 +2327,7 @@ def config_page(
                                            not cl["account_id"] and not config_internet_exits(cl)),
         internet_exits=config_internet_exits(cl),
         latency=latency, alive=alive, client_rtt=client_rtt, conf=conf,
+        routing_fresh=routing_fresh,
         accounts=accounts,
         routed_choices=[
             {"id": r["id"], "name": r["comment"] or r["name"], "routes": r["routes"],
@@ -2457,6 +2472,7 @@ def delete_config(request: Request, cid: int, csrf_token: str = Form(...)):
             conn.execute("DELETE FROM clients WHERE id = ?", (cid,))
             conn.execute("DELETE FROM client_exits WHERE client_id = ?", (cid,))
             conn.execute("DELETE FROM client_internet_exits WHERE client_id = ?", (cid,))
+            drop_traffic(conn, cid)
             apply_conf(cfg(), conn)
     except RuntimeError as exc:
         print(f"config {cid}: {exc}", flush=True)
@@ -3101,17 +3117,19 @@ def me_config_page(
     cl = user_config(account, cid)
     c = cfg()
     live = iface_dump(c["iface"])["peers"]
-    status = read_status()
+    status, routing_fresh = routing_status()
     granted = config_internet_exits(cl)
     current_iface = (status.get("clients") or {}).get(cl["ip"]) or ""
     current = next((e for e in granted if e["iface"] == current_iface), None)
+    states = status.get("exits") or {}
+    known = exits_rows()
     alive = {
-        iface: bool(info.get("alive"))
-        for iface, info in (status.get("exits") or {}).items()
+        e["iface"]: (bool(states.get(e["iface"], {}).get("alive")) if routing_fresh else None)
+        for e in known
     }
     latency = {
-        iface: info.get("rtt_ms")
-        for iface, info in (status.get("exits") or {}).items()
+        e["iface"]: (states.get(e["iface"], {}).get("rtt_ms") if routing_fresh else None)
+        for e in known
     }
     try:
         conf = mask_conf(config_conf(c, cl))
@@ -3125,6 +3143,7 @@ def me_config_page(
         cl=view, diagnosis=configuration_diagnosis(view, status, int(time.time())),
         conf=conf, internet_exits=granted, current_exit=current,
         alive=alive, latency=latency, has_app=ANDROID_APK.exists(),
+        routing_fresh=routing_fresh,
         **traffic_context(cid, period),
         routed_choices=[
             {"id": r["id"], "name": r["comment"] or r["name"], "routes": r["routes"],
@@ -3237,6 +3256,7 @@ def me_config_delete(request: Request, cid: int, csrf_token: str = Form(...)):
             conn.execute("DELETE FROM clients WHERE id = ?", (cid,))
             conn.execute("DELETE FROM client_exits WHERE client_id = ?", (cid,))
             conn.execute("DELETE FROM client_internet_exits WHERE client_id = ?", (cid,))
+            drop_traffic(conn, cid)
             apply_conf(cfg(), conn)
     except RuntimeError as exc:
         print(f"config {cid}: {exc}", flush=True)
@@ -3622,14 +3642,18 @@ def api_exits(request: Request, config_id: int | None = None):
     """
     _, account = api_user(request)
     cl = api_config(account, config_id)
-    status = read_status().get("exits", {})
+    status, fresh = routing_status()
+    known = status.get("exits", {})
     return [
         {
             "id": e["id"],
             "name": e["name"],
             "comment": e["comment"],
-            "alive": bool(status.get(e["iface"], {}).get("alive")),
-            "rtt_ms": status.get(e["iface"], {}).get("rtt_ms"),
+            # null while the failover daemon has not reported: the panel has
+            # not observed this exit and must not claim that it is up.
+            "alive": bool(known.get(e["iface"], {}).get("alive")) if fresh else None,
+            "rtt_ms": known.get(e["iface"], {}).get("rtt_ms") if fresh else None,
+            "status_fresh": fresh,
         }
         for e in config_internet_exits(cl)
     ]
@@ -3742,7 +3766,7 @@ def status_json(request: Request, overview: bool = False):
         raise HTTPException(status_code=401, detail="sign in again")
 
     c = cfg()
-    status = read_status()
+    status, status_fresh = routing_status()
     live = iface_dump(c["iface"])["peers"]
     now = int(time.time())
     rows = account_configs(int(account["id"])) if account else config_rows()
@@ -3754,7 +3778,7 @@ def status_json(request: Request, overview: bool = False):
             "name": e["name"],
             "enabled": bool(e["enabled"]),
             "mode": e["mode"],
-            "alive": bool((status.get("exits") or {}).get(e["iface"], {}).get("alive")),
+            "alive": (status.get("exits") or {}).get(e["iface"], {}).get("alive"),
             "rtt_ms": (status.get("exits") or {}).get(e["iface"], {}).get("rtt_ms"),
             "last_ok": (status.get("exits") or {}).get(e["iface"], {}).get("last_ok", 0),
         }
@@ -3763,13 +3787,14 @@ def status_json(request: Request, overview: bool = False):
     current = status.get("clients") or {}
     health = {}
     if overview and role == "admin":
-        active = run_dir("active-exit")
+        active = run_dir("active-exit") if status_fresh else None
         health["overview"] = overview_health(
-            [exit_view(e, status, active) for e in exits_rows()]
+            [exit_view(e, status, active) for e in exits_rows()], status_fresh
         )
     return {
         **health,
         "ts": now,
+        "status_fresh": status_fresh,
         "active": status.get("active"),
         "online": sum(1 for v in views if v["handshake"] and now - v["handshake"] < 180),
         "rx": sum(v["rx"] for v in views),

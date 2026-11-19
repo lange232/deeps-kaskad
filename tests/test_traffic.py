@@ -113,6 +113,20 @@ class SampleTests(unittest.TestCase):
         bucket = now + 300 - (now + 300) % traffic.STEP
         self.assertEqual(self.rows(traffic.STEP), [(bucket, 0, 0)])
 
+    def test_a_missed_run_leaves_a_gap_and_resets_the_baseline(self):
+        now = 1794800100
+        traffic.sample(self.conn, self.peers(100, 200), now=now)
+        traffic.sample(self.conn, self.peers(150, 300), now=now + 300)
+        before = self.rows(traffic.STEP)
+        hourly = self.rows(traffic.HOUR)
+        traffic.sample(self.conn, self.peers(10000, 20000), now=now + 900)
+        self.assertEqual(self.rows(traffic.STEP), before)
+        self.assertEqual(self.rows(traffic.HOUR), hourly)
+        self.assertEqual((self.state()["rx"], self.state()["tx"]), (10000, 20000))
+        traffic.sample(self.conn, self.peers(10030, 20040), now=now + 1200)
+        self.assertEqual([(rx, tx) for _, rx, tx in self.rows(traffic.STEP)],
+                         [(50, 100), (30, 40)])
+
     def test_prune_drops_old_points_and_orphans(self):
         now = 1794800100
         old_raw = now - traffic.RAW_TTL - 300

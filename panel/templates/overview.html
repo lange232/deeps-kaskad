@@ -11,7 +11,7 @@
 
 <div class="stack">
   <div class="health-summary oc-panel">
-    <span id="overview-stale" class="oc-muted" role="status"></span>
+    <span id="overview-stale" class="oc-muted" role="status">{{ 'Stale · exit status unavailable' if not status_fresh }}</span>
     <div id="overview-health" class="health-issues">
     {% for issue in health.issues %}
     <a class="oc-link oc-link--alert" href="{{ issue.url }}">{{ issue.text }}</a>
@@ -38,7 +38,7 @@
     </div>
     <div class="stat-tile">
       <div class="stat-label">exits</div>
-      <div class="stat-value"><span data-live="exits-alive">{{ exits | selectattr('alive') | list | length }}</span><span class="of">of <span data-live="exits_total">{{ exits | length }}</span></span></div>
+      <div class="stat-value"><span data-live="exits-alive">{% if status_fresh %}{{ exits | selectattr('alive') | list | length }}{% else %}—{% endif %}</span><span class="of">of <span data-live="exits_total">{{ exits | length }}</span></span></div>
       <div class="stat-sub">alive by health-check</div>
     </div>
   </div>

@@ -73,6 +73,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Removing a configuration from the panel or cabinet clears its traffic
+  history and sampler baseline, so a reused ID cannot inherit another
+  device's history.
+- An expired failover status no longer presents cached exits as healthy: the
+  exit list, exit cards, configuration cards, `/status.json`, `/healthz` and
+  `/api/me/exits` report the state as unknown, and the live pages show
+  `Stale` until fresh routing status is available.
+- Traffic chart timestamps follow the reader's timezone rather than the
+  server's, and the volume labels are formatted in the browser.
+- After a missed traffic sample, the next reading resets the baseline rather
+  than assigning traffic from the gap to the current chart interval.
 - Downloading a `.conf` from the panel no longer ends up as `name.conf.txt` on
   Android: the browser download is sent as `application/octet-stream`, so
   Chrome keeps the extension from `Content-Disposition`. The mobile API still

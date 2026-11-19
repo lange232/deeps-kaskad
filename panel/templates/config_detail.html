@@ -71,7 +71,9 @@
             <td>
               {{ e.comment or e.name }}
               <div class="actions" style="margin-top:4px; gap:8px">
-                {% if alive.get(e.iface) %}<span class="oc-badge oc-badge--success" data-live="exit|{{ e.iface }}">up</span>
+                {% set exit_state = alive.get(e.iface) %}
+                {% if exit_state is none %}<span class="oc-badge oc-badge--subtle" data-live="exit|{{ e.iface }}">no data</span>
+                {% elif exit_state %}<span class="oc-badge oc-badge--success" data-live="exit|{{ e.iface }}">up</span>
                 {% else %}<span class="oc-badge oc-badge--subtle" data-live="exit|{{ e.iface }}">down</span>{% endif %}
                 {% set exit_ms = latency.get(e.iface) %}
                 <span class="ping">

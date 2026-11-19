@@ -33,30 +33,57 @@
       </div>
       <script>
       (function () {
-        const labels = {{ chart.intervals | tojson }};
+        const intervals = {{ chart.intervals | tojson }};
         const fraction = {{ chart.interval_fraction | tojson }};
+        const width = {{ chart.width }};
         const chart = document.getElementById('traffic-chart');
         const selection = document.getElementById('traffic-selection');
         const interval = document.getElementById('traffic-interval');
         const reading = document.getElementById('traffic-reading');
+        const pad = n => String(n).padStart(2, '0');
+        // Timestamps arrive as epochs: the reader's timezone, not the server's.
+        function clock(ts) {
+          const d = new Date(ts * 1000);
+          const hhmm = pad(d.getHours()) + ':' + pad(d.getMinutes());
+          return d.toDateString() === new Date().toDateString()
+            ? hhmm : pad(d.getDate()) + '.' + pad(d.getMonth() + 1) + ' ' + hhmm;
+        }
+        function size(value) {
+          const units = ['B', 'KiB', 'MiB', 'GiB', 'TiB'];
+          let n = Number(value) || 0, i = 0;
+          while (n >= 1024 && i < units.length - 1) { n /= 1024; i++; }
+          return (i === 0 ? String(Math.round(n)) : n.toFixed(1)) + ' ' + units[i];
+        }
+        function label(item) {
+          if (item.rx === null) return clock(item.from) + ' – ' + clock(item.to) + ' · No sample';
+          return clock(item.from) + ' – ' + clock(item.to)
+            + ' · Downloaded ' + size(item.tx) + ' · Uploaded ' + size(item.rx);
+        }
         function select(index) {
-          index = Math.max(0, Math.min(labels.length - 1, index));
+          index = Math.max(0, Math.min(intervals.length - 1, index));
           const start = index * fraction;
+          const text = label(intervals[index]);
           interval.value = index;
-          interval.setAttribute('aria-valuetext', labels[index]);
-          if (reading.textContent !== labels[index]) reading.textContent = labels[index];
-          selection.setAttribute('x', start * {{ chart.width }});
-          selection.setAttribute('width', Math.min(fraction, 1 - start) * {{ chart.width }});
+          interval.setAttribute('aria-valuetext', text);
+          if (reading.textContent !== text) reading.textContent = text;
+          selection.setAttribute('x', start * width);
+          selection.setAttribute('width', Math.min(fraction, 1 - start) * width);
           selection.setAttribute('visibility', 'visible');
         }
         function selectAt(event) {
           const bounds = chart.getBoundingClientRect();
           if (bounds.width) select(Math.floor((event.clientX - bounds.left) / bounds.width / fraction));
         }
+        const axis = document.querySelector('.traffic-axis span:last-child');
+        const axisStart = document.querySelector('.traffic-axis span:first-child');
+        if (axisStart && axis) {
+          axisStart.textContent = clock({{ chart.from_ts }});
+          axis.textContent = clock({{ chart.to_ts }});
+        }
         chart.addEventListener('pointermove', event => { if (event.pointerType === 'mouse') selectAt(event); });
         chart.addEventListener('click', selectAt);
         interval.addEventListener('input', () => select(Number(interval.value)));
-        select(labels.length - 1);
+        select(intervals.length - 1);
         interval.parentElement.hidden = false;
       })();
       </script>

@@ -176,8 +176,8 @@
     var badge = function (el, exit) {
       var cls = 'oc-badge ';
       var text;
-      if (!exit) { cls += 'oc-badge--subtle'; text = 'no data'; }
-      else if (!exit.enabled) { cls += 'oc-badge--subtle'; text = 'disabled'; }
+      if (exit && !exit.enabled) { cls += 'oc-badge--subtle'; text = 'disabled'; }
+      else if (!exit || exit.alive == null) { cls += 'oc-badge--subtle'; text = 'no data'; }
       else if (exit.alive) { cls += 'oc-badge--success'; text = 'up'; }
       else { cls += 'oc-badge--danger'; text = 'down'; }
       if (el.className !== cls) el.className = cls;
@@ -214,6 +214,8 @@
         if (kind === 'hs') {
           item = configs[key];
           put(el, item ? kaskadRel(item.handshake) : 'no data');
+        } else if (kind === 'status') {
+          el.hidden = !!data.status_fresh;
         } else if (kind.startsWith('diagnosis')) {
           item = configs[key];
           if (!item || !item.diagnosis) continue;
@@ -251,7 +253,7 @@
         } else if (kind === 'tx-total') {
           put(el, mb(data.tx));
         } else if (kind === 'exits-alive') {
-          put(el, String(data.exits_alive));
+          put(el, data.status_fresh ? String(data.exits_alive) : '—');
         } else if (kind === 'exits_total' || kind === 'configs_total') {
           put(el, String(data[kind]));
         }
@@ -271,11 +273,17 @@
             if (!data || (health && !data.overview)) throw new Error('status unavailable');
             if (health) {
               updateOverview(data.overview);
-              put(stale, '');
+            }
+            var staleLine = stale || document.getElementById('live-stale');
+            if (staleLine) {
+              put(staleLine, data.status_fresh ? '' : 'Stale · exit status unavailable');
             }
             apply(data);
           })
-          .catch(function () { if (stale) put(stale, 'Stale · status unavailable'); })
+          .catch(function () {
+            var staleLine = stale || document.getElementById('live-stale');
+            if (staleLine) put(staleLine, 'Stale · status unavailable');
+          })
           .finally(function () { clearTimeout(deadline); });
       }
       setTimeout(tick, seconds * 1000);
@@ -322,6 +330,9 @@
   <main class="main">
     {% if role == 'user' %}
     <nav class="cab-nav" aria-label="Cabinet"><a href="/me" {% if nav != 'account' %}aria-current="page"{% endif %}>My configurations</a><a href="/me/account" {% if nav == 'account' %}aria-current="page"{% endif %}>Account</a></nav>
+    {% endif %}
+    {% if not hide_nav and nav != 'overview' %}
+    <div id="live-stale" class="oc-muted" role="status"></div>
     {% endif %}
     {% block body %}{% endblock %}
   </main>

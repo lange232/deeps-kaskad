@@ -391,7 +391,11 @@ class TrafficChartTests(unittest.TestCase):
         self.assertGreater(b["up"], 0)
         self.assertEqual(b["x"] - a["x"], chart["width"] * 2400 / 3600)
         self.assertLess(a["up_x"] + a["width"], b["x"])
-        self.assertIn("No sample", chart["intervals"][2])
+        self.assertEqual(chart["intervals"][1]["tx"], 10)
+        self.assertIsNone(chart["intervals"][0]["rx"])
+        self.assertIsNone(chart["intervals"][2]["rx"])
+        self.assertEqual(chart["from_ts"], 0)
+        self.assertEqual(chart["to_ts"], 3600)
 
     def test_no_history_means_no_chart(self):
         self.assertIsNone(app.build_traffic_chart(300, 0, 3600, []))
@@ -399,8 +403,10 @@ class TrafficChartTests(unittest.TestCase):
     def test_zero_traffic_is_a_sample_not_a_gap(self):
         rows = [{"ts": 300, "rx": 0, "tx": 0}]
         chart = app.build_traffic_chart(300, 0, 3600, rows)
-        self.assertIn("Downloaded 0 B · Uploaded 0 B", chart["intervals"][1])
-        self.assertIn("No sample", chart["intervals"][0])
+        self.assertEqual(chart["intervals"][1]["tx"], 0)
+        self.assertEqual(chart["intervals"][1]["rx"], 0)
+        self.assertIsNone(chart["intervals"][0]["rx"])
+        self.assertIsNone(chart["intervals"][0]["tx"])
 
 
 @unittest.skipUnless(app, "fastapi is not installed")

@@ -351,9 +351,14 @@ Pages update handshakes, traffic and exit state in place every 20 seconds
 (`/status.json`, the account's own numbers only): the page itself is not
 reloaded, so scroll, focus and an open QR or config stay.
 
+The failover daemon writes `/run/kaskad/status.json` every ten seconds. The
+panel trusts it for sixty seconds; after that every page, `/status.json` and
+`/healthz` treat the exits as unknown and show `Stale` instead of repeating
+the last known state.
+
 `/healthz` answers without authentication and returns
 `{"ok": true, "version": ..., "active": ...}`; it is meant for monitoring and
-returns 503 when the database cannot be read.
+returns 503 when the database cannot be read or the failover status is stale.
 
 Internet exits are granted per account: the administrator ticks the exits an
 account may use, and every configuration puts them in its own order on `/me`
@@ -383,8 +388,10 @@ GET  /api/me/configs/{id}/conf    the same, addressed by configuration
 POST /api/me/configs/{id}/toggle  enable or disable one configuration
 DELETE /api/me/configs/{id}       delete one configuration and its keys
 GET  /api/me/exits?config_id=N    granted internet exits in this configuration's
-                                    order (id, name, comment, alive, rtt_ms);
-                                    an empty list means the account has no grants
+                                    order (id, name, comment, alive, rtt_ms,
+                                    status_fresh); an empty list means the
+                                    account has no grants; alive and rtt_ms are
+                                    null while the failover status is stale
 POST /api/me/exits/order          exit_id (repeated) + config_id -> sets the order;
                                     the list must contain every granted exit exactly once
 GET  /api/me/subnets?config_id=N  subnets the account grants, with the choice of this

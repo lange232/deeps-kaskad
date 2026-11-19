@@ -18,6 +18,7 @@
 <div class="oc-panel">
   <div class="oc-panel__head">
     <span>health-check every 10 s</span>
+    {% if not routing_fresh %}<span class="oc-badge oc-badge--warning" data-live="status">status unavailable</span>{% else %}<span class="oc-badge oc-badge--warning" data-live="status" hidden>status unavailable</span>{% endif %}
     <span>your device to panel: <span class="oc-mono" id="client-rtt">measuring…</span></span>
     <span style="flex:1"></span>
     <span class="oc-badge oc-badge--subtle">{{ exits | selectattr('enabled') | list | length }} of {{ exits | length }} enabled</span>
