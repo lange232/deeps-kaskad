@@ -241,7 +241,7 @@
           <button class="oc-btn oc-btn--neutral oc-btn--sm">{{ 'disable login' if account.enabled else 'enable login' }}</button>
         </form>
         <form method="post" action="/accounts/{{ account.id }}/delete"
-              onsubmit="return confirm('delete {{ account.email }} and its {{ configs | length }} configurations? their keys are erased')">
+              data-confirm="Delete {{ account.email }}? {{ configs | length }} {{ 'configuration' if configs | length == 1 else 'configurations' }} will be deleted, their .conf files will stop working, and all sessions will end.">
           <input type="hidden" name="csrf_token" value="{{ csrf }}">
           <button class="oc-btn oc-btn--ghost-danger oc-btn--sm">delete account</button>
         </form>

@@ -515,6 +515,41 @@ class ExitCreationTests(PanelTestCase):
 
 
 class AdminPingTests(PanelTestCase):
+    def test_configuration_diagnosis_distinguishes_tunnel_and_internet(self):
+        now = 1000
+        view = {"enabled": True, "internet": True, "exits": [], "ip": "10.80.0.2",
+                "handshake": now - 10}
+        status = {"ts": now, "clients": {view["ip"]: "awg1"},
+                  "exits": {"awg1": {"alive": False}}}
+        self.assertEqual(app.configuration_diagnosis(view, status, now),
+                         {"state": "Online", "warning": "No working internet exit"})
+        self.assertEqual(app.configuration_diagnosis(view, {}, now)["warning"],
+                         "Exit status unavailable")
+        for fields, expected in (({"enabled": False}, "Disabled"),
+                                 ({"internet": False}, "No access assigned"),
+                                 ({"handshake": 0}, "No handshake recorded"),
+                                 ({"handshake": now - 200}, "Last handshake")):
+            self.assertEqual(app.configuration_diagnosis(view | fields, status, now)["state"],
+                             expected)
+
+    def test_exit_details_separate_current_and_alternative_configurations(self):
+        aid, cid = self.seed_client(name="current-peer")
+        other_aid, other_cid = self.seed_client(name="alternative-peer", ip="10.80.0.9",
+                                                email="other@example.com")
+        eid = self.seed_exit()
+        self.grant(aid, cid, eid)
+        self.grant(other_aid, other_cid, eid)
+        self.login_admin()
+        status = {"ts": int(time.time()), "clients": {"10.80.0.2": "awg1",
+                                                     "10.80.0.9": "awg2"}}
+        with mock.patch.object(app, "read_status", return_value=status), \
+                mock.patch.object(app.awgconf, "render", return_value=""):
+            text = self.client.get(f"/exits/{eid}").text
+        current, reserve = text.split("Available as an alternative", 1)
+        self.assertIn("current-peer", current)
+        self.assertNotIn("alternative-peer", current)
+        self.assertIn("alternative-peer", reserve)
+
     def test_overview_measures_the_device_round_trip(self):
         self.seed_exit("e1", "awg1", mode="internet")
         status = {"exits": {"awg1": {"alive": True, "rtt_ms": 40}},

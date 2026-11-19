@@ -1437,6 +1437,36 @@ def config_view(cl, live: dict, assigned=None) -> dict:
     }
 
 
+def fresh_routing_status(status: dict, now: int) -> bool:
+    return bool(status.get("ts") and 0 <= now - status["ts"] <= 60)
+
+
+def selected_internet_iface(view: dict, status: dict, shared: bool = False) -> str:
+    return ((status.get("active") if shared else (status.get("clients") or {}).get(view["ip"]))
+            or "")
+
+
+def configuration_diagnosis(view: dict, status: dict, now: int, shared: bool = False) -> dict:
+    if not view["enabled"]:
+        return {"state": "Disabled", "warning": ""}
+    if not view["internet"] and not view["exits"]:
+        return {"state": "No access assigned", "warning": ""}
+    handshake = view["handshake"]
+    if not handshake:
+        return {"state": "No handshake recorded", "warning": ""}
+    if now - handshake >= 180:
+        return {"state": "Last handshake", "warning": ""}
+    warning = ""
+    if view["internet"]:
+        if not fresh_routing_status(status, now):
+            warning = "Exit status unavailable"
+        else:
+            iface = selected_internet_iface(view, status, shared)
+            if not (status.get("exits") or {}).get(iface, {}).get("alive"):
+                warning = "No working internet exit"
+    return {"state": "Online", "warning": warning}
+
+
 def exit_view(e, status: dict, active, manual: str = "") -> dict:
     st = status.get("exits", {}).get(e["iface"], {})
     return {
@@ -1694,27 +1724,37 @@ def exit_page(request: Request, eid: int, err: str | None = None, ok: str | None
     token = require_admin(request)
     with db() as conn:
         row = conn.execute("SELECT * FROM exits WHERE id = ?", (eid,)).fetchone()
-        assigned = conn.execute(
-            "SELECT c.* FROM client_exits ce JOIN clients c ON c.id = ce.client_id "
-            "WHERE ce.exit_id = ? AND c.account_id IS NULL "
-            "UNION "
-            "SELECT c.* FROM account_exits ae JOIN clients c ON c.account_id = ae.account_id "
-            "WHERE ae.exit_id = ? "
-            "ORDER BY name",
-            (eid, eid),
-        ).fetchall()
+        configs = conn.execute("SELECT * FROM clients WHERE enabled = 1 ORDER BY name").fetchall()
     if not row:
         raise HTTPException(status_code=404)
     status = read_status()
     active = run_dir("active-exit")
     manual = setting("manual_exit") or ""
+    fresh = fresh_routing_status(status, int(time.time()))
+    current, reserve = [], []
+    if row["enabled"]:
+        for cl in configs:
+            if row["mode"] == "routes":
+                if any(e["id"] == eid for e in config_routed_exits(cl)):
+                    current.append(cl)
+                continue
+            choices = config_internet_exits(cl)
+            shared = not cl["account_id"] and bool(cl["internet"]) and not choices
+            if not cl["account_id"] and not cl["internet"]:
+                continue
+            if not shared and not any(e["id"] == eid for e in choices):
+                continue
+            if fresh and selected_internet_iface(cl, status, shared) == row["iface"]:
+                current.append(cl)
+            else:
+                reserve.append(cl)
     return render_page(
         request, "exit_detail.html", "exits",
         csrf=csrf(token), err=err, ok=ok,
         exit=exit_view(row, status, active, manual),
         conf=mask_conf(awgconf.render(row["conf"], cfg()["exit_mtu"],
                                       [x.strip() for x in (row["routes"] or "").split(",") if x.strip()] or None)),
-        clients=assigned,
+        current_configs=current, reserve_configs=reserve, routing_fresh=fresh,
         clients_net=cfg()["clients_net"],
     )
 
@@ -2269,6 +2309,8 @@ def config_page(
         request, "config_detail.html", "configs",
         csrf=csrf(token), err=err, ok=ok, config=view, **traffic_context(cid, period),
         account=account, routed=config_routed_exits(cl),
+        diagnosis=configuration_diagnosis(view, status, int(time.time()),
+                                           not cl["account_id"] and not config_internet_exits(cl)),
         internet_exits=config_internet_exits(cl),
         latency=latency, alive=alive, client_rtt=client_rtt, conf=conf,
         accounts=accounts,
@@ -3076,10 +3118,11 @@ def me_config_page(
     except ValueError:
         conf = None
     chosen_routed = {e["id"] for e in config_routed_exits(cl)}
+    view = config_view(cl, live)
     return render_page(
         request, "me_config.html", "me", role="user",
         csrf=csrf(token), err=err, ok=ok, email=account["email"],
-        cl=config_view(cl, live),
+        cl=view, diagnosis=configuration_diagnosis(view, status, int(time.time())),
         conf=conf, internet_exits=granted, current_exit=current,
         alive=alive, latency=latency, has_app=ANDROID_APK.exists(),
         **traffic_context(cid, period),
@@ -3702,11 +3745,10 @@ def status_json(request: Request, overview: bool = False):
     status = read_status()
     live = iface_dump(c["iface"])["peers"]
     now = int(time.time())
-    views = [
-        config_view(cl, live) for cl in (
-            account_configs(int(account["id"])) if account else config_rows()
-        )
-    ]
+    rows = account_configs(int(account["id"])) if account else config_rows()
+    views = [config_view(cl, live) for cl in rows]
+    shared = {cl["id"] for cl in rows if not cl["account_id"] and cl["internet"]
+              and not config_internet_exits(cl)}
     exits = {
         e["iface"]: {
             "name": e["name"],
@@ -3744,6 +3786,9 @@ def status_json(request: Request, overview: bool = False):
                 "rx": v["rx"],
                 "tx": v["tx"],
                 "iface": current.get(v["ip"], ""),
+                "diagnosis": configuration_diagnosis(
+                    v, status, now, v["id"] in shared
+                ),
             }
             for v in views
         },

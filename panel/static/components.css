@@ -1158,6 +1158,7 @@
 }
 
 .oc-link--muted { color: var(--ui-text-muted); }
+.oc-badge[hidden] { display: none; }
 .oc-link--alert { color: var(--ui-state-warning-fg); }
 
 .oc-link:hover {

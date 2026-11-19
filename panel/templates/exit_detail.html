@@ -87,7 +87,7 @@
         <button class="oc-btn oc-btn--neutral oc-btn--sm">{{ 'disable' if exit.enabled else 'enable' }}</button>
       </form>
       <form method="post" action="/exits/{{ exit.id }}/delete"
-            onsubmit="return confirm('delete exit {{ exit.name }}? clients will lose access to its subnets')">
+            data-confirm="Delete exit {{ exit.name }}? {% if exit.mode == 'routes' %}Configurations will lose access to its subnets.{% else %}Configurations using it will need another healthy, allowed internet exit.{% endif %}">
         <input type="hidden" name="csrf_token" value="{{ csrf }}">
         <button class="oc-btn oc-btn--ghost-danger oc-btn--sm">delete</button>
       </form>
@@ -105,28 +105,23 @@
     </div>
   </section>
 
+  {% if exit.mode == 'internet' and not routing_fresh and exit.enabled %}
+  <p class="oc-muted">Current routing status unavailable</p>
+  {% endif %}
   {% if exit.mode == 'routes' %}
   <section>
-    <h2 class="oc-section__title">allowed for</h2>
-    {% if clients %}
-    <div class="oc-panel">
-      <div class="table-scroll">
-      <table class="oc-table">
-        <tbody>
-        {% for c in clients %}
-          <tr data-href="/configs/{{ c.id }}" tabindex="0">
-            <td>{{ c.name }}</td>
-            <td class="oc-mono oc-muted">{{ c.ip }}</td>
-          </tr>
-        {% endfor %}
-        </tbody>
-      </table>
-      </div>
-    </div>
-    {% else %}
-    <div class="oc-empty">not assigned to anyone</div>
-    {% endif %}
+    <h2 class="oc-section__title">Selected for subnets</h2>
+    {% with clients = current_configs %}{% include '_exit_configurations.html' %}{% endwith %}
   </section>
+  {% else %}
+  {% for heading, clients in [('Uses this exit', current_configs), ('Available as an alternative', reserve_configs)] %}
+  {% if routing_fresh or not loop.first %}
+  <section>
+    <h2 class="oc-section__title">{{ 'Eligible configurations' if not routing_fresh else heading }}</h2>
+    {% include '_exit_configurations.html' %}
+  </section>
+  {% endif %}
+  {% endfor %}
   {% endif %}
 </div>
 

@@ -10,11 +10,13 @@
     {% else %}<span class="oc-badge oc-badge--subtle">disabled</span>{% endif %}
   </div>
   <p class="oc-muted" style="margin-top:6px">
-    <span class="oc-mono">{{ cl.ip }}/32</span> · <span data-live="presence|{{ cl.ip }}">—</span> · last handshake <span data-live="hs|{{ cl.ip }}">—</span> ·
+    <span class="oc-mono">{{ cl.ip }}/32</span> ·
     {% if cl.internet %}<span class="oc-badge oc-badge--subtle">internet</span>{% endif %}
     {% for name in cl.exits %}<span class="oc-badge oc-badge--subtle">{{ name }}</span>{% endfor %}
     {% if not cl.internet and not cl.exits %}<span class="oc-badge oc-badge--danger">no access</span>{% endif %}
   </p>
+  {% set diagnosis_ip = cl.ip %}
+  {% include '_config_diagnosis.html' %}
 </div>
 
 {% if err %}<div class="oc-alert oc-alert--danger" style="margin-bottom:16px"><span class="oc-dot" style="margin-top:7px"></span><div class="oc-alert__body">{{ err }}</div></div>{% endif %}
@@ -153,7 +155,7 @@
     <h2 class="oc-section__title">reissue key</h2>
     <div class="oc-panel" style="padding:16px">
       <form method="post" action="/me/configs/{{ cl.id }}/reissue"
-            onsubmit="return confirm('reissue the key? the current config will stop working')">
+            data-confirm="Reissue the key for {{ cl.name }}? The old .conf and QR code will stop working. Download and import a new configuration.">
         <input type="hidden" name="csrf_token" value="{{ csrf }}">
         <button class="oc-btn oc-btn--neutral oc-btn--sm">reissue key</button>
       </form>
@@ -170,7 +172,7 @@
           <button class="oc-btn oc-btn--neutral oc-btn--sm">{{ 'disable' if cl.enabled else 'enable' }}</button>
         </form>
         <form method="post" action="/me/configs/{{ cl.id }}/delete"
-              onsubmit="return confirm('delete {{ cl.name }}? its keys are erased and the config stops working')">
+              data-confirm="Delete {{ cl.name }}? Its keys and traffic history will be erased, and its .conf will stop working.">
           <input type="hidden" name="csrf_token" value="{{ csrf }}">
           <button class="oc-btn oc-btn--ghost-danger oc-btn--sm">delete configuration</button>
         </form>

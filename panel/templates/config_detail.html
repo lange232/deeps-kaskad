@@ -19,6 +19,8 @@
     {% for e in routed %}<span class="oc-badge oc-badge--subtle">{{ e.name }}</span>{% endfor %}
     {% if not config.internet and not routed %}<span class="oc-badge oc-badge--danger">no access</span>{% endif %}
   </p>
+  {% set diagnosis_ip = config.ip %}
+  {% include '_config_diagnosis.html' %}
 </div>
 
 {% if err %}<div class="oc-alert oc-alert--danger" style="margin-bottom:16px"><span class="oc-dot" style="margin-top:7px"></span><div class="oc-alert__body">{{ err }}</div></div>{% endif %}
@@ -165,7 +167,7 @@
       <div class="actions">
         <a class="oc-btn oc-btn--outline oc-btn--sm" href="/configs/{{ config.id }}/conf">download .conf</a>
         <form method="post" action="/configs/{{ config.id }}/reissue"
-              onsubmit="return confirm('reissue the key? the current config stops working')">
+              data-confirm="Reissue the key for {{ config.name }}? The old .conf and QR code will stop working. Download and import a new configuration.">
           <input type="hidden" name="csrf_token" value="{{ csrf }}">
           <button class="oc-btn oc-btn--neutral oc-btn--sm">reissue key</button>
         </form>
@@ -193,7 +195,7 @@
           <button class="oc-btn oc-btn--neutral oc-btn--sm">{{ 'disable' if config.enabled else 'enable' }}</button>
         </form>
         <form method="post" action="/configs/{{ config.id }}/delete"
-              onsubmit="return confirm('delete {{ config.name }}? its keys are erased and the config stops working')">
+              data-confirm="Delete {{ config.name }}? Its keys and traffic history will be erased, and its .conf will stop working.">
           <input type="hidden" name="csrf_token" value="{{ csrf }}">
           <button class="oc-btn oc-btn--ghost-danger oc-btn--sm">delete configuration</button>
         </form>

@@ -214,9 +214,15 @@
         if (kind === 'hs') {
           item = configs[key];
           put(el, item ? kaskadRel(item.handshake) : 'no data');
-        } else if (kind === 'presence') {
+        } else if (kind.startsWith('diagnosis')) {
           item = configs[key];
-          put(el, item && item.handshake && data.ts - item.handshake < 180 ? 'online' : 'offline');
+          if (!item || !item.diagnosis) continue;
+          if (kind === 'diagnosis') put(el, item.diagnosis.state);
+          else if (kind === 'diagnosis-age') put(el, item.diagnosis.state === 'Last handshake' ? kaskadRel(item.handshake) : '');
+          else {
+            put(el, item.diagnosis.warning);
+            el.hidden = !item.diagnosis.warning;
+          }
         } else if (kind === 'rx') {
           item = configs[key];
           put(el, mb(item ? item.rx : 0));
@@ -339,6 +345,10 @@
     menu.addEventListener('click', () => menu.setAttribute('aria-expanded', menu.getAttribute('aria-expanded') === 'false'));
   }
   const root = document.documentElement;
+  document.addEventListener('submit', (event) => {
+    const message = event.target.dataset.confirm;
+    if (message && !window.confirm(message)) event.preventDefault();
+  });
   try {
     const saved = localStorage.getItem('kaskad-theme');
     if (saved) root.dataset.theme = saved;

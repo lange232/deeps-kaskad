@@ -9,11 +9,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Interface
 
+- Configuration details distinguish disabled configurations, missing access,
+  missing or old handshakes, and recent handshakes without a working internet
+  exit. Exit details separate current routing assignments from alternatives.
+- `Activity` records changes to the active internet exit and their reason.
+  Destructive actions confirm the impact on configurations, keys or sessions.
 - Overview links to affected exits and services. Administration uses a compact
   menu on phones, with account and VPN address visible in configuration search.
+- Overview refreshes the active exit, latency, health warnings and counters
+  every 20 seconds. A failed refresh keeps the last values and marks them
+  `Stale`.
+- Configuration search combines with `Recent handshake`, `Disabled` and
+  `Unassigned` filters. The access column shows a subnet count rather than
+  listing every subnet.
+- Configuration and account links in tables and the active exit tile use
+  themed styling with visible keyboard focus.
 - The cabinet puts downloads and QR codes first; `/me/account` holds password
   and session controls. Admin and cabinet configuration cards share the same
   traffic chart with separate bars for download and upload.
+- Configuration cards show how many subnets allowed by the account are
+  selected. Administrators can also see ungranted subnets and jump directly
+  to the account's access settings.
+- Hover, tap or use the keyboard to inspect a traffic interval and see when
+  it occurred and how much was downloaded and uploaded. `No sample` is
+  distinct from a measured `0 B`; older gaps are not backfilled.
 
 ### Added
 
@@ -28,8 +47,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   fixes the old glued names like `sm-s921b-ba9bcded` by hand.
 - The cabinet configuration page shows traffic history as a chart for 1h,
   24h, 7d, 30d or 90d, with downloaded and uploaded totals and the peak rate.
-  The chart is a server-rendered inline SVG, so it needs no script and no
-  external library.
+  The chart is a server-rendered inline SVG with an interactive interval
+  inspector and no external charting library.
 - Traffic history: `kaskad-traffic.timer` samples the peer counters every
   five minutes and stores per-configuration deltas (five-minute points for a
   week, hourly for 90 days). `GET /api/me/configs/{id}/traffic?hours=24`
@@ -48,7 +67,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   no longer change size when the numbers arrive; the configuration page also
   measures the device round-trip, so the split appears there too.
 - Pages no longer reload themselves. A small ticker asks `/status.json` every
-  20 seconds and rewrites only handshakes, traffic, exit state and latency, so
+  20 seconds and updates live status in place, so
   scroll position, focus and an open `<details>` (QR, config) stay as they
   were. `/status.json` returns the account's own configurations only.
 
