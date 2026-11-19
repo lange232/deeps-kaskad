@@ -28,6 +28,30 @@ HOUR = 3600
 RAW_TTL = 7 * 86400
 HOUR_TTL = 90 * 86400
 
+# The panel creates these at startup, but the timer can fire while the panel
+# is being restarted: the sampler makes sure its own tables exist.
+SCHEMA = """
+CREATE TABLE IF NOT EXISTS traffic (
+    client_id INTEGER NOT NULL,
+    ts INTEGER NOT NULL,
+    step INTEGER NOT NULL,
+    rx INTEGER NOT NULL,
+    tx INTEGER NOT NULL,
+    PRIMARY KEY (client_id, ts, step)
+);
+CREATE TABLE IF NOT EXISTS traffic_state (
+    client_id INTEGER PRIMARY KEY,
+    public_key TEXT NOT NULL,
+    rx INTEGER NOT NULL,
+    tx INTEGER NOT NULL,
+    ts INTEGER NOT NULL
+);
+"""
+
+
+def ensure_schema(conn: sqlite3.Connection) -> None:
+    conn.executescript(SCHEMA)
+
 
 def dump_peers(iface: str) -> dict:
     """`awg show <iface> dump` → {public_key: {rx, tx}} in bytes."""
@@ -133,6 +157,7 @@ def main() -> int:
     conn = sqlite3.connect(DB_PATH, timeout=10)
     conn.row_factory = sqlite3.Row
     try:
+        ensure_schema(conn)
         with conn:
             recorded = sample(conn, peers)
     finally:

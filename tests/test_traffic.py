@@ -137,6 +137,22 @@ class SampleTests(unittest.TestCase):
 
 
 @unittest.skipUnless(traffic, "traffic module is unavailable")
+class SchemaTests(unittest.TestCase):
+    def test_the_sampler_creates_its_own_tables(self):
+        # The timer may fire while the panel is restarting; it cannot depend
+        # on the panel having created the tables first.
+        conn = sqlite3.connect(":memory:")
+        try:
+            traffic.ensure_schema(conn)
+            names = {r[0] for r in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'")}
+        finally:
+            conn.close()
+        self.assertIn("traffic", names)
+        self.assertIn("traffic_state", names)
+
+
+@unittest.skipUnless(traffic, "traffic module is unavailable")
 class DumpTests(unittest.TestCase):
     def test_peer_counters_are_read_from_the_dump(self):
         output = "\n".join([

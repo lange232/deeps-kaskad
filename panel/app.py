@@ -184,23 +184,6 @@ def init_db() -> None:
                 action TEXT NOT NULL,
                 detail TEXT
             );
-            -- Traffic history written by kaskad-traffic: five-minute deltas
-            -- kept for a week and hourly deltas kept for 90 days.
-            CREATE TABLE IF NOT EXISTS traffic (
-                client_id INTEGER NOT NULL,
-                ts INTEGER NOT NULL,
-                step INTEGER NOT NULL,
-                rx INTEGER NOT NULL,
-                tx INTEGER NOT NULL,
-                PRIMARY KEY (client_id, ts, step)
-            );
-            CREATE TABLE IF NOT EXISTS traffic_state (
-                client_id INTEGER PRIMARY KEY,
-                public_key TEXT NOT NULL,
-                rx INTEGER NOT NULL,
-                tx INTEGER NOT NULL,
-                ts INTEGER NOT NULL
-            );
             CREATE TABLE IF NOT EXISTS sessions (
                 jti TEXT PRIMARY KEY,
                 role TEXT NOT NULL,
@@ -216,6 +199,9 @@ def init_db() -> None:
             );
             """
         )
+        # The sampler shares the definition: it can fire while the panel is
+        # restarting and must not depend on this process having run yet.
+        conn.executescript(traffic.SCHEMA)
         migrate(conn, existing)
 
 
