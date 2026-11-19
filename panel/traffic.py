@@ -117,7 +117,9 @@ def sample(conn: sqlite3.Connection, peers: dict, now: int | None = None) -> dic
             drx = rx
         if dtx < 0:
             dtx = tx
-        if drx or dtx:
+        # Once a peer has carried traffic, retain idle readings too. Never-used
+        # peers with all-zero counters still have no history.
+        if drx or dtx or prev["rx"] or prev["tx"]:
             add(conn, cl["id"], now - now % STEP, STEP, drx, dtx)
             add(conn, cl["id"], now - now % HOUR, HOUR, drx, dtx)
             recorded["peers"] += 1

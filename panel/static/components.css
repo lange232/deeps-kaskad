@@ -1203,6 +1203,10 @@
 
 .traffic-down { fill: var(--ui-state-info-fg); }
 .traffic-up { fill: var(--ui-state-success-fg); }
+.traffic-selection { fill: var(--ui-border-strong); pointer-events: none; }
+.traffic-inspector:not([hidden]) { display: grid; gap: 6px; margin-top: 12px; }
+.traffic-inspector input { width: 100%; margin: 0; accent-color: var(--ui-text-accent); }
+.traffic-inspector input:focus-visible { outline: 2px solid var(--ui-border-focus); }
 
 .traffic-axis {
   display: flex;

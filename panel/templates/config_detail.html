@@ -111,10 +111,15 @@
       <p class="oc-muted" style="margin:0">no internet exits granted</p>
       {% endif %}
 
+      {% if account %}
+      <div class="toolbar" style="margin-top:20px">
+        <h3 class="oc-section__title">Subnets</h3>
+        <a class="oc-btn oc-btn--outline oc-btn--sm" href="/accounts/{{ account.id }}#access">Edit account access</a>
+      </div>
       {% if routed_choices %}
       <form method="post" action="/configs/{{ config.id }}/routed" style="margin-top:20px">
         <input type="hidden" name="csrf_token" value="{{ csrf }}">
-        <p class="oc-section__title" style="margin:0 0 10px">subnets</p>
+        <p class="oc-muted">{{ routed_choices | selectattr('chosen') | list | length }} of {{ routed_choices | length }} allowed subnets included</p>
         <div class="actions" style="flex-direction:column; align-items:flex-start; gap:10px">
           {% for e in routed_choices %}
           <label class="oc-check">
@@ -127,6 +132,19 @@
         </div>
         <button class="oc-btn oc-btn--neutral oc-btn--sm" style="margin-top:12px">save subnets</button>
       </form>
+      {% else %}
+      <p class="oc-muted">No subnets allowed for this account</p>
+      {% endif %}
+      {% if ungranted_subnets %}
+      <details class="manage-block" style="margin-top:16px">
+        <summary>Not allowed for this account ({{ ungranted_subnets | length }})</summary>
+        <ul>
+          {% for e in ungranted_subnets %}
+          <li>{{ e.comment or e.name }} · <span class="oc-mono oc-muted">{{ e.routes }}</span></li>
+          {% endfor %}
+        </ul>
+      </details>
+      {% endif %}
       {% endif %}
     </div>
   </section>

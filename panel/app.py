@@ -712,19 +712,31 @@ def build_traffic_chart(step: int, since: int, now: int, rows) -> dict | None:
     if not sums:
         return None
     peak = max(max(pair) for pair in sums.values()) / bucket
-    if peak <= 0:
-        return None
+    scale = peak or 1
     # Two adjacent bars per time bucket. Missing buckets stay blank.
     slot = CHART_WIDTH * bucket / span
     bars = []
     for key, (rx, tx) in sorted(sums.items()):
-        x = min(key * slot, CHART_WIDTH - slot)
-        bars.append({"x": round(x, 2), "up_x": round(x + slot / 2, 2),
-                     "down": round(tx / bucket / peak * (CHART_HEIGHT - 4), 2),
-                     "up": round(rx / bucket / peak * (CHART_HEIGHT - 4), 2)})
+        x = key * slot
+        width = min(slot, CHART_WIDTH - x)
+        bars.append({"x": round(x, 2),
+                     "up_x": round(x + width / 2, 2), "width": round(width * .43, 2),
+                     "down": round(tx / bucket / scale * (CHART_HEIGHT - 4), 2),
+                     "up": round(rx / bucket / scale * (CHART_HEIGHT - 4), 2)})
+    intervals = []
+    for key in range(math.ceil(span / bucket)):
+        start = since + key * bucket
+        end = min(now, start + bucket)
+        label = f"{traffic_time_label(start)} – {traffic_time_label(end)}"
+        if key in sums:
+            rx, tx = sums[key]
+            label += f" · Downloaded {human_bytes(tx)} · Uploaded {human_bytes(rx)}"
+        else:
+            label += " · No sample"
+        intervals.append(label)
     return {
         "width": CHART_WIDTH, "height": CHART_HEIGHT,
-        "bars": bars, "bar_width": round(slot * 0.43, 2),
+        "bars": bars, "intervals": intervals, "interval_fraction": bucket / span,
         "total_rx": human_bytes(total_rx),
         "total_tx": human_bytes(total_tx),
         "peak": human_rate(peak),
@@ -2251,6 +2263,8 @@ def config_page(
     if not account:
         accounts = account_rows()
     chosen_routed = {e["id"] for e in config_routed_exits(cl)}
+    allowed_routed = config_routed_choices(account) if account else []
+    allowed_ids = {e["id"] for e in allowed_routed}
     return render_page(
         request, "config_detail.html", "configs",
         csrf=csrf(token), err=err, ok=ok, config=view, **traffic_context(cid, period),
@@ -2261,8 +2275,12 @@ def config_page(
         routed_choices=[
             {"id": r["id"], "name": r["comment"] or r["name"], "routes": r["routes"],
              "chosen": r["id"] in chosen_routed}
-            for r in (config_routed_choices(account) if account else [])
+            for r in allowed_routed
         ],
+        ungranted_subnets=[
+            e for e in exits_rows()
+            if e["mode"] == "routes" and e["enabled"] and e["id"] not in allowed_ids
+        ] if account else [],
     )
 
 

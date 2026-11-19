@@ -766,6 +766,23 @@ class ConfigLimitTests(PanelTestCase):
 
 
 class RoutedChoiceTests(PanelTestCase):
+    def test_admin_distinguishes_unselected_and_ungranted_subnets(self):
+        aid, cid, routed = self.account_with_routed()
+        foreign = self.seed_exit("ungranted-subnet", "awg9", mode="routes",
+                                 routes="10.9.0.0/24")
+        with app.db() as conn:
+            conn.execute("DELETE FROM client_exits WHERE client_id = ?", (cid,))
+        self.login_admin()
+        text = self.client.get(f"/configs/{cid}").text
+        self.assertIn(f'/accounts/{aid}#access', text)
+        self.assertIn("0 of 1 allowed subnets included", text)
+        self.assertIn("ungranted-subnet", text)
+        self.assertNotIn(f'name="exits" value="{foreign}"', text)
+        self.login("c1@example.com", USER_PASSWORD)
+        text = self.client.get(f"/me/configs/{cid}").text
+        self.assertIn("0 of 1 allowed subnets included", text)
+        self.assertNotIn("ungranted-subnet", text)
+
     """Subnets are granted to the account and chosen per configuration."""
 
     def account_with_routed(self):

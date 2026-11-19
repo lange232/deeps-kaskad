@@ -46,7 +46,6 @@
   {% set chart_url = '/me/configs/' ~ cl.id %}
   {% include '_traffic.html' %}
 
-  {% if internet_exits or routed_choices %}
   <details class="manage-block"><summary>Routing{% if current_exit %} · {{ current_exit.comment or current_exit.name }}{% endif %}</summary>
   {% if internet_exits and cl.internet %}
   <section>
@@ -111,10 +110,11 @@
   </section>
   {% endif %}
 
-  {% if routed_choices %}
   <section>
     <h2 class="oc-section__title">subnets</h2>
     <div class="oc-panel" style="padding:16px">
+      {% if routed_choices %}
+      <p class="oc-muted">{{ routed_choices | selectattr('chosen') | list | length }} of {{ routed_choices | length }} allowed subnets included</p>
       <form method="post" action="/me/configs/{{ cl.id }}/routed">
         <input type="hidden" name="csrf_token" value="{{ csrf }}">
         <div class="actions" style="flex-direction:column; align-items:flex-start; gap:10px">
@@ -129,12 +129,13 @@
         </div>
         <button class="oc-btn oc-btn--neutral oc-btn--sm" style="margin-top:12px">save subnets</button>
       </form>
+      {% else %}
+      <p class="oc-muted">No subnets allowed for this account</p>
+      {% endif %}
     </div>
   </section>
-  {% endif %}
 
   </details>
-  {% endif %}
   <details class="manage-block"><summary>Manage configuration</summary>
     {% if cl.device_id %}<p class="oc-muted">Device ID · <span class="oc-mono">{{ cl.device_id }}</span></p>{% endif %}
       <form method="post" action="/me/configs/{{ cl.id }}/name"

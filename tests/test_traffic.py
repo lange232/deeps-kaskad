@@ -105,6 +105,14 @@ class SampleTests(unittest.TestCase):
         self.assertEqual(self.rows(traffic.STEP), [])
         self.assertIsNone(self.state())
 
+    def test_an_idle_reading_is_distinct_from_an_absent_peer(self):
+        now = 1794800100
+        traffic.sample(self.conn, self.peers(1000, 2000), now=now)
+        traffic.sample(self.conn, self.peers(1000, 2000), now=now + 300)
+        traffic.sample(self.conn, {}, now=now + 600)
+        bucket = now + 300 - (now + 300) % traffic.STEP
+        self.assertEqual(self.rows(traffic.STEP), [(bucket, 0, 0)])
+
     def test_prune_drops_old_points_and_orphans(self):
         now = 1794800100
         old_raw = now - traffic.RAW_TTL - 300

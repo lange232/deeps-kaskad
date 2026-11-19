@@ -17,14 +17,49 @@
         <span class="oc-muted">uploaded</span><span class="oc-num">{{ chart.total_rx }}</span>
         <span class="oc-muted" style="margin-left:auto">peak {{ chart.peak }}</span>
       </div>
-      <svg class="traffic-chart" viewBox="0 0 {{ chart.width }} {{ chart.height }}"
+      <svg id="traffic-chart" class="traffic-chart" viewBox="0 0 {{ chart.width }} {{ chart.height }}"
            preserveAspectRatio="none" role="img" aria-label="traffic">
         {% for bar in chart.bars %}
-        <rect class="traffic-down" x="{{ bar.x }}" y="{{ chart.height - bar.down }}" width="{{ chart.bar_width }}" height="{{ bar.down }}"/>
-        <rect class="traffic-up" x="{{ bar.up_x }}" y="{{ chart.height - bar.up }}" width="{{ chart.bar_width }}" height="{{ bar.up }}"/>
+        <rect class="traffic-down" x="{{ bar.x }}" y="{{ chart.height - bar.down }}" width="{{ bar.width }}" height="{{ bar.down }}"/>
+        <rect class="traffic-up" x="{{ bar.up_x }}" y="{{ chart.height - bar.up }}" width="{{ bar.width }}" height="{{ bar.up }}"/>
         {% endfor %}
+        <rect id="traffic-selection" class="traffic-selection" height="{{ chart.height }}" visibility="hidden"/>
       </svg>
       <div class="traffic-axis"><span>{{ chart.from }}</span><span>{{ chart.to }}</span></div>
+      <div class="traffic-inspector" hidden>
+        <label class="oc-muted" for="traffic-interval">Interval</label>
+        <input id="traffic-interval" type="range" min="0" max="{{ chart.intervals | length - 1 }}" value="0">
+        <output id="traffic-reading" for="traffic-interval"></output>
+      </div>
+      <script>
+      (function () {
+        const labels = {{ chart.intervals | tojson }};
+        const fraction = {{ chart.interval_fraction | tojson }};
+        const chart = document.getElementById('traffic-chart');
+        const selection = document.getElementById('traffic-selection');
+        const interval = document.getElementById('traffic-interval');
+        const reading = document.getElementById('traffic-reading');
+        function select(index) {
+          index = Math.max(0, Math.min(labels.length - 1, index));
+          const start = index * fraction;
+          interval.value = index;
+          interval.setAttribute('aria-valuetext', labels[index]);
+          if (reading.textContent !== labels[index]) reading.textContent = labels[index];
+          selection.setAttribute('x', start * {{ chart.width }});
+          selection.setAttribute('width', Math.min(fraction, 1 - start) * {{ chart.width }});
+          selection.setAttribute('visibility', 'visible');
+        }
+        function selectAt(event) {
+          const bounds = chart.getBoundingClientRect();
+          if (bounds.width) select(Math.floor((event.clientX - bounds.left) / bounds.width / fraction));
+        }
+        chart.addEventListener('pointermove', event => { if (event.pointerType === 'mouse') selectAt(event); });
+        chart.addEventListener('click', selectAt);
+        interval.addEventListener('input', () => select(Number(interval.value)));
+        select(labels.length - 1);
+        interval.parentElement.hidden = false;
+      })();
+      </script>
       {% else %}
       <p class="oc-muted" style="margin:0">no traffic recorded yet</p>
       {% endif %}
