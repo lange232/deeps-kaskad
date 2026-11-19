@@ -24,18 +24,14 @@
   <div class="oc-panel" style="padding:16px">
     <div class="kv-grid">
       <div><div class="k">mode</div><div class="v">
-        {% if exit.mode == 'routes' %}<span class="oc-badge oc-badge--info">subnets only</span>{% else %}<span class="oc-badge oc-badge--success">internet</span>{% endif %}
+        {% if exit.mode == 'routes' %}<span class="oc-badge oc-badge--subtle">subnets only</span>{% else %}<span class="oc-badge oc-badge--subtle">internet</span>{% endif %}
       </div></div>
       <div><div class="k">interface</div><div class="v oc-mono">{{ exit.iface }}</div></div>
       <div><div class="k">comment</div><div class="v">{{ exit.comment or '—' }}</div></div>
       <div><div class="k">priority</div><div class="v oc-num">{{ exit.priority }}</div></div>
       <div><div class="k">ping</div><div class="v">
-        {% if exit.alive and exit.rtt_ms %}
-          <span data-exit-ping="{{ exit.rtt_ms }}" title="panel to exit {{ exit.rtt_ms }} ms">{{ exit.rtt_ms }} ms</span>
-          <div class="cell-sub" data-ping-parts>exit {{ exit.rtt_ms }} ms</div>
-          {% if exit.rtt_ts %}<span class="cell-sub" data-hs="{{ exit.rtt_ts }}"></span>{% endif %}
-        {% elif exit.mode == 'routes' %}<span class="oc-muted">n/a (handshake only)</span>
-        {% else %}<span class="oc-muted">—</span>{% endif %}
+        {% if exit.mode == 'routes' %}<span class="oc-muted" data-live="ping|{{ exit.iface }}">n/a (handshake only)</span>
+        {% else %}<span class="ping-cell" data-live="ping|{{ exit.iface }}">{% if exit.alive and exit.rtt_ms %}{{ exit.rtt_ms }} ms{% else %}—{% endif %}</span>{% endif %}
       </div></div>
       <div><div class="k">NAT</div><div class="v">
         {% if exit.mode == 'internet' %}
@@ -60,7 +56,7 @@
       <div><div class="k">subnets</div><div class="v oc-mono">{{ exit.routes }}</div></div>
       <div><div class="k">DNS</div><div class="v oc-mono">{{ exit.dns or '—' }}</div></div>
       {% endif %}
-      <div><div class="k">last check</div><div class="v" data-hs="{{ exit.last_ok }}">—</div></div>
+      <div><div class="k">last check</div><div class="v" data-live="lastok|{{ exit.iface }}">—</div></div>
     </div>
 
     <form method="post" action="/exits/{{ exit.id }}/comment" style="margin-top:18px; max-width:420px">
@@ -91,7 +87,7 @@
         <button class="oc-btn oc-btn--neutral oc-btn--sm">{{ 'disable' if exit.enabled else 'enable' }}</button>
       </form>
       <form method="post" action="/exits/{{ exit.id }}/delete"
-            onsubmit="return confirm('delete exit {{ exit.name }}? clients will lose access to its subnets')">
+            data-confirm="Delete exit {{ exit.name }}? {% if exit.mode == 'routes' %}Configurations will lose access to its subnets.{% else %}Configurations using it will need another healthy, allowed internet exit.{% endif %}">
         <input type="hidden" name="csrf_token" value="{{ csrf }}">
         <button class="oc-btn oc-btn--ghost-danger oc-btn--sm">delete</button>
       </form>
@@ -109,70 +105,40 @@
     </div>
   </section>
 
+  {% if exit.mode == 'internet' and not routing_fresh and exit.enabled %}
+  <p class="oc-muted">Current routing status unavailable</p>
+  {% endif %}
   {% if exit.mode == 'routes' %}
   <section>
-    <h2 class="oc-section__title">allowed for</h2>
-    {% if clients %}
-    <div class="oc-panel">
-      <div class="table-scroll">
-      <table class="oc-table">
-        <tbody>
-        {% for c in clients %}
-          <tr data-href="/configs/{{ c.id }}" tabindex="0">
-            <td>{{ c.name }}</td>
-            <td class="oc-mono oc-muted">{{ c.ip }}</td>
-          </tr>
-        {% endfor %}
-        </tbody>
-      </table>
-      </div>
-    </div>
-    {% else %}
-    <div class="oc-empty">not assigned to anyone</div>
-    {% endif %}
+    <h2 class="oc-section__title">Selected for subnets</h2>
+    {% with clients = current_configs %}{% include '_exit_configurations.html' %}{% endwith %}
   </section>
+  {% else %}
+  {% for heading, clients in [('Uses this exit', current_configs), ('Available as an alternative', reserve_configs)] %}
+  {% if routing_fresh or not loop.first %}
+  <section>
+    <h2 class="oc-section__title">{{ 'Eligible configurations' if not routing_fresh else heading }}</h2>
+    {% include '_exit_configurations.html' %}
+  </section>
+  {% endif %}
+  {% endfor %}
   {% endif %}
 </div>
 
 <script>
-function rel(ts) {
-  if (!ts || Number(ts) <= 0) return 'no data';
-  const d = Math.floor(Date.now() / 1000 - Number(ts));
-  if (d < 60) return d + 's ago';
-  if (d < 3600) return Math.floor(d / 60) + 'm ago';
-  if (d < 86400) return Math.floor(d / 3600) + 'h ago';
-  return Math.floor(d / 86400) + 'd ago';
-}
-for (const el of document.querySelectorAll('[data-hs]')) el.textContent = rel(el.dataset.hs);
-// Same measurement as /me, inline on purpose: page scripts run before the
-// script at the end of base.html, so external helpers are not available yet.
 (function () {
-  const targets = document.querySelectorAll('[data-exit-ping]');
-  const label = document.getElementById('client-rtt');
-  if (!targets.length && !label) return;
-
-  function apply(clientMs) {
-    if (label) label.textContent = clientMs === null ? 'unavailable' : clientMs + ' ms';
-    for (const el of targets) {
-      const exitMs = Number(el.dataset.exitPing);
-      if (!Number.isFinite(exitMs)) continue;
-      if (clientMs === null) {
-        el.textContent = 'exit ' + exitMs + ' ms';
-        el.title = 'panel to exit only; the device round-trip could not be measured';
-        continue;
-      }
-      el.textContent = '≈ ' + (clientMs + exitMs) + ' ms';
-      el.title = 'your device ' + clientMs + ' ms + exit ' + exitMs + ' ms';
-      const parts = el.parentElement.querySelector('[data-ping-parts]');
-      if (parts) parts.textContent = 'exit ' + exitMs + ' + device ' + clientMs + ' ms';
-    }
-  }
-
   function sample(left, values) {
     if (left <= 0) {
-      if (!values.length) { apply(null); return; }
+      const label = document.getElementById('client-rtt');
+      if (!values.length) {
+        if (label) label.textContent = 'unavailable';
+        kaskadLive(20, null);
+        return;
+      }
       values.sort((a, b) => a - b);
-      apply(Math.round(values[Math.floor(values.length / 2)]));
+      const ms = Math.round(values[Math.floor(values.length / 2)]);
+      if (label) label.textContent = ms + ' ms';
+      kaskadLive(20, ms);
       return;
     }
     const started = performance.now();
@@ -182,10 +148,7 @@ for (const el of document.querySelectorAll('[data-hs]')) el.textContent = rel(el
       .catch(() => {})
       .finally(() => sample(left - 1, values));
   }
-
   sample(4, []);
 })();
-
-kaskadAutoRefresh(15);
 </script>
 {% endblock %}

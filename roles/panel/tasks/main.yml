@@ -176,6 +176,8 @@
   ansible.builtin.stat:
     path: "{{ kaskad_repo_dir }}/state/seed.json"
   delegate_to: localhost
+  # A local lookup must not ask for root: sudo is not always available here.
+  become: false
   run_once: true
   register: kaskad_seed_stat
 
@@ -238,6 +240,30 @@
 - name: Failover started
   ansible.builtin.systemd:
     name: kaskad-failover
+    enabled: true
+    state: started
+    daemon_reload: true
+  when: not ansible_check_mode
+
+- name: Traffic sampler unit
+  ansible.builtin.template:
+    src: kaskad-traffic.service.j2
+    dest: /etc/systemd/system/kaskad-traffic.service
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Traffic sampler timer
+  ansible.builtin.template:
+    src: kaskad-traffic.timer.j2
+    dest: /etc/systemd/system/kaskad-traffic.timer
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Traffic sampler timer enabled
+  ansible.builtin.systemd:
+    name: kaskad-traffic.timer
     enabled: true
     state: started
     daemon_reload: true

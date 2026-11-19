@@ -229,7 +229,7 @@ class RoleTests(PanelTestCase):
         aid, _ = self.seed_client(email="c1@example.com")
         exit_id = self.seed_exit()
         self.login("c1@example.com", USER_PASSWORD)
-        csrf = self.csrf("/me")
+        csrf = self.csrf("/me/account")
         response = self.client.post(f"/accounts/{aid}/exits",
                                     data={"exits": [exit_id], "csrf_token": csrf})
         self.assertEqual(response.status_code, 303)
@@ -303,7 +303,7 @@ class SessionTests(PanelTestCase):
         self.seed_client(email="c1@example.com")
         self.login("c1@example.com", USER_PASSWORD)
         cookie = self.client.cookies.get(app.COOKIE)
-        csrf = self.csrf("/me")
+        csrf = self.csrf("/me/account")
         response = self.client.post("/me/logout-all", data={"csrf_token": csrf})
         self.assertEqual(response.status_code, 303)
         self.assertEqual(response.headers["location"], "/login")
@@ -336,6 +336,13 @@ class SessionTests(PanelTestCase):
         with app.db() as conn:
             self.assertEqual(conn.execute(
                 "SELECT count(*) FROM sessions").fetchone()[0], 0)
+
+    def test_pages_are_not_cached_by_the_browser(self):
+        # The pages do not reload themselves, so a cached copy would hide a
+        # deploy until the user clears it.
+        self.login_admin()
+        response = self.client.get("/configs")
+        self.assertEqual(response.headers.get("cache-control"), "no-store")
 
     def test_healthz_is_public(self):
         fresh = {"ts": int(time.time())}
@@ -508,18 +515,54 @@ class ExitCreationTests(PanelTestCase):
 
 
 class AdminPingTests(PanelTestCase):
+    def test_configuration_diagnosis_distinguishes_tunnel_and_internet(self):
+        now = 1000
+        view = {"enabled": True, "internet": True, "exits": [], "ip": "10.80.0.2",
+                "handshake": now - 10}
+        status = {"ts": now, "clients": {view["ip"]: "awg1"},
+                  "exits": {"awg1": {"alive": False}}}
+        self.assertEqual(app.configuration_diagnosis(view, status, now),
+                         {"state": "Online", "warning": "No working internet exit"})
+        self.assertEqual(app.configuration_diagnosis(view, {}, now)["warning"],
+                         "Exit status unavailable")
+        for fields, expected in (({"enabled": False}, "Disabled"),
+                                 ({"internet": False}, "No access assigned"),
+                                 ({"handshake": 0}, "No handshake recorded"),
+                                 ({"handshake": now - 200}, "Last handshake")):
+            self.assertEqual(app.configuration_diagnosis(view | fields, status, now)["state"],
+                             expected)
+
+    def test_exit_details_separate_current_and_alternative_configurations(self):
+        aid, cid = self.seed_client(name="current-peer")
+        other_aid, other_cid = self.seed_client(name="alternative-peer", ip="10.80.0.9",
+                                                email="other@example.com")
+        eid = self.seed_exit()
+        self.grant(aid, cid, eid)
+        self.grant(other_aid, other_cid, eid)
+        self.login_admin()
+        status = {"ts": int(time.time()), "clients": {"10.80.0.2": "awg1",
+                                                     "10.80.0.9": "awg2"}}
+        with mock.patch.object(app, "read_status", return_value=status), \
+                mock.patch.object(app.awgconf, "render", return_value=""):
+            text = self.client.get(f"/exits/{eid}").text
+        current, reserve = text.split("Available as an alternative", 1)
+        self.assertIn("current-peer", current)
+        self.assertNotIn("alternative-peer", current)
+        self.assertIn("alternative-peer", reserve)
+
     def test_overview_measures_the_device_round_trip(self):
         self.seed_exit("e1", "awg1", mode="internet")
         status = {"exits": {"awg1": {"alive": True, "rtt_ms": 40}},
-                  "active": "awg1", "clients": {}, "ts": 0}
+                  "active": "awg1", "clients": {}, "ts": int(time.time())}
         self.login_admin()
-        with mock.patch.object(app, "read_status", return_value=status):
+        with mock.patch.object(app, "read_status", return_value=status), mock.patch.object(app, "run_dir", return_value="awg1"):
             response = self.client.get("/")
         self.assertEqual(response.status_code, 200)
-        self.assertIn('data-exit-ping="40"', response.text)
+        self.assertIn('data-live="ping|awg1"', response.text)
         self.assertIn('id="client-rtt"', response.text)
         self.assertIn("fetch('/ping'", response.text)
-        self.assertIn("kaskadAutoRefresh = function", response.text)
+        self.assertIn("kaskadLive = function", response.text)
+        self.assertNotIn("location.reload", response.text)
 
 
 class AccountTests(PanelTestCase):
@@ -758,6 +801,23 @@ class ConfigLimitTests(PanelTestCase):
 
 
 class RoutedChoiceTests(PanelTestCase):
+    def test_admin_distinguishes_unselected_and_ungranted_subnets(self):
+        aid, cid, routed = self.account_with_routed()
+        foreign = self.seed_exit("ungranted-subnet", "awg9", mode="routes",
+                                 routes="10.9.0.0/24")
+        with app.db() as conn:
+            conn.execute("DELETE FROM client_exits WHERE client_id = ?", (cid,))
+        self.login_admin()
+        text = self.client.get(f"/configs/{cid}").text
+        self.assertIn(f'/accounts/{aid}#access', text)
+        self.assertIn("0 of 1 allowed subnets included", text)
+        self.assertIn("ungranted-subnet", text)
+        self.assertNotIn(f'name="exits" value="{foreign}"', text)
+        self.login("c1@example.com", USER_PASSWORD)
+        text = self.client.get(f"/me/configs/{cid}").text
+        self.assertIn("0 of 1 allowed subnets included", text)
+        self.assertNotIn("ungranted-subnet", text)
+
     """Subnets are granted to the account and chosen per configuration."""
 
     def account_with_routed(self):
@@ -795,6 +855,17 @@ class RoutedChoiceTests(PanelTestCase):
         response = self.client.get(f"/configs/{cid}/conf")
         self.assertEqual(response.status_code, 200)
         return response.text
+
+    def test_the_download_keeps_the_conf_extension(self):
+        # Android Chrome turns a text/plain download into .txt, so the panel
+        # hands the file over as a generic binary stream.
+        aid, cid, routed = self.account_with_routed()
+        self.login_admin()
+        response = self.client.get(f"/configs/{cid}/conf")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.headers["content-type"], "application/octet-stream")
+        self.assertEqual(response.headers["content-disposition"],
+                         'attachment; filename="c1.conf"')
 
     def test_a_foreign_subnet_is_ignored(self):
         aid, cid, routed = self.account_with_routed()
@@ -928,6 +999,29 @@ class SubnetApiTests(PanelTestCase):
         self.assertEqual(response.status_code, 404)
 
 
+class StatusJsonTests(PanelTestCase):
+    def test_admin_sees_every_configuration(self):
+        aid, cid = self.seed_client("one", "10.80.0.2", "one@example.com")
+        self.seed_client("two", "10.80.0.3", "two@example.com")
+        self.login_admin()
+        response = self.client.get("/status.json")
+        self.assertEqual(response.status_code, 200, response.text)
+        body = response.json()
+        self.assertEqual(sorted(body["configs"]), ["10.80.0.2", "10.80.0.3"])
+        self.assertIn("exits", body)
+        self.assertNotIn("private_key", response.text)
+
+    def test_account_sees_only_its_own(self):
+        self.seed_client("mine", "10.80.0.2", "mine@example.com")
+        self.seed_client("other", "10.80.0.3", "other@example.com")
+        self.login("mine@example.com", USER_PASSWORD)
+        body = self.client.get("/status.json").json()
+        self.assertEqual(sorted(body["configs"]), ["10.80.0.2"])
+
+    def test_anonymous_is_rejected(self):
+        self.assertEqual(self.client.get("/status.json").status_code, 401)
+
+
 class ConfigPingTests(PanelTestCase):
     def card(self, status):
         aid, cid = self.seed_client()
@@ -940,6 +1034,7 @@ class ConfigPingTests(PanelTestCase):
 
     def test_card_shows_the_total_latency(self):
         text = self.card({
+            "ts": int(time.time()),
             "exits": {"awg1": {"alive": True, "rtt_ms": 40}},
             "client_ping": {"10.80.0.2": 10},
         })
@@ -948,19 +1043,105 @@ class ConfigPingTests(PanelTestCase):
 
     def test_card_falls_back_to_the_exit_latency(self):
         text = self.card({
+            "ts": int(time.time()),
             "exits": {"awg1": {"alive": True, "rtt_ms": 40}},
             "client_ping": {},
         })
         self.assertIn("exit 40 ms", text)
         self.assertIn("S1 to exit only", text)
 
+    def test_card_does_not_claim_a_stale_exit_is_up(self):
+        text = self.card({
+            "ts": int(time.time()) - 300,
+            "exits": {"awg1": {"alive": True, "rtt_ms": 40}},
+        })
+        self.assertIn(">no data</span>", text)
+        self.assertNotIn(">up</span>", text)
+        self.assertNotIn("40 ms", text)
+
 
 class NavigationTests(PanelTestCase):
+    def test_config_filters_combine_with_search(self):
+        _, disabled = self.seed_client(name="phone", enabled=0)
+        _, orphan = self.seed_client(name="tablet", ip="10.80.0.9", email="other@example.com")
+        with app.db() as conn:
+            conn.execute("UPDATE clients SET account_id = NULL WHERE id = ?", (orphan,))
+        self.login_admin()
+        for query, expected in (("state=disabled&q=phone", [disabled]),
+                                ("state=unassigned", [orphan]),
+                                ("state=disabled&q=tablet", [])):
+            response = self.client.get("/configs?" + query)
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(re.findall(r'data-href="/configs/(\d+)"', response.text),
+                             [str(cid) for cid in expected])
+
+    def test_overview_status_tracks_failover_and_is_admin_only(self):
+        first = self.seed_exit("first", "awg1")
+        second = self.seed_exit("second", "awg2")
+        status = {"ts": int(time.time()),
+                  "exits": {"awg1": {"alive": False}, "awg2": {"alive": True}}}
+        self.login_admin()
+        with mock.patch.object(app, "read_status", return_value=status), \
+                mock.patch.object(app, "run_dir", return_value="awg2"), \
+                mock.patch.object(app, "services", return_value={"routing": "failed"}):
+            view = self.client.get("/status.json?overview=true").json()["overview"]
+        self.assertEqual(view["active"]["id"], second)
+        self.assertEqual([item["url"] for item in view["issues"]],
+                         [f"/exits/{first}", "/settings#services"])
+        self.seed_account()
+        self.login("c1@example.com", USER_PASSWORD)
+        self.assertNotIn("overview", self.client.get("/status.json?overview=true").json())
+
+    def test_expired_failover_status_is_not_reported_as_healthy(self):
+        self.seed_exit("first", "awg1")
+        self.login_admin()
+        status = {"ts": int(time.time()) - 120, "active": "awg1",
+                  "exits": {"awg1": {"alive": True, "rtt_ms": 23}}}
+        with mock.patch.object(app, "read_status", return_value=status), \
+                mock.patch.object(app, "run_dir", return_value="awg1"), \
+                mock.patch.object(app, "services", return_value={}):
+            response = self.client.get("/status.json?overview=true")
+            page = self.client.get("/")
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertFalse(data["status_fresh"])
+        self.assertIsNone(data["active"])
+        self.assertIsNone(data["exits"]["awg1"]["alive"])
+        self.assertIsNone(data["overview"]["active"])
+        self.assertIn("Exit status unavailable", data["overview"]["issues"][0]["text"])
+        self.assertIn('role="status">Stale · exit status unavailable', page.text)
+        self.assertNotIn('href="/exits/1">first</a>', page.text)
+
+    def test_the_exit_list_does_not_claim_a_stale_status(self):
+        self.seed_exit("first", "awg1")
+        self.login_admin()
+        status = {"ts": int(time.time()) - 300, "active": "awg1",
+                  "exits": {"awg1": {"alive": True, "rtt_ms": 23}}}
+        with mock.patch.object(app, "read_status", return_value=status), \
+                mock.patch.object(app, "run_dir", return_value="awg1"):
+            page = self.client.get("/exits")
+        self.assertEqual(page.status_code, 200)
+        self.assertIn('data-live="status">status unavailable', page.text)
+        self.assertIn(">no data</span>", page.text)
+        self.assertNotIn(">up</span>", page.text)
+        self.assertNotIn('oc-badge--accent">active', page.text)
+
     def test_current_page_is_marked_for_screen_readers(self):
         self.login_admin()
         text = self.client.get("/accounts").text
         self.assertIn('aria-current="page"', text)
         self.assertEqual(text.count('aria-current="page"'), 1)
+
+    def test_account_controls_have_a_separate_authenticated_page(self):
+        self.assertEqual(self.client.get("/me/account").headers["location"], "/login")
+        self.seed_client()
+        self.login("c1@example.com", USER_PASSWORD)
+        home = self.client.get("/me").text
+        self.assertIn('href="/me/account"', home)
+        self.assertNotIn('action="/me/password"', home)
+        account = self.client.get("/me/account").text
+        self.assertIn('action="/me/password"', account)
+        self.assertIn('action="/me/logout-all"', account)
 
     def test_cabinet_has_no_sidebar(self):
         self.seed_client(email="c1@example.com")
@@ -1142,7 +1323,7 @@ class UserPageTests(PanelTestCase):
         self.seed_client(email="c1@example.com")
         self.login("c1@example.com", USER_PASSWORD)
         old_cookie = self.client.cookies.get(app.COOKIE)
-        csrf = self.csrf("/me")
+        csrf = self.csrf("/me/account")
         response = self.client.post("/me/password", data={
             "current_password": USER_PASSWORD,
             "new_password": "another-password-456",
@@ -1166,7 +1347,7 @@ class UserPageTests(PanelTestCase):
     def test_wrong_current_password_changes_nothing(self):
         self.seed_client(email="c1@example.com")
         self.login("c1@example.com", USER_PASSWORD)
-        csrf = self.csrf("/me")
+        csrf = self.csrf("/me/account")
         response = self.client.post("/me/password", data={
             "current_password": "not-the-password",
             "new_password": "another-password-456",
@@ -1177,6 +1358,258 @@ class UserPageTests(PanelTestCase):
         with app.db() as conn:
             self.assertEqual(conn.execute(
                 "SELECT token_version FROM accounts").fetchone()[0], 1)
+
+
+class DeviceIdTests(PanelTestCase):
+    def api_login(self, email="c1@example.com", password=USER_PASSWORD):
+        response = self.client.post("/api/login", data={
+            "email": email, "password": password,
+        })
+        self.assertEqual(response.status_code, 200, response.text)
+        return {"Authorization": "Bearer " + response.json()["token"]}, response.json()
+
+    def create(self, headers, **data):
+        return self.client.post("/api/me/configs", data=data, headers=headers)
+
+    def test_device_is_stored_and_listed(self):
+        self.seed_client(max_configs=5)
+        headers, _ = self.api_login()
+        response = self.create(headers, name="pixel", device_id="a1b2c3d4e5f6")
+        self.assertEqual(response.status_code, 200, response.text)
+        config = response.json()["config"]
+        self.assertEqual(config["name"], "pixel")
+        self.assertEqual(config["device_id"], "a1b2c3d4e5f6")
+        # A fresh login must tell the app which configuration is its own.
+        _, payload = self.api_login()
+        self.assertEqual(payload["configs"][1]["device_id"], "a1b2c3d4e5f6")
+
+    def test_same_device_does_not_create_a_second_config(self):
+        self.seed_client(max_configs=5)
+        headers, _ = self.api_login()
+        first = self.create(headers, name="pixel", device_id="device-aaaa1111")
+        again = self.create(headers, name="other", device_id="device-aaaa1111")
+        self.assertEqual(again.status_code, 200, again.text)
+        self.assertEqual(again.json()["config"]["id"], first.json()["config"]["id"])
+        self.assertEqual(self.client_count(), 2)  # the seeded one plus this one
+
+    def test_known_device_is_returned_when_the_limit_is_reached(self):
+        self.seed_client(max_configs=2)
+        headers, _ = self.api_login()
+        first = self.create(headers, name="pixel", device_id="device-limit-0001")
+        self.assertEqual(first.status_code, 200, first.text)
+        blocked = self.create(headers, name="third")
+        self.assertEqual(blocked.status_code, 409)
+        again = self.create(headers, device_id="device-limit-0001")
+        self.assertEqual(again.status_code, 200, again.text)
+        self.assertEqual(again.json()["config"]["id"], first.json()["config"]["id"])
+
+    def test_two_devices_with_one_model_get_distinct_names(self):
+        self.seed_client(max_configs=5)
+        headers, _ = self.api_login()
+        first = self.create(headers, name="pixel-8", device_id="device-model-0001")
+        second = self.create(headers, name="pixel-8", device_id="device-model-0002")
+        self.assertEqual(first.status_code, 200, first.text)
+        self.assertEqual(second.status_code, 200, second.text)
+        self.assertEqual(second.json()["config"]["name"], "pixel-8-2")
+
+    def test_bad_device_id_is_rejected(self):
+        self.seed_client(max_configs=5)
+        headers, _ = self.api_login()
+        for value in ("short", "x" * 65, "has space here"):
+            response = self.create(headers, device_id=value)
+            self.assertEqual(response.status_code, 400, value)
+
+    def test_the_same_device_id_belongs_to_each_account(self):
+        self.seed_client(max_configs=2)
+        self.seed_client(name="c2", ip="10.80.0.9", email="c2@example.com")
+        first, _ = self.api_login()
+        mine = self.create(first, name="pixel", device_id="shared-device-1")
+        self.assertEqual(mine.status_code, 200, mine.text)
+        second, _ = self.api_login("c2@example.com")
+        other = self.create(second, name="pixel2", device_id="shared-device-1")
+        self.assertEqual(other.status_code, 200, other.text)
+        self.assertNotEqual(other.json()["config"]["id"], mine.json()["config"]["id"])
+
+
+class DeviceMigrationTests(PanelTestCase):
+    def test_old_database_gains_the_device_column(self):
+        with app.db() as conn:
+            conn.execute("DROP TABLE clients")
+            conn.execute(
+                "CREATE TABLE clients (id INTEGER PRIMARY KEY, account_id INTEGER, "
+                "name TEXT UNIQUE NOT NULL, ip TEXT UNIQUE NOT NULL, "
+                "public_key TEXT NOT NULL, private_key TEXT NOT NULL, "
+                "preshared_key TEXT NOT NULL, enabled INTEGER NOT NULL DEFAULT 1, "
+                "created_at TEXT NOT NULL, internet INTEGER NOT NULL DEFAULT 1, "
+                "table_num INTEGER NOT NULL DEFAULT 0)"
+            )
+        app.init_db()
+        with app.db() as conn:
+            cols = {r[1] for r in conn.execute("PRAGMA table_info(clients)")}
+            self.assertIn("device_id", cols)
+            index = conn.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'index' "
+                "AND name = 'clients_device'"
+            ).fetchone()
+            self.assertIsNotNone(index)
+
+
+class RenameTests(PanelTestCase):
+    def second_config(self, aid, name="taken", ip="10.80.0.9"):
+        with app.db() as conn:
+            table = app.routing.allocate_table(conn)
+            cur = conn.execute(
+                "INSERT INTO clients (account_id, name, ip, public_key, "
+                "private_key, preshared_key, enabled, created_at, internet, "
+                "table_num) VALUES (?, ?, ?, 'pubkey2', 'privkey2', 'psk2', 1, "
+                "'now', 1, ?)", (aid, name, ip, table),
+            )
+            return cur.lastrowid
+
+    def test_admin_renames_a_configuration(self):
+        aid, cid = self.seed_client()
+        self.login_admin()
+        csrf = self.csrf(f"/configs/{cid}")
+        response = self.client.post(f"/configs/{cid}/name", data={
+            "name": "pixel-8", "csrf_token": csrf,
+        })
+        self.assertEqual(response.status_code, 303)
+        self.assertEqual(app.config_row(cid)["name"], "pixel-8")
+
+    def test_admin_cannot_take_a_name_of_another_configuration(self):
+        aid, cid = self.seed_client()
+        other = self.second_config(aid)
+        self.login_admin()
+        csrf = self.csrf(f"/configs/{cid}")
+        response = self.client.post(f"/configs/{cid}/name", data={
+            "name": "taken", "csrf_token": csrf,
+        })
+        self.assertEqual(response.status_code, 303)
+        self.assertIn("err=", response.headers["location"])
+        self.assertEqual(app.config_row(cid)["name"], "c1")
+        self.assertEqual(app.config_row(other)["name"], "taken")
+
+    def test_bad_name_is_rejected(self):
+        aid, cid = self.seed_client()
+        self.login_admin()
+        csrf = self.csrf(f"/configs/{cid}")
+        response = self.client.post(f"/configs/{cid}/name", data={
+            "name": "with space", "csrf_token": csrf,
+        })
+        self.assertEqual(response.status_code, 303)
+        self.assertIn("err=", response.headers["location"])
+        self.assertEqual(app.config_row(cid)["name"], "c1")
+
+    def test_user_renames_own_configuration(self):
+        aid, cid = self.seed_client()
+        self.login("c1@example.com", USER_PASSWORD)
+        csrf = self.csrf(f"/me/configs/{cid}")
+        response = self.client.post(f"/me/configs/{cid}/name", data={
+            "name": "my-phone", "csrf_token": csrf,
+        })
+        self.assertEqual(response.status_code, 303)
+        self.assertEqual(app.config_row(cid)["name"], "my-phone")
+
+    def test_user_cannot_rename_a_foreign_configuration(self):
+        aid, cid = self.seed_client()
+        aid2, cid2 = self.seed_client(name="c2", ip="10.80.0.9",
+                                      email="c2@example.com")
+        self.login("c1@example.com", USER_PASSWORD)
+        csrf = self.csrf(f"/me/configs/{cid}")
+        response = self.client.post(f"/me/configs/{cid2}/name", data={
+            "name": "stolen", "csrf_token": csrf,
+        })
+        self.assertEqual(response.status_code, 404)
+        self.assertEqual(app.config_row(cid2)["name"], "c2")
+
+
+class CabinetTrafficTests(PanelTestCase):
+    def seed_traffic(self, cid):
+        now = int(time.time())
+        with app.db() as conn:
+            conn.execute(
+                "INSERT INTO traffic (client_id, ts, step, rx, tx) "
+                "VALUES (?, ?, 300, 1000, 200000)",
+                (cid, now - 600),
+            )
+        return now
+
+    def assert_history_removed(self, cid):
+        with app.db() as conn:
+            self.assertEqual(conn.execute(
+                "SELECT count(*) FROM traffic WHERE client_id = ?", (cid,)
+            ).fetchone()[0], 0)
+            self.assertEqual(conn.execute(
+                "SELECT count(*) FROM traffic_state WHERE client_id = ?", (cid,)
+            ).fetchone()[0], 0)
+
+    def test_admin_delete_clears_history_and_baseline(self):
+        _, cid = self.seed_client()
+        self.seed_traffic(cid)
+        with app.db() as conn:
+            conn.execute("INSERT INTO traffic_state VALUES (?, ?, 1, 2, ?)",
+                         (cid, app.config_row(cid)["public_key"], int(time.time())))
+        self.login_admin()
+        response = self.client.post(f"/configs/{cid}/delete", data={
+            "csrf_token": self.csrf(f"/configs/{cid}"),
+        })
+        self.assertEqual(response.status_code, 303)
+        self.assert_history_removed(cid)
+
+    def test_stale_status_does_not_claim_an_exit_is_in_use(self):
+        aid, cid = self.seed_client()
+        self.grant(aid, cid, self.seed_exit("first", "awg1"))
+        self.login("c1@example.com", USER_PASSWORD)
+        stale = {"ts": int(time.time()) - 300,
+                 "clients": {"10.80.0.2": "awg1"},
+                 "exits": {"awg1": {"alive": True, "rtt_ms": 23}}}
+        with mock.patch.object(app, "read_status", return_value=stale):
+            text = self.client.get(f"/me/configs/{cid}").text
+        self.assertRegex(text, r"no data</span>\s*exit status unavailable")
+        self.assertNotIn("in use now", text)
+        self.assertNotIn('data-live="exit|awg1">up', text)
+
+    def test_cabinet_delete_clears_history_and_baseline(self):
+        _, cid = self.seed_client()
+        self.seed_traffic(cid)
+        with app.db() as conn:
+            conn.execute("INSERT INTO traffic_state VALUES (?, ?, 1, 2, ?)",
+                         (cid, app.config_row(cid)["public_key"], int(time.time())))
+        self.login("c1@example.com", USER_PASSWORD)
+        response = self.client.post(f"/me/configs/{cid}/delete", data={
+            "csrf_token": self.csrf(f"/me/configs/{cid}"),
+        })
+        self.assertEqual(response.status_code, 303)
+        self.assert_history_removed(cid)
+
+    def test_the_cabinet_draws_the_chart(self):
+        aid, cid = self.seed_client()
+        self.seed_traffic(cid)
+        self.login("c1@example.com", USER_PASSWORD)
+        response = self.client.get(f"/me/configs/{cid}?range=24h")
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertIn("traffic-chart", response.text)
+        self.assertIn("traffic-down", response.text)
+        self.assertIn("traffic-up", response.text)
+        self.assertIn("downloaded", response.text)
+        self.assertIn(
+            f'href="/me/configs/{cid}?range=7d#traffic"', response.text
+        )
+
+    def test_an_unknown_range_falls_back_to_24h(self):
+        aid, cid = self.seed_client()
+        self.login("c1@example.com", USER_PASSWORD)
+        response = self.client.get(f"/me/configs/{cid}?range=bogus")
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertIn("no traffic recorded yet", response.text)
+
+    def test_a_foreign_configuration_is_not_found(self):
+        self.seed_client()
+        aid2, cid2 = self.seed_client(name="c2", ip="10.80.0.9",
+                                      email="c2@example.com")
+        self.login("c1@example.com", USER_PASSWORD)
+        response = self.client.get(f"/me/configs/{cid2}")
+        self.assertEqual(response.status_code, 404)
 
 
 class MobileApiTests(PanelTestCase):
@@ -1192,6 +1625,24 @@ class MobileApiTests(PanelTestCase):
         _, payload = self.api_login()
         self.assertEqual(payload["client"]["id"], cid)
         self.assertEqual([c["id"] for c in payload["configs"]], [cid])
+
+    def test_exits_api_says_unknown_when_the_daemon_is_silent(self):
+        aid, cid = self.seed_client()
+        self.grant(aid, cid, self.seed_exit("first", "awg1"))
+        headers, _ = self.api_login()
+        fresh = {"ts": int(time.time()),
+                 "exits": {"awg1": {"alive": True, "rtt_ms": 12}}}
+        with mock.patch.object(app, "read_status", return_value=fresh):
+            live = self.client.get("/api/me/exits", headers=headers).json()[0]
+        self.assertTrue(live["alive"])
+        self.assertTrue(live["status_fresh"])
+        old = {"ts": int(time.time()) - 300,
+               "exits": {"awg1": {"alive": True, "rtt_ms": 12}}}
+        with mock.patch.object(app, "read_status", return_value=old):
+            silent = self.client.get("/api/me/exits", headers=headers).json()[0]
+        self.assertIsNone(silent["alive"])
+        self.assertIsNone(silent["rtt_ms"])
+        self.assertFalse(silent["status_fresh"])
 
     def test_create_conf_order_and_delete(self):
         aid, cid = self.seed_client(max_configs=5)
@@ -1245,6 +1696,115 @@ class MobileApiTests(PanelTestCase):
         response = self.client.get(f"/api/me/configs/{new_cid}/conf",
                                    headers=headers)
         self.assertEqual(response.status_code, 404)
+
+    def test_configs_carry_the_remote_address(self):
+        aid, cid = self.seed_client()
+        with app.db() as conn:
+            pub = conn.execute(
+                "SELECT public_key FROM clients WHERE id = ?", (cid,)
+            ).fetchone()[0]
+        peers = {pub: {"endpoint": "77.88.99.3:51820", "handshake": 1,
+                       "rx": 1, "tx": 1}}
+        live = {"ok": True, "device": {}, "peers": peers}
+        with mock.patch.object(app, "iface_dump", return_value=live):
+            response = self.client.post("/api/login", data={
+                "email": "c1@example.com", "password": USER_PASSWORD,
+            })
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["configs"][0]["remote_ip"], "77.88.99.3")
+
+    def test_a_silent_peer_has_an_empty_remote_address(self):
+        self.seed_client()
+        headers, payload = self.api_login()
+        self.assertEqual(payload["configs"][0]["remote_ip"], "")
+        response = self.client.get("/api/me", headers=headers)
+        self.assertEqual(response.json()["configs"][0]["remote_ip"], "")
+
+    def seed_traffic(self, cid):
+        now = int(time.time())
+        with app.db() as conn:
+            conn.executemany(
+                "INSERT INTO traffic (client_id, ts, step, rx, tx) "
+                "VALUES (?, ?, ?, ?, ?)",
+                [
+                    (cid, now - 600, 300, 100, 200),
+                    (cid, now - 300, 300, 300, 400),
+                    (cid, now - 600, 3600, 100, 200),
+                ],
+            )
+        return now
+
+    def test_traffic_history_is_returned_in_order(self):
+        aid, cid = self.seed_client()
+        now = self.seed_traffic(cid)
+        headers, _ = self.api_login()
+        response = self.client.get(
+            f"/api/me/configs/{cid}/traffic?hours=1", headers=headers
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        payload = response.json()
+        self.assertEqual(payload["config_id"], cid)
+        self.assertEqual(payload["step_seconds"], 300)
+        self.assertEqual(
+            payload["points"],
+            [
+                {"ts": now - 600, "rx": 100, "tx": 200},
+                {"ts": now - 300, "rx": 300, "tx": 400},
+            ],
+        )
+
+    def test_traffic_switches_to_hourly_beyond_a_week(self):
+        aid, cid = self.seed_client()
+        self.seed_traffic(cid)
+        headers, _ = self.api_login()
+        response = self.client.get(
+            f"/api/me/configs/{cid}/traffic?hours=200", headers=headers
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["step_seconds"], 3600)
+        self.assertEqual(len(response.json()["points"]), 1)
+
+    def test_empty_history_is_an_empty_list(self):
+        aid, cid = self.seed_client()
+        headers, _ = self.api_login()
+        response = self.client.get(
+            f"/api/me/configs/{cid}/traffic", headers=headers
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["points"], [])
+
+    def test_deleting_a_configuration_drops_its_history(self):
+        aid, cid = self.seed_client()
+        self.seed_traffic(cid)
+        headers, _ = self.api_login()
+        response = self.client.delete(f"/api/me/configs/{cid}", headers=headers)
+        self.assertEqual(response.status_code, 200, response.text)
+        with app.db() as conn:
+            self.assertEqual(
+                conn.execute("SELECT count(*) FROM traffic").fetchone()[0], 0
+            )
+            self.assertEqual(
+                conn.execute("SELECT count(*) FROM traffic_state").fetchone()[0], 0
+            )
+
+    def test_traffic_of_a_foreign_configuration_is_not_found(self):
+        self.seed_client()
+        aid2, cid2 = self.seed_client(name="c2", ip="10.80.0.9",
+                                      email="c2@example.com")
+        headers, _ = self.api_login()
+        response = self.client.get(
+            f"/api/me/configs/{cid2}/traffic", headers=headers
+        )
+        self.assertEqual(response.status_code, 404)
+
+    def test_conf_is_plain_text_for_the_app(self):
+        # The app reads the body as text; only browser downloads changed.
+        aid, cid = self.seed_client()
+        self.grant(aid, cid, self.seed_exit())
+        headers, _ = self.api_login()
+        response = self.client.get("/api/me/conf", headers=headers)
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertTrue(response.headers["content-type"].startswith("text/plain"))
 
     def test_limit_is_enforced(self):
         self.seed_client(max_configs=1)

@@ -27,6 +27,7 @@ import subprocess
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import closing
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -324,6 +325,29 @@ def should_clear_active(desired, active) -> bool:
     return desired is None and bool(active) and active != "none"
 
 
+def record_exit_transition(previous, current, manual, alive) -> None:
+    if previous == current:
+        return
+    if not current:
+        reason = "No healthy internet exit"
+    elif current == manual:
+        reason = "Manual selection"
+    elif not previous:
+        reason = "Internet exit available"
+    elif previous not in alive:
+        reason = "Previous exit unavailable"
+    else:
+        reason = "Preferred exit recovered"
+    detail = f"{previous or 'none'} → {current or 'none'} · {reason}"
+    try:
+        with closing(sqlite3.connect(DB_PATH, timeout=1)) as conn, conn:
+            conn.execute("INSERT INTO audit (ts, action, detail) VALUES (?, ?, ?)",
+                         (datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                          "exit_failover", detail))
+    except sqlite3.Error as exc:
+        log(f"cannot record exit transition: {exc}")
+
+
 def write_atomic(path: Path, text: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(".tmp")
@@ -464,6 +488,7 @@ def tick(c: dict) -> None:
         write_atomic(ACTIVE_FILE, "none\n")
         log(f"no alive internet exit: {active} is no longer active")
 
+    record_exit_transition(active, read_active(), manual, alive)
     choices: dict[tuple[int, str], list[str]] = {}
     for grant in client_grants():
         key = (grant["client_table"], grant["ip"])

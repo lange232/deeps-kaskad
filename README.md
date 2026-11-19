@@ -334,7 +334,10 @@ reissue, link to the account, internet order, disable, delete.
 
 Pages: `/`, `/exits`, `/accounts`, `/configs`, `/journal`, `/settings`, plus
 `/accounts/new`, `/accounts/{id}`, `/configs/new`, `/configs/{id}` and the
-cabinet under `/me`, `/me/configs/new`, `/me/configs/{id}`.
+cabinet under `/me`, `/me/configs/new`, `/me/configs/{id}` and `/me/account`
+(password and sessions). Both the admin and cabinet configuration pages draw the traffic history for 1h, 24h, 7d, 30d or 90d
+(`?range=`), with the downloaded and uploaded totals and the peak rate; the
+chart uses paired SVG bars, leaving missing time buckets blank.
 
 Sign-in limits: five failed attempts for the same email from the same address
 block that pair for five minutes, twenty failures from one address block the
@@ -344,9 +347,18 @@ Sessions are stored server-side: signing out revokes the cookie, changing the
 password or resetting it kills every session of that account, and an account can
 press "sign out everywhere" on `/me`.
 
+Pages update handshakes, traffic and exit state in place every 20 seconds
+(`/status.json`, the account's own numbers only): the page itself is not
+reloaded, so scroll, focus and an open QR or config stay.
+
+The failover daemon writes `/run/kaskad/status.json` every ten seconds. The
+panel trusts it for sixty seconds; after that every page, `/status.json` and
+`/healthz` treat the exits as unknown and show `Stale` instead of repeating
+the last known state.
+
 `/healthz` answers without authentication and returns
 `{"ok": true, "version": ..., "active": ...}`; it is meant for monitoring and
-returns 503 when the database cannot be read.
+returns 503 when the database cannot be read or the failover status is stale.
 
 Internet exits are granted per account: the administrator ticks the exits an
 account may use, and every configuration puts them in its own order on `/me`
@@ -368,20 +380,28 @@ logging as the web login (`via=api` in the journal line).
 ```
 POST /api/login                   email, password -> {token, expires_at, email, client, configs}
 GET  /api/me                      -> account and its configurations
-POST /api/me/configs              name (optional) -> creates a configuration
+POST /api/me/configs              name, device_id (optional) -> creates a configuration;
+                                    the same device_id on the same account returns the
+                                    existing configuration instead of a second one
 GET  /api/me/conf?config_id=N     the awg0 config of that configuration (first by default)
 GET  /api/me/configs/{id}/conf    the same, addressed by configuration
 POST /api/me/configs/{id}/toggle  enable or disable one configuration
 DELETE /api/me/configs/{id}       delete one configuration and its keys
 GET  /api/me/exits?config_id=N    granted internet exits in this configuration's
-                                    order (id, name, comment, alive, rtt_ms);
-                                    an empty list means the account has no grants
+                                    order (id, name, comment, alive, rtt_ms,
+                                    status_fresh); an empty list means the
+                                    account has no grants; alive and rtt_ms are
+                                    null while the failover status is stale
 POST /api/me/exits/order          exit_id (repeated) + config_id -> sets the order;
                                     the list must contain every granted exit exactly once
 GET  /api/me/subnets?config_id=N  subnets the account grants, with the choice of this
                                     configuration (id, name, comment, routes, enabled)
 POST /api/me/subnets              subnet_id (repeated) + config_id -> switches subnets on;
                                     any subset of the grants, an empty list turns all off
+GET  /api/me/configs/{id}/traffic?hours=24
+                                    traffic history: {config_id, step_seconds, points};
+                                    points are {ts, rx, tx} deltas in ascending order,
+                                    five-minute buckets up to a week, hourly up to 90 days
 POST /api/logout                  revokes the token
 ```
 
@@ -391,6 +411,26 @@ so the device has to import the file again; the keys stay the same.
 `client` is a compatibility field: the account's first configuration (`null`
 while the account has none), for app versions that predate the account model.
 New code should use `configs`.
+
+Each configuration in `configs` carries `remote_ip`: the peer's address as the
+host sees it, without the port. It is an empty string while the peer has never
+connected, and the current address after a roam.
+
+`kaskad-traffic.timer` runs every five minutes: it reads the peer counters
+from `awg show awg0 dump`, stores the delta per configuration and keeps
+five-minute points for a week and hourly points for 90 days. A counter that
+went backwards (reboot, reissued peer) starts a new baseline instead of a
+negative delta; a gap in the history means the sampler was down. The endpoint
+uses 300-second points for `hours` up to 168 and 3600 beyond, and `step_seconds`
+in the response tells the client which one it got.
+
+Each configuration carries `device_id`, the identifier the app sends on its
+first connect (`[A-Za-z0-9-]`, 8 to 64 characters). The name stays human: the
+app sends the device model there, and the panel can rename a configuration
+(`/configs/{id}` and `/me/configs/{id}`), so the two never have to be glued
+into one ugly string. `device_id` is unique per account. If the name the app
+sends is already taken, creation through the API appends `-2`, `-3`; the
+response carries the name that was actually used.
 
 API tokens live 30 days, are stored server-side like web sessions, and die
 with a password change or "sign out everywhere".

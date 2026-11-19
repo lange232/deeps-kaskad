@@ -1,0 +1,8 @@
+<div class="actions" style="margin-top:8px">
+  <span class="oc-badge oc-badge--subtle">
+    <span data-live="diagnosis|{{ diagnosis_ip }}">{{ diagnosis.state }}</span>
+    <span data-live="diagnosis-age|{{ diagnosis_ip }}"></span>
+  </span>
+  <span class="oc-badge oc-badge--warning" data-live="diagnosis-warning|{{ diagnosis_ip }}"
+        {% if not diagnosis.warning %}hidden{% endif %}>{{ diagnosis.warning }}</span>
+</div>

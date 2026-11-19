@@ -5,6 +5,90 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.6] - 2026-11-20
+
+### Interface
+
+- Configuration details distinguish disabled configurations, missing access,
+  missing or old handshakes, and recent handshakes without a working internet
+  exit. Exit details separate current routing assignments from alternatives.
+- `Activity` records changes to the active internet exit and their reason.
+  Destructive actions confirm the impact on configurations, keys or sessions.
+- Overview links to affected exits and services. Administration uses a compact
+  menu on phones, with account and VPN address visible in configuration search.
+- Overview refreshes the active exit, latency, health warnings and counters
+  every 20 seconds. A failed refresh keeps the last values and marks them
+  `Stale`.
+- Configuration search combines with `Recent handshake`, `Disabled` and
+  `Unassigned` filters. The access column shows a subnet count rather than
+  listing every subnet.
+- Configuration and account links in tables and the active exit tile use
+  themed styling with visible keyboard focus.
+- The cabinet puts downloads and QR codes first; `/me/account` holds password
+  and session controls. Admin and cabinet configuration cards share the same
+  traffic chart with separate bars for download and upload.
+- Configuration cards show how many subnets allowed by the account are
+  selected. Administrators can also see ungranted subnets and jump directly
+  to the account's access settings.
+- Hover, tap or use the keyboard to inspect a traffic interval and see when
+  it occurred and how much was downloaded and uploaded. `No sample` is
+  distinct from a measured `0 B`; older gaps are not backfilled.
+
+### Added
+
+- Configurations have a `device_id` apart from the name. The mobile app sends
+  the device identifier when it creates the configuration and gets the
+  existing one back when the same account connects with the same device, so a
+  reinstall no longer leaves a duplicate. Two devices of one model get
+  `pixel-8` and `pixel-8-2` instead of a name collision. The panel shows the
+  identifier in the configuration card.
+- A configuration can be renamed: `POST /configs/{id}/name` in the panel and
+  `POST /me/configs/{id}/name` in the cabinet, with the same name rules. This
+  fixes the old glued names like `sm-s921b-ba9bcded` by hand.
+- The cabinet configuration page shows traffic history as a chart for 1h,
+  24h, 7d, 30d or 90d, with downloaded and uploaded totals and the peak rate.
+  The chart is a server-rendered inline SVG with an interactive interval
+  inspector and no external charting library.
+- Traffic history: `kaskad-traffic.timer` samples the peer counters every
+  five minutes and stores per-configuration deltas (five-minute points for a
+  week, hourly for 90 days). `GET /api/me/configs/{id}/traffic?hours=24`
+  returns them as ascending `{ts, rx, tx}` points with `step_seconds`.
+- The mobile API returns `remote_ip` for every configuration: the peer's
+  address as the host sees it, without the port (empty while it never
+  connected, the current address after a roam). The app shows it next to the
+  tunnel address.
+
+### Changed
+
+- The latency in the exit list of a configuration is two lines again: the
+  total in normal text, the split ("client 212 + exit 50 ms") faint under it,
+  instead of one grey line with a separator. Both lines keep their height and
+  the single-value cells keep their width while the ticker fills them, so rows
+  no longer change size when the numbers arrive; the configuration page also
+  measures the device round-trip, so the split appears there too.
+- Pages no longer reload themselves. A small ticker asks `/status.json` every
+  20 seconds and updates live status in place, so
+  scroll position, focus and an open `<details>` (QR, config) stay as they
+  were. `/status.json` returns the account's own configurations only.
+
+### Fixed
+
+- Removing a configuration from the panel or cabinet clears its traffic
+  history and sampler baseline, so a reused ID cannot inherit another
+  device's history.
+- An expired failover status no longer presents cached exits as healthy: the
+  exit list, exit cards, configuration cards, `/status.json`, `/healthz` and
+  `/api/me/exits` report the state as unknown, and the live pages show
+  `Stale` until fresh routing status is available.
+- Traffic chart timestamps follow the reader's timezone rather than the
+  server's, and the volume labels are formatted in the browser.
+- After a missed traffic sample, the next reading resets the baseline rather
+  than assigning traffic from the gap to the current chart interval.
+- Downloading a `.conf` from the panel no longer ends up as `name.conf.txt` on
+  Android: the browser download is sent as `application/octet-stream`, so
+  Chrome keeps the extension from `Content-Disposition`. The mobile API still
+  returns `text/plain`, unchanged for the app.
+
 ## [0.4.4] - 2026-11-18
 
 ### Fixed

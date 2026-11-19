@@ -2,14 +2,19 @@
 {% block title %}configs — deeps kaskad{% endblock %}
 {% block body %}
 <div class="page-head">
-  <h1>Configs</h1>
+  <h1>Configurations</h1>
 </div>
 
 <div class="toolbar toolbar--list">
   <form method="get" action="/configs" class="actions list-search">
     <input class="oc-input oc-input--sm" type="text" name="q" value="{{ q }}" placeholder="search by name, address or email">
+    <select class="oc-input oc-input--sm" name="state" aria-label="Configuration status">
+      {% for value, label in filters.items() %}
+      <option value="{{ value }}" {% if value == state %}selected{% endif %}>{{ label }}</option>
+      {% endfor %}
+    </select>
     <button class="oc-btn oc-btn--neutral oc-btn--sm">search</button>
-    {% if q %}<a class="oc-btn oc-btn--ghost oc-btn--sm" href="/configs">reset</a>{% endif %}
+    {% if q or state %}<a class="oc-btn oc-btn--ghost oc-btn--sm" href="/configs">reset</a>{% endif %}
   </form>
   <a class="oc-btn oc-btn--contrast oc-btn--sm" href="/configs/new">add configuration</a>
 </div>
@@ -17,32 +22,31 @@
 {% if configs %}
 <div class="oc-panel">
   <div class="table-scroll">
-  <table class="oc-table">
+  <table class="oc-table config-list">
     <thead>
-      <tr><th>configuration</th><th style="width:1%">access</th></tr>
+      <tr><th>Configuration</th><th>Account</th><th>VPN address</th><th>Handshake</th><th style="width:1%">access</th></tr>
     </thead>
     <tbody>
     {% for c in configs %}
       <tr data-href="/configs/{{ c.id }}" tabindex="0">
         <td>
-          {{ c.name }}
+          <a class="oc-link" href="/configs/{{ c.id }}">{{ c.name }}</a>
           {% if not c.enabled %}<span class="oc-badge oc-badge--subtle">disabled</span>{% endif %}
-          <div class="cell-sub oc-mono" style="display:flex; flex-wrap:wrap; gap:4px 8px">
-            <span>{{ c.ip }}</span>
+          </td><td class="config-owner">
             {% if c.account_email %}
-              <a class="oc-mono" href="/accounts/{{ c.account_id }}">{{ c.account_email }}</a>
+              <a class="oc-link oc-link--muted oc-mono" href="/accounts/{{ c.account_id }}">{{ c.account_email }}</a>
               {% if not c.account_enabled %}<span class="oc-badge oc-badge--subtle">login off</span>{% endif %}
             {% else %}<span class="oc-badge oc-badge--warning">unassigned</span>{% endif %}
-          </div>
-          <div class="cell-sub oc-num" style="display:flex; flex-wrap:wrap; gap:4px 10px">
-            <span>handshake <span data-hs="{{ c.handshake }}">—</span></span>
-            <span>{{ (c.rx / 1048576) | round(1) }} / {{ (c.tx / 1048576) | round(1) }} MiB</span>
+            </td><td class="oc-mono">{{ c.ip }}</td><td>
+            <span data-live="hs|{{ c.ip }}">—</span><div class="cell-sub oc-num">
+            <span><span data-live="rx|{{ c.ip }}">{{ (c.rx / 1048576) | round(1) }}</span> /
+              <span data-live="tx|{{ c.ip }}">{{ (c.tx / 1048576) | round(1) }}</span> MiB</span>
           </div>
         </td>
         <td>
           <div class="actions">
-            {% if c.internet %}<span class="oc-badge oc-badge--success">internet</span>{% endif %}
-            {% for name in c.exits %}<span class="oc-badge oc-badge--info">{{ name }}</span>{% endfor %}
+            {% if c.internet %}<span class="oc-badge oc-badge--subtle">internet</span>{% endif %}
+            {% if c.exits %}<span class="oc-badge oc-badge--subtle">{{ c.exits | length }} {{ 'subnet' if c.exits | length == 1 else 'subnets' }}</span>{% endif %}
             {% if not c.internet and not c.exits %}<span class="oc-badge oc-badge--danger">no access</span>{% endif %}
           </div>
         </td>
@@ -53,19 +57,8 @@
   </div>
 </div>
 {% else %}
-<div class="oc-empty">{% if q %}nothing found{% else %}no configurations yet{% endif %}</div>
+<div class="oc-empty">{% if q or state %}nothing found{% else %}no configurations yet{% endif %}</div>
 {% endif %}
 
-<script>
-function rel(ts) {
-  if (!ts || Number(ts) <= 0) return 'no data';
-  const d = Math.floor(Date.now() / 1000 - Number(ts));
-  if (d < 60) return d + 's ago';
-  if (d < 3600) return Math.floor(d / 60) + 'm ago';
-  if (d < 86400) return Math.floor(d / 3600) + 'h ago';
-  return Math.floor(d / 86400) + 'd ago';
-}
-for (const el of document.querySelectorAll('[data-hs]')) el.textContent = rel(el.dataset.hs);
-kaskadAutoRefresh(15);
-</script>
+<script>kaskadLive(20);</script>
 {% endblock %}

@@ -279,6 +279,23 @@
       changed_when: false
       when: kaskad_has_internet.rc == 0
 
+    - name: Traffic sampler is writing
+      ansible.builtin.shell: |
+        /opt/kaskad/venv/bin/python - <<'PY'
+        import sqlite3, sys, time
+        conn = sqlite3.connect("/var/lib/kaskad/panel.db")
+        row = conn.execute("SELECT max(ts) FROM traffic_state").fetchone()
+        if not row or not row[0]:
+            print("no traffic samples yet")
+            sys.exit(0)
+        age = int(time.time()) - int(row[0])
+        print(f"last traffic sample is {age // 60} min old")
+        if age > 1800:
+            print("traffic sampler is stale: kaskad-traffic.timer is not working")
+            sys.exit(1)
+        PY
+      changed_when: false
+
     - name: Recent backup
       ansible.builtin.shell: |
         set -o pipefail

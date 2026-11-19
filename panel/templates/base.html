@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="ru" data-theme="dark">
+<html lang="en" data-theme="dark">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -61,7 +61,14 @@
   .full { grid-column: 1 / -1; }
   .oc-textarea { min-height: 180px; resize: vertical; font-family: var(--ui-font-mono, ui-monospace, monospace); font-size: 12px; }
   .name-cell { display: flex; align-items: center; gap: 8px; }
-  .cell-sub { font-size: 11px; color: var(--ui-text-faint); }
+  .cell-sub { font-size: 12px; color: var(--ui-text-muted); }
+  /* The latency is two lines: the total, then how it splits. */
+  .ping { display: inline-flex; flex-direction: column; gap: 2px; line-height: 1.35; }
+  .ping__total { font-size: 12px; color: var(--ui-text-base); }
+  /* Both lines keep their height while the ticker fills them in. */
+  .ping .cell-sub { min-height: 15px; }
+  /* A single latency keeps its width between "-" and "≈ 262 ms". */
+  .ping-cell { display: inline-block; min-width: 11ch; }
   /* A row of a list is its own link; the button that used to open it is gone. */
   tr[data-href] { cursor: pointer; }
   tr[data-href]:focus-visible { outline: 2px solid var(--ui-border-focus); outline-offset: -2px; }
@@ -120,26 +127,174 @@
 <script>
   // Reload only when nobody is typing and the tab is visible. Defined in the
   // head because page scripts run before the body-end script.
-  window.kaskadAutoRefresh = function (seconds) {
-    var dirty = false;
-    document.addEventListener('input', function () { dirty = true; });
-    document.addEventListener('change', function () { dirty = true; });
-    function tick() {
-      var el = document.activeElement;
-      var typing = el && el.matches && el.matches('input, textarea, select');
-      if (!dirty && !typing && document.visibilityState === 'visible') {
-        location.reload();
+  // "2m ago" for a handshake timestamp; shared by the pages and the ticker.
+  window.kaskadRel = function (ts) {
+    if (!ts || Number(ts) <= 0) return 'no data';
+    var d = Math.floor(Date.now() / 1000 - Number(ts));
+    if (d < 60) return d + 's ago';
+    if (d < 3600) return Math.floor(d / 60) + 'm ago';
+    if (d < 86400) return Math.floor(d / 3600) + 'h ago';
+    return Math.floor(d / 86400) + 'd ago';
+  };
+
+  // Live numbers without a page reload: fetch /status.json and rewrite only
+  // the elements marked data-live. Scroll, focus and an open <details> stay.
+  window.kaskadLive = function (seconds, clientRtt) {
+    var rtt = typeof clientRtt === 'number' ? clientRtt : null;
+    var mb = function (bytes) { return (Number(bytes) / 1048576).toFixed(1); };
+    var put = function (el, text) {
+      if (el.textContent !== text) el.textContent = text;
+    };
+    var health = document.getElementById('overview-health');
+    var stale = document.getElementById('overview-stale');
+    var previousActive, previousIssues;
+    function updateOverview(view) {
+      function link(url, text, alert) {
+        var a = document.createElement('a');
+        a.className = alert ? 'oc-link oc-link--alert' : 'oc-link';
+        a.href = url;
+        a.textContent = text;
+        return a;
+      }
+      var active = view.active;
+      var activeKey = JSON.stringify(active);
+      var issuesKey = JSON.stringify(view.issues);
+      if (activeKey !== previousActive) {
+        previousActive = activeKey;
+        document.getElementById('overview-active').replaceChildren(
+          active ? link('/exits/' + active.id, active.name, false) : '—');
+        put(document.getElementById('overview-iface'), active ? active.iface : '');
+        document.getElementById('overview-ping').dataset.live = 'ping|' + (active ? active.iface : '');
+      }
+      if (issuesKey !== previousIssues) {
+        previousIssues = issuesKey;
+        health.replaceChildren(...(view.issues.length ? view.issues.map(function (issue) {
+          return link(issue.url, issue.text, true);
+        }) : ['All systems operational']));
+      }
+    }
+    var badge = function (el, exit) {
+      var cls = 'oc-badge ';
+      var text;
+      if (exit && !exit.enabled) { cls += 'oc-badge--subtle'; text = 'disabled'; }
+      else if (!exit || exit.alive == null) { cls += 'oc-badge--subtle'; text = 'no data'; }
+      else if (exit.alive) { cls += 'oc-badge--success'; text = 'up'; }
+      else { cls += 'oc-badge--danger'; text = 'down'; }
+      if (el.className !== cls) el.className = cls;
+      put(el, text);
+    };
+    var ping = function (el, exit) {
+      if (!exit || !exit.enabled || !exit.alive || !exit.rtt_ms) {
+        put(el, '—');
         return;
+      }
+      if (rtt === null) {
+        put(el, 'exit ' + exit.rtt_ms + ' ms');
+        return;
+      }
+      put(el, '≈ ' + (rtt + exit.rtt_ms) + ' ms');
+    };
+    var pingParts = function (el, exit) {
+      if (!exit || !exit.enabled || !exit.alive || !exit.rtt_ms || rtt === null) {
+        put(el, '\u00a0');
+        return;
+      }
+      put(el, 'client ' + rtt + ' + exit ' + exit.rtt_ms + ' ms');
+    };
+    function apply(data) {
+      var exits = data.exits || {};
+      var configs = data.configs || {};
+      var nodes = document.querySelectorAll('[data-live]');
+      for (var i = 0; i < nodes.length; i++) {
+        var el = nodes[i];
+        var parts = el.dataset.live.split('|');
+        var kind = parts[0];
+        var key = parts[1];
+        var item;
+        if (kind === 'hs') {
+          item = configs[key];
+          put(el, item ? kaskadRel(item.handshake) : 'no data');
+        } else if (kind === 'status') {
+          el.hidden = !!data.status_fresh;
+        } else if (kind.startsWith('diagnosis')) {
+          item = configs[key];
+          if (!item || !item.diagnosis) continue;
+          if (kind === 'diagnosis') put(el, item.diagnosis.state);
+          else if (kind === 'diagnosis-age') put(el, item.diagnosis.state === 'Last handshake' ? kaskadRel(item.handshake) : '');
+          else {
+            put(el, item.diagnosis.warning);
+            el.hidden = !item.diagnosis.warning;
+          }
+        } else if (kind === 'rx') {
+          item = configs[key];
+          put(el, mb(item ? item.rx : 0));
+        } else if (kind === 'tx') {
+          item = configs[key];
+          put(el, mb(item ? item.tx : 0));
+        } else if (kind === 'kb') {
+          item = configs[key];
+          put(el, item && item.enabled ? 'enabled' : 'disabled');
+        } else if (kind === 'exit') {
+          badge(el, exits[key]);
+        } else if (kind === 'ping') {
+          ping(el, exits[key]);
+        } else if (kind === 'pingparts') {
+          pingParts(el, exits[key]);
+        } else if (kind === 'lastok') {
+          item = exits[key];
+          put(el, item && item.last_ok ? kaskadRel(item.last_ok) : 'no data');
+        } else if (kind === 'current') {
+          item = configs[key];
+          put(el, (item && item.iface) || 'none');
+        } else if (kind === 'online') {
+          put(el, String(data.online));
+        } else if (kind === 'rx-total') {
+          put(el, mb(data.rx));
+        } else if (kind === 'tx-total') {
+          put(el, mb(data.tx));
+        } else if (kind === 'exits-alive') {
+          put(el, data.status_fresh ? String(data.exits_alive) : '—');
+        } else if (kind === 'exits_total' || kind === 'configs_total') {
+          put(el, String(data[kind]));
+        }
+      }
+    }
+    function tick() {
+      if (document.visibilityState === 'visible') {
+        var controller = new AbortController();
+        var deadline = setTimeout(function () { controller.abort(); }, 10000);
+        fetch(health ? '/status.json?overview=true' : '/status.json',
+          {cache: 'no-store', credentials: 'same-origin', signal: controller.signal})
+          .then(function (r) {
+            if (r.status === 401) { window.location.href = '/login'; return null; }
+            return r.ok ? r.json() : null;
+          })
+          .then(function (data) {
+            if (!data || (health && !data.overview)) throw new Error('status unavailable');
+            if (health) {
+              updateOverview(data.overview);
+            }
+            var staleLine = stale || document.getElementById('live-stale');
+            if (staleLine) {
+              put(staleLine, data.status_fresh ? '' : 'Stale · exit status unavailable');
+            }
+            apply(data);
+          })
+          .catch(function () {
+            var staleLine = stale || document.getElementById('live-stale');
+            if (staleLine) put(staleLine, 'Stale · status unavailable');
+          })
+          .finally(function () { clearTimeout(deadline); });
       }
       setTimeout(tick, seconds * 1000);
     }
-    setTimeout(tick, seconds * 1000);
+    tick();
   };
 </script>
 </head>
 <body class="oc-shell">
 <header class="oc-topbar">
-  <a class="oc-brand" href="/" style="text-decoration:none">
+  <a class="oc-brand" href="{{ '/me' if role == 'user' else '/' }}" style="text-decoration:none">
     <span class="oc-brand__dim">deeps</span><span class="oc-brand__mark">kaskad</span>
   </a>
   <span class="oc-topbar__spacer"></span>
@@ -158,13 +313,14 @@
     {% set links = [
         ('/', 'Overview', 'overview'),
         ('/accounts', 'Accounts', 'accounts'),
-        ('/configs', 'Configs', 'configs'),
+        ('/configs', 'Configurations', 'configs'),
         ('/exits', 'Exits', 'exits'),
-        ('/journal', 'Journal', 'journal'),
-        ('/settings', 'Settings', 'settings')] %}
-    <nav aria-label="Main">
+        ('/journal', 'Activity', 'journal'),
+        ('/settings', 'System', 'settings')] %}
+    <button hidden class="oc-btn oc-btn--outline nav-toggle" aria-expanded="false" aria-controls="admin-nav">Menu · {% for href, label, key in links if nav == key %}{{ label }}{% endfor %}</button>
+    <nav id="admin-nav" aria-label="Main">
       {% for href, label, key in links %}
-      {% if key == 'journal' %}<div class="side__sep"></div>{% endif %}
+      {% if key in ('accounts', 'journal') %}<div class="side__sep"></div>{% endif %}
       <a href="{{ href }}" class="{{ 'is-active' if nav == key }}"
          {% if nav == key %}aria-current="page"{% endif %}>{{ label }}</a>
       {% endfor %}
@@ -172,6 +328,12 @@
   </aside>
   {% endif %}
   <main class="main">
+    {% if role == 'user' %}
+    <nav class="cab-nav" aria-label="Cabinet"><a href="/me" {% if nav != 'account' %}aria-current="page"{% endif %}>My configurations</a><a href="/me/account" {% if nav == 'account' %}aria-current="page"{% endif %}>Account</a></nav>
+    {% endif %}
+    {% if not hide_nav and nav != 'overview' %}
+    <div id="live-stale" class="oc-muted" role="status"></div>
+    {% endif %}
     {% block body %}{% endblock %}
   </main>
 </div>
@@ -188,7 +350,16 @@
 </footer>
 
 <script>
+  const menu = document.querySelector('.nav-toggle');
+  if (menu) {
+    menu.hidden = false;
+    menu.addEventListener('click', () => menu.setAttribute('aria-expanded', menu.getAttribute('aria-expanded') === 'false'));
+  }
   const root = document.documentElement;
+  document.addEventListener('submit', (event) => {
+    const message = event.target.dataset.confirm;
+    if (message && !window.confirm(message)) event.preventDefault();
+  });
   try {
     const saved = localStorage.getItem('kaskad-theme');
     if (saved) root.dataset.theme = saved;
@@ -206,7 +377,7 @@
   document.addEventListener('keydown', (event) => {
     if (event.key !== 'Enter') return;
     const row = event.target.closest('tr[data-href]');
-    if (!row) return;
+    if (!row || event.target !== row) return;
     window.location.href = row.dataset.href;
   });
 

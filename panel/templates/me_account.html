@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block title %}Account — deeps kaskad{% endblock %}
+{% block body %}
+<div class="page-head"><h1>Account</h1><span class="oc-muted">{{ email }}</span></div>
+{% if err %}<div class="oc-alert oc-alert--danger" style="margin-bottom:16px"><span class="oc-dot" style="margin-top:7px"></span><div class="oc-alert__body">{{ err }}</div></div>{% endif %}
+{% if ok %}<div class="oc-alert oc-alert--success" style="margin-bottom:16px"><span class="oc-dot" style="margin-top:7px"></span><div class="oc-alert__body">{{ ok }}</div></div>{% endif %}
+
+  <section>
+    <h2 class="oc-section__title">password</h2>
+    <div class="oc-panel" style="padding:16px">
+      <form method="post" action="/me/password" style="max-width:380px">
+        <input type="hidden" name="csrf_token" value="{{ csrf }}">
+        <label class="oc-field">
+          <span class="oc-field__label">current password</span>
+          <input class="oc-input" type="password" name="current_password"
+                 autocomplete="current-password" required>
+        </label>
+        <label class="oc-field" style="margin-top:12px">
+          <span class="oc-field__label">new password</span>
+          <input class="oc-input" type="password" name="new_password"
+                 autocomplete="new-password" minlength="12" required>
+        </label>
+        <p class="oc-hint" style="margin-top:8px">at least 12 characters</p>
+
+        <button class="oc-btn oc-btn--contrast oc-btn--sm" style="margin-top:12px">change password</button>
+      </form>
+      <form method="post" action="/me/logout-all" style="margin-top:16px">
+        <input type="hidden" name="csrf_token" value="{{ csrf }}">
+        <button class="oc-btn oc-btn--ghost oc-btn--sm">sign out everywhere</button>
+      </form>
+    </div>
+  </section>
+{% endblock %}

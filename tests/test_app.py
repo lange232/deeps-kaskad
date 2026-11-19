@@ -368,5 +368,60 @@ class RenderTests(unittest.TestCase):
         self.assertIn("pk-off", text)  # the caller filters by enabled, not the renderer
 
 
+@unittest.skipUnless(app, "fastapi is not installed")
+class TrafficChartTests(unittest.TestCase):
+    def test_both_series_and_totals_are_built(self):
+        now = 1794800100
+        rows = [
+            {"ts": now - 600, "rx": 100, "tx": 1000},
+            {"ts": now - 300, "rx": 200, "tx": 2000},
+        ]
+        chart = app.build_traffic_chart(300, now - 3600, now, rows)
+        self.assertEqual(chart["total_rx"], "300 B")
+        self.assertEqual(chart["total_tx"], "2.9 KiB")
+        self.assertEqual(len(chart["bars"]), 2)
+        self.assertGreater(chart["bars"][0]["down"], chart["bars"][0]["up"])
+        self.assertGreater(chart["bars"][1]["x"], chart["bars"][0]["x"])
+
+    def test_isolated_buckets_do_not_fill_the_gap(self):
+        chart = app.build_traffic_chart(300, 0, 3600, [
+            {"ts": 300, "rx": 0, "tx": 10}, {"ts": 2700, "rx": 20, "tx": 0}])
+        a, b = chart["bars"]
+        self.assertGreater(a["down"], 0)
+        self.assertGreater(b["up"], 0)
+        self.assertEqual(b["x"] - a["x"], chart["width"] * 2400 / 3600)
+        self.assertLess(a["up_x"] + a["width"], b["x"])
+        self.assertEqual(chart["intervals"][1]["tx"], 10)
+        self.assertIsNone(chart["intervals"][0]["rx"])
+        self.assertIsNone(chart["intervals"][2]["rx"])
+        self.assertEqual(chart["from_ts"], 0)
+        self.assertEqual(chart["to_ts"], 3600)
+
+    def test_no_history_means_no_chart(self):
+        self.assertIsNone(app.build_traffic_chart(300, 0, 3600, []))
+
+    def test_zero_traffic_is_a_sample_not_a_gap(self):
+        rows = [{"ts": 300, "rx": 0, "tx": 0}]
+        chart = app.build_traffic_chart(300, 0, 3600, rows)
+        self.assertEqual(chart["intervals"][1]["tx"], 0)
+        self.assertEqual(chart["intervals"][1]["rx"], 0)
+        self.assertIsNone(chart["intervals"][0]["rx"])
+        self.assertIsNone(chart["intervals"][0]["tx"])
+
+
+@unittest.skipUnless(app, "fastapi is not installed")
+class RemoteIpTests(unittest.TestCase):
+    def test_the_port_is_dropped(self):
+        self.assertEqual(app.remote_ip("77.88.99.3:51820"), "77.88.99.3")
+
+    def test_ipv6_keeps_its_colons(self):
+        self.assertEqual(app.remote_ip("[2001:db8::1]:51820"), "2001:db8::1")
+
+    def test_a_peer_that_never_connected_has_no_address(self):
+        self.assertEqual(app.remote_ip("(none)"), "")
+        self.assertEqual(app.remote_ip(""), "")
+        self.assertEqual(app.remote_ip(None), "")
+
+
 if __name__ == "__main__":
     unittest.main()

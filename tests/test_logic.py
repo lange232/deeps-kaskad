@@ -21,6 +21,19 @@ import routing  # noqa: E402
 
 
 class ChooseTests(unittest.TestCase):
+    def test_activity_records_only_changes_to_the_active_exit(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "panel.db"
+            with mock.patch.object(failover, "DB_PATH", path), sqlite3.connect(path) as conn:
+                conn.execute("CREATE TABLE audit (ts TEXT, action TEXT, detail TEXT)")
+                failover.record_exit_transition("awg1", "awg1", "", ["awg1"])
+                failover.record_exit_transition("awg1", "awg2", "", ["awg2"])
+                failover.record_exit_transition("awg2", None, "", [])
+                self.assertEqual(conn.execute("SELECT action, detail FROM audit").fetchall(), [
+                    ("exit_failover", "awg1 → awg2 · Previous exit unavailable"),
+                    ("exit_failover", "awg2 → none · No healthy internet exit"),
+                ])
+
     def test_manual_pins_lower_priority(self):
         desired, clear = failover.choose(
             "awg2", ["awg1", "awg2"], "awg2", {"awg1": 0, "awg2": 0}, now=1000, stable=60

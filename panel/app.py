@@ -19,6 +19,7 @@ from contextlib import contextmanager
 import hmac
 import ipaddress
 import json
+import math
 import os
 import re
 import secrets
@@ -33,7 +34,7 @@ from pathlib import Path
 
 from urllib.parse import quote
 
-from fastapi import FastAPI, Form, HTTPException, Request
+from fastapi import FastAPI, Form, HTTPException, Query, Request
 from fastapi.responses import (
     FileResponse,
     HTMLResponse,
@@ -48,6 +49,7 @@ from fastapi.templating import Jinja2Templates
 import auth
 import awgconf
 import routing
+import traffic
 
 BASE = Path(__file__).resolve().parent
 CONFIG_PATH = Path(os.environ.get("KASKAD_CONFIG", "/etc/kaskad/panel.json"))
@@ -56,6 +58,8 @@ ANDROID_APK = Path(os.environ.get("KASKAD_ANDROID_APK", "/var/lib/kaskad/app.apk
 COOKIE = "kaskad_session"
 SESSION_TTL = auth.SESSION_TTL
 NAME_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,31}$")
+# The app's device identifier: an Android id or a uuid, never shown as a name.
+DEVICE_ID_RE = re.compile(r"^[A-Za-z0-9-]{8,64}$")
 # Configurations per account unless the administrator sets a personal value.
 DEFAULT_MAX_CONFIGS = 5
 
@@ -70,6 +74,17 @@ templates = Jinja2Templates(directory=str(BASE / "templates"))
 templates.env.filters["ts"] = human_ts
 app = FastAPI(title="deeps kaskad", docs_url=None, redoc_url=None, openapi_url=None)
 app.mount("/static", StaticFiles(directory=str(BASE / "static")), name="static")
+
+
+# A page must never come from the browser cache: the panel changes on deploy,
+# the pages no longer reload themselves, and a stale copy looks like the
+# change never arrived.
+@app.middleware("http")
+async def no_store_pages(request, call_next):
+    response = await call_next(request)
+    if response.headers.get("content-type", "").startswith("text/html"):
+        response.headers["Cache-Control"] = "no-store"
+    return response
 
 
 # ---------------------------------------------------------------- config / db
@@ -106,6 +121,7 @@ def init_db() -> None:
                 id INTEGER PRIMARY KEY,
                 account_id INTEGER,
                 name TEXT UNIQUE NOT NULL,
+                device_id TEXT,
                 ip TEXT UNIQUE NOT NULL,
                 public_key TEXT NOT NULL,
                 private_key TEXT NOT NULL,
@@ -184,6 +200,9 @@ def init_db() -> None:
             );
             """
         )
+        # The sampler shares the definition: it can fire while the panel is
+        # restarting and must not depend on this process having run yet.
+        conn.executescript(traffic.SCHEMA)
         migrate(conn, existing)
 
 
@@ -209,6 +228,14 @@ def migrate(conn: sqlite3.Connection, existing: set[str]) -> None:
     # administrator re-creates the accounts and their configurations by hand.
     if "account_id" not in cols:
         conn.execute("ALTER TABLE clients ADD COLUMN account_id INTEGER")
+    # The device identifier the app sends on login: kept apart from the name,
+    # which is meant for people. One account cannot hold the same device twice.
+    if "device_id" not in cols:
+        conn.execute("ALTER TABLE clients ADD COLUMN device_id TEXT")
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS clients_device ON clients "
+        "(account_id, device_id) WHERE device_id IS NOT NULL"
+    )
     # First start on an old database: accounts replace users and account ids
     # can collide with old users ids, so a session from before the upgrade
     # must not sign in as a freshly created account.
@@ -607,6 +634,120 @@ def iface_dump(name: str) -> dict:
     return {"device": device, "peers": peers, "ok": True}
 
 
+def remote_ip(endpoint: str) -> str:
+    """The peer address without the port, as the host sees it.
+
+    An empty string means the peer never connected (awg prints "(none)"):
+    there is no address to show, and the client hides the field.
+    """
+    value = (endpoint or "").strip()
+    if not value or value == "(none)":
+        return ""
+    if value.startswith("["):  # [2001:db8::1]:51820
+        return value[1:].split("]", 1)[0]
+    return value.rsplit(":", 1)[0] if ":" in value else value
+
+
+TRAFFIC_RANGES = {"1h": 1, "24h": 24, "7d": 7 * 24, "30d": 30 * 24, "90d": 90 * 24}
+CHART_WIDTH = 720
+CHART_HEIGHT = 180
+CHART_COLUMNS = 240
+
+
+def human_bytes(value) -> str:
+    value = float(value or 0)
+    for unit in ("B", "KiB", "MiB", "GiB", "TiB"):
+        if value < 1024 or unit == "TiB":
+            if unit == "B":
+                return f"{int(value)} B"
+            return f"{value:.1f} {unit}"
+        value /= 1024
+    return "0 B"
+
+
+def human_rate(value) -> str:
+    return human_bytes(value) + "/s"
+
+
+def traffic_time_label(ts: int) -> str:
+    moment = datetime.fromtimestamp(int(ts))
+    if moment.date() == datetime.now().date():
+        return moment.strftime("%H:%M")
+    return moment.strftime("%d.%m %H:%M")
+
+
+def config_traffic_rows(cid: int, hours: int):
+    """Traffic points of one configuration for the last `hours` hours."""
+    step = traffic.STEP if hours <= 7 * 24 else traffic.HOUR
+    now = int(time.time())
+    since = now - hours * 3600
+    with db() as conn:
+        rows = conn.execute(
+            "SELECT ts, rx, tx FROM traffic WHERE client_id = ? AND step = ? "
+            "AND ts >= ? ORDER BY ts",
+            (cid, step, since),
+        ).fetchall()
+    return step, since, now, rows
+
+
+def build_traffic_chart(step: int, since: int, now: int, rows) -> dict | None:
+    """Downsampled series and totals for the cabinet chart.
+
+    The stored buckets are summed into at most CHART_COLUMNS columns and drawn
+    as bytes per second, so a five-minute point and an hourly point look the
+    same on the time axis.
+    """
+    span = max(int(now) - int(since), 1)
+    bucket = max(step, math.ceil(span / CHART_COLUMNS / step) * step)
+    sums: dict[int, list[int]] = {}
+    total_rx = total_tx = 0
+    for row in rows:
+        rx, tx = int(row["rx"]), int(row["tx"])
+        total_rx += rx
+        total_tx += tx
+        key = min((span - 1) // bucket, int((int(row["ts"]) - since) // bucket))
+        pair = sums.setdefault(key, [0, 0])
+        pair[0] += rx
+        pair[1] += tx
+    if not sums:
+        return None
+    peak = max(max(pair) for pair in sums.values()) / bucket
+    scale = peak or 1
+    # Two adjacent bars per time bucket. Missing buckets stay blank.
+    slot = CHART_WIDTH * bucket / span
+    bars = []
+    for key, (rx, tx) in sorted(sums.items()):
+        x = key * slot
+        width = min(slot, CHART_WIDTH - x)
+        bars.append({"x": round(x, 2),
+                     "up_x": round(x + width / 2, 2), "width": round(width * .43, 2),
+                     "down": round(tx / bucket / scale * (CHART_HEIGHT - 4), 2),
+                     "up": round(rx / bucket / scale * (CHART_HEIGHT - 4), 2)})
+    intervals = []
+    for key in range(math.ceil(span / bucket)):
+        start = since + key * bucket
+        end = min(now, start + bucket)
+        rx, tx = sums.get(key, (None, None))
+        intervals.append({"from": start, "to": end, "rx": rx, "tx": tx})
+    return {
+        "width": CHART_WIDTH, "height": CHART_HEIGHT,
+        "bars": bars, "intervals": intervals, "interval_fraction": bucket / span,
+        "from_ts": since, "to_ts": now,
+        "total_rx": human_bytes(total_rx),
+        "total_tx": human_bytes(total_tx),
+        "peak": human_rate(peak),
+        "from": traffic_time_label(since),
+        "to": traffic_time_label(now),
+    }
+
+
+def traffic_context(cid: int, period: str) -> dict:
+    if period not in TRAFFIC_RANGES:
+        period = "24h"
+    return {"period": period, "ranges": TRAFFIC_RANGES,
+            "chart": build_traffic_chart(*config_traffic_rows(cid, TRAFFIC_RANGES[period]))}
+
+
 def apply_routing() -> None:
     try:
         result = routing.apply()
@@ -942,6 +1083,32 @@ def account_configs(aid: int):
         ).fetchall()
 
 
+def config_by_device(aid: int, device_id: str):
+    """The configuration this account already has for the device, if any."""
+    with db() as conn:
+        return conn.execute(
+            "SELECT * FROM clients WHERE account_id = ? AND device_id = ?",
+            (aid, device_id),
+        ).fetchone()
+
+
+def drop_traffic(conn, cid: int) -> None:
+    """Removes a deleted configuration's history and sampler baseline."""
+    conn.execute("DELETE FROM traffic WHERE client_id = ?", (cid,))
+    conn.execute("DELETE FROM traffic_state WHERE client_id = ?", (cid,))
+
+
+def created_config_view(cl) -> dict:
+    return {
+        "id": cl["id"],
+        "name": cl["name"],
+        "device_id": (cl["device_id"] if "device_id" in cl.keys() else "") or "",
+        "ip": cl["ip"],
+        "internet": config_has_internet(cl),
+        "enabled": bool(cl["enabled"]),
+    }
+
+
 def max_configs_for(account) -> int:
     """The per-account override, or the server default from settings."""
     value = account["max_configs"]
@@ -1254,14 +1421,58 @@ def config_view(cl, live: dict, assigned=None) -> dict:
         "id": cl["id"],
         "account_id": cl["account_id"],
         "name": cl["name"],
+        "device_id": (cl["device_id"] if "device_id" in cl.keys() else "") or "",
         "ip": cl["ip"],
         "enabled": bool(cl["enabled"]),
         "internet": config_has_internet(cl),
         "exits": [e["name"] for e in assigned],
+        "remote_ip": remote_ip(st.get("endpoint", "")),
         "handshake": st.get("handshake", 0),
         "rx": st.get("rx", 0),
         "tx": st.get("tx", 0),
     }
+
+
+def fresh_routing_status(status: dict, now: int) -> bool:
+    ts = status.get("ts")
+    return isinstance(ts, (int, float)) and 0 <= now - ts <= 60
+
+
+def routing_status(now: int | None = None) -> tuple[dict, bool]:
+    """Failover status, emptied when it is too old to describe anything.
+
+    The daemon writes it every ten seconds. A stale file outlives a crash, so
+    every page must treat its exits as unknown rather than as healthy.
+    """
+    status = read_status()
+    fresh = fresh_routing_status(status, int(time.time()) if now is None else now)
+    return (status if fresh else {}), fresh
+
+
+def selected_internet_iface(view: dict, status: dict, shared: bool = False) -> str:
+    return ((status.get("active") if shared else (status.get("clients") or {}).get(view["ip"]))
+            or "")
+
+
+def configuration_diagnosis(view: dict, status: dict, now: int, shared: bool = False) -> dict:
+    if not view["enabled"]:
+        return {"state": "Disabled", "warning": ""}
+    if not view["internet"] and not view["exits"]:
+        return {"state": "No access assigned", "warning": ""}
+    handshake = view["handshake"]
+    if not handshake:
+        return {"state": "No handshake recorded", "warning": ""}
+    if now - handshake >= 180:
+        return {"state": "Last handshake", "warning": ""}
+    warning = ""
+    if view["internet"]:
+        if not fresh_routing_status(status, now):
+            warning = "Exit status unavailable"
+        else:
+            iface = selected_internet_iface(view, status, shared)
+            if not (status.get("exits") or {}).get(iface, {}).get("alive"):
+                warning = "No working internet exit"
+    return {"state": "Online", "warning": warning}
 
 
 def exit_view(e, status: dict, active, manual: str = "") -> dict:
@@ -1424,9 +1635,10 @@ def healthz():
         return JSONResponse({"ok": False, "error": "database"}, status_code=503)
     status = read_status()
     ts = int(status.get("ts") or 0)
-    age = int(time.time()) - ts if ts else None
-    fresh = age is not None and age <= 120
-    active = run_dir("active-exit")
+    now = int(time.time())
+    age = now - ts if ts else None
+    fresh = fresh_routing_status(status, now)
+    active = run_dir("active-exit") if fresh else None
     return JSONResponse({
         "ok": fresh,
         "version": c.get("version", ""),
@@ -1444,8 +1656,8 @@ def overview(request: Request, err: str | None = None, ok: str | None = None):
     c = cfg()
     live = iface_dump(c["iface"])["peers"]
     configs = [config_view(cl, live) for cl in config_rows()]
-    status = read_status()
-    active = run_dir("active-exit")
+    status, fresh = routing_status()
+    active = run_dir("active-exit") if fresh else None
     manual = setting("manual_exit") or ""
     exits = [exit_view(e, status, active, manual) for e in exits_rows()]
     with db() as conn:
@@ -1456,14 +1668,32 @@ def overview(request: Request, err: str | None = None, ok: str | None = None):
     online = sum(1 for cl in configs if cl["handshake"] and now - cl["handshake"] < 180)
     rx = sum(cl["rx"] for cl in configs)
     tx = sum(cl["tx"] for cl in configs)
-    active_exit = next((e for e in exits if e["active"]), None)
+    health = overview_health(exits, fresh)
     return render_page(
         request, "overview.html", "overview",
         csrf=csrf(token), err=err, ok=ok,
-        clients=configs, exits=exits, active_exit=active, manual_exit=manual,
-        active_row=active_exit, online=online, rx=rx, tx=tx,
-        status=services(), events=events, net=c["net"],
+        clients=configs, exits=exits, health=health, status_fresh=fresh,
+        online=online, rx=rx, tx=tx,
+        events=events,
     )
+
+
+def overview_health(exits: list[dict], status_fresh: bool) -> dict:
+    active = next((e for e in exits if e["active"] and e["enabled"]
+                   and e["mode"] == "internet"), None)
+    issues = []
+    if not status_fresh:
+        issues.append({"url": "/settings#services", "text": "Exit status unavailable → System"})
+    elif not active or not active["alive"]:
+        issues.append({"url": "/exits", "text": "No healthy active internet exit → Exits"})
+    for e in exits:
+        if e["enabled"] and e["alive"] is False:
+            issues.append({"url": f"/exits/{e['id']}", "text": f"{e['name']} is down → Exit details"})
+    for name, state in services().items():
+        if state != "active":
+            issues.append({"url": "/settings#services", "text": f"{name}: {state} → System"})
+    return {"active": {key: active[key] for key in ("id", "name", "iface")} if active else None,
+            "issues": issues}
 
 
 # ---------------------------------------------------------------- exits
@@ -1474,8 +1704,8 @@ EXIT_DEFAULTS = {"name": "", "mode": "internet", "priority": "", "routes": "", "
 @app.get("/exits", response_class=HTMLResponse)
 def exits_page(request: Request, mode: str | None = None):
     token = require_admin(request)
-    status = read_status()
-    active = run_dir("active-exit")
+    status, fresh = routing_status()
+    active = run_dir("active-exit") if fresh else None
     manual = setting("manual_exit") or ""
     items = [exit_view(e, status, active, manual) for e in exits_rows()]
     if mode in ("internet", "routes"):
@@ -1483,6 +1713,7 @@ def exits_page(request: Request, mode: str | None = None):
     return render_page(
         request, "exits.html", "exits",
         csrf=csrf(token), exits=items, mode=mode or "", manual_exit=manual,
+        routing_fresh=fresh,
         counts={
             "all": len(exits_rows()),
             "internet": sum(1 for e in exits_rows() if e["mode"] == "internet"),
@@ -1506,27 +1737,36 @@ def exit_page(request: Request, eid: int, err: str | None = None, ok: str | None
     token = require_admin(request)
     with db() as conn:
         row = conn.execute("SELECT * FROM exits WHERE id = ?", (eid,)).fetchone()
-        assigned = conn.execute(
-            "SELECT c.* FROM client_exits ce JOIN clients c ON c.id = ce.client_id "
-            "WHERE ce.exit_id = ? AND c.account_id IS NULL "
-            "UNION "
-            "SELECT c.* FROM account_exits ae JOIN clients c ON c.account_id = ae.account_id "
-            "WHERE ae.exit_id = ? "
-            "ORDER BY name",
-            (eid, eid),
-        ).fetchall()
+        configs = conn.execute("SELECT * FROM clients WHERE enabled = 1 ORDER BY name").fetchall()
     if not row:
         raise HTTPException(status_code=404)
-    status = read_status()
-    active = run_dir("active-exit")
+    status, fresh = routing_status()
+    active = run_dir("active-exit") if fresh else None
     manual = setting("manual_exit") or ""
+    current, reserve = [], []
+    if row["enabled"]:
+        for cl in configs:
+            if row["mode"] == "routes":
+                if any(e["id"] == eid for e in config_routed_exits(cl)):
+                    current.append(cl)
+                continue
+            choices = config_internet_exits(cl)
+            shared = not cl["account_id"] and bool(cl["internet"]) and not choices
+            if not cl["account_id"] and not cl["internet"]:
+                continue
+            if not shared and not any(e["id"] == eid for e in choices):
+                continue
+            if fresh and selected_internet_iface(cl, status, shared) == row["iface"]:
+                current.append(cl)
+            else:
+                reserve.append(cl)
     return render_page(
         request, "exit_detail.html", "exits",
         csrf=csrf(token), err=err, ok=ok,
         exit=exit_view(row, status, active, manual),
         conf=mask_conf(awgconf.render(row["conf"], cfg()["exit_mtu"],
                                       [x.strip() for x in (row["routes"] or "").split(",") if x.strip()] or None)),
-        clients=assigned,
+        current_configs=current, reserve_configs=reserve, routing_fresh=fresh,
         clients_net=cfg()["clients_net"],
     )
 
@@ -1778,7 +2018,9 @@ def config_limit_error(account) -> str:
     return ""
 
 
-def spawn_config(conn, account, name: str = "") -> int:
+def spawn_config(
+    conn, account, name: str = "", device_id: str = "", uniquify: bool = False
+) -> int:
     """Creates one configuration with server-generated keys in this transaction.
 
     The caller commits: the peer must exist in awg0.conf by the time the row
@@ -1788,6 +2030,11 @@ def spawn_config(conn, account, name: str = "") -> int:
     rows = conn.execute("SELECT ip, name FROM clients").fetchall()
     taken_ips = {r["ip"] for r in rows}
     taken_names = {r["name"] for r in rows}
+    device_id = device_id.strip()
+    if device_id and not DEVICE_ID_RE.match(device_id):
+        raise ValueError(
+            "device_id: latin letters, digits, dash; 8 to 64 characters"
+        )
     name = name.strip()
     if name:
         if not NAME_RE.match(name):
@@ -1795,7 +2042,18 @@ def spawn_config(conn, account, name: str = "") -> int:
                 "name: latin letters, digits, dot, dash; up to 32 characters"
             )
         if name in taken_names:
-            raise ValueError("a configuration with this name already exists")
+            if not uniquify:
+                raise ValueError("a configuration with this name already exists")
+            # Two phones of one model would otherwise fight over the name the
+            # app sends; the response carries the name that was actually used.
+            base, n = name, 2
+            while True:
+                suffix = f"-{n}"
+                candidate = base[: 32 - len(suffix)] + suffix
+                if candidate not in taken_names:
+                    break
+                n += 1
+            name = candidate
     else:
         local = re.sub(r"[^a-z0-9]+", "-", account["email"].split("@")[0].lower())
         local = local.strip("-") or "config"
@@ -1806,10 +2064,11 @@ def spawn_config(conn, account, name: str = "") -> int:
     ip = ip_free(c["net"], taken_ips)
     private = genkey()
     cur = conn.execute(
-        "INSERT INTO clients (account_id, name, ip, public_key, private_key, "
-        "preshared_key, enabled, created_at, internet, table_num) "
-        "VALUES (?, ?, ?, ?, ?, ?, 1, ?, 1, 0)",
-        (account["id"], name, ip, pubkey(private), private, genpsk(), _now_iso()),
+        "INSERT INTO clients (account_id, name, device_id, ip, public_key, "
+        "private_key, preshared_key, enabled, created_at, internet, table_num) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, 1, 0)",
+        (account["id"], name, device_id or None, ip, pubkey(private), private,
+         genpsk(), _now_iso()),
     )
     cid = cur.lastrowid
     conn.execute(
@@ -1898,7 +2157,7 @@ def reset_config_order(conn, cl) -> None:
 
 
 @app.get("/configs", response_class=HTMLResponse)
-def configs_page(request: Request, q: str | None = None):
+def configs_page(request: Request, q: str | None = None, state: str = ""):
     token = require_admin(request)
     live = iface_dump(cfg()["iface"])["peers"]
     with db() as conn:
@@ -1919,9 +2178,21 @@ def configs_page(request: Request, q: str | None = None):
             or needle in c["ip"]
             or needle in c["account_email"].lower()
         ]
+    filters = {"": "All", "recent": "Recent handshake", "disabled": "Disabled",
+               "unassigned": "Unassigned"}
+    if state not in filters:
+        state = ""
+    now = int(time.time())
+    if state == "recent":
+        items = [c for c in items if c["enabled"] and c["handshake"]
+                 and now - c["handshake"] < 180]
+    elif state == "disabled":
+        items = [c for c in items if not c["enabled"]]
+    elif state == "unassigned":
+        items = [c for c in items if not c["account_email"]]
     return render_page(
         request, "configs.html", "configs",
-        csrf=csrf(token), configs=items, q=q or "",
+        csrf=csrf(token), configs=items, q=q or "", state=state, filters=filters,
     )
 
 
@@ -1981,10 +2252,40 @@ def create_config(
     return RedirectResponse(f"/configs/{cid}?ok=configuration+created", status_code=303)
 
 
+@app.post("/configs/{cid}/name")
+def config_rename(
+    request: Request, cid: int, name: str = Form(""),
+    csrf_token: str = Form(...),
+):
+    token = require_admin(request)
+    if not hmac.compare_digest(csrf_token, csrf(token)):
+        raise HTTPException(status_code=400, detail="csrf")
+    cl = config_row(cid)
+    if not cl:
+        raise HTTPException(status_code=404)
+    name = name.strip()
+    if not NAME_RE.match(name):
+        problem = "name: latin letters, digits, dot, dash; up to 32 characters"
+        return RedirectResponse(f"/configs/{cid}?err=" + quote(problem), status_code=303)
+    with db() as conn:
+        taken = conn.execute(
+            "SELECT id FROM clients WHERE name = ? AND id != ?", (name, cid)
+        ).fetchone()
+        if taken:
+            problem = "a configuration with this name already exists"
+            return RedirectResponse(
+                f"/configs/{cid}?err=" + quote(problem), status_code=303
+            )
+        conn.execute("UPDATE clients SET name = ? WHERE id = ?", (name, cid))
+    audit("config_renamed", f"{cl['name']} -> {name}")
+    return RedirectResponse(f"/configs/{cid}?ok=name+updated", status_code=303)
+
+
 @app.get("/configs/{cid}", response_class=HTMLResponse)
 def config_page(
     request: Request,
     cid: int,
+    period: str = Query("24h", alias="range"),
     err: str | None = None,
     ok: str | None = None,
 ):
@@ -1996,15 +2297,17 @@ def config_page(
     account = account_row(int(cl["account_id"])) if cl["account_id"] else None
     live = iface_dump(c["iface"])["peers"]
     view = config_view(cl, live)
-    status = read_status()
+    status, routing_fresh = routing_status()
     client_rtt = (status.get("client_ping") or {}).get(cl["ip"])
+    states = status.get("exits") or {}
+    known = exits_rows()
     latency = {
-        iface: info.get("rtt_ms")
-        for iface, info in (status.get("exits") or {}).items()
+        e["iface"]: (states.get(e["iface"], {}).get("rtt_ms") if routing_fresh else None)
+        for e in known
     }
     alive = {
-        iface: bool(info.get("alive"))
-        for iface, info in (status.get("exits") or {}).items()
+        e["iface"]: (bool(states.get(e["iface"], {}).get("alive")) if routing_fresh else None)
+        for e in known
     }
     try:
         conf = mask_conf(config_conf(c, cl))
@@ -2014,18 +2317,27 @@ def config_page(
     if not account:
         accounts = account_rows()
     chosen_routed = {e["id"] for e in config_routed_exits(cl)}
+    allowed_routed = config_routed_choices(account) if account else []
+    allowed_ids = {e["id"] for e in allowed_routed}
     return render_page(
         request, "config_detail.html", "configs",
-        csrf=csrf(token), err=err, ok=ok, config=view,
+        csrf=csrf(token), err=err, ok=ok, config=view, **traffic_context(cid, period),
         account=account, routed=config_routed_exits(cl),
+        diagnosis=configuration_diagnosis(view, status, int(time.time()),
+                                           not cl["account_id"] and not config_internet_exits(cl)),
         internet_exits=config_internet_exits(cl),
         latency=latency, alive=alive, client_rtt=client_rtt, conf=conf,
+        routing_fresh=routing_fresh,
         accounts=accounts,
         routed_choices=[
             {"id": r["id"], "name": r["comment"] or r["name"], "routes": r["routes"],
              "chosen": r["id"] in chosen_routed}
-            for r in (config_routed_choices(account) if account else [])
+            for r in allowed_routed
         ],
+        ungranted_subnets=[
+            e for e in exits_rows()
+            if e["mode"] == "routes" and e["enabled"] and e["id"] not in allowed_ids
+        ] if account else [],
     )
 
 
@@ -2160,6 +2472,7 @@ def delete_config(request: Request, cid: int, csrf_token: str = Form(...)):
             conn.execute("DELETE FROM clients WHERE id = ?", (cid,))
             conn.execute("DELETE FROM client_exits WHERE client_id = ?", (cid,))
             conn.execute("DELETE FROM client_internet_exits WHERE client_id = ?", (cid,))
+            drop_traffic(conn, cid)
             apply_conf(cfg(), conn)
     except RuntimeError as exc:
         print(f"config {cid}: {exc}", flush=True)
@@ -2233,13 +2546,22 @@ def config_order_reset(request: Request, cid: int, csrf_token: str = Form(...)):
     return RedirectResponse(f"/configs/{cid}?ok=order+reset+to+account", status_code=303)
 
 
-def conf_response(cl) -> PlainTextResponse:
+def conf_response(cl, download: bool = True) -> Response:
+    """The client config as a download, or as text for the mobile API.
+
+    A browser download must not be text/plain: Android Chrome then ignores the
+    .conf extension and saves the file as .txt. The API keeps text/plain, so
+    the app reads the body exactly as before.
+    """
     try:
         body = config_conf(cfg(), cl)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
-    return PlainTextResponse(
+    if not download:
+        return PlainTextResponse(body)
+    return Response(
         body,
+        media_type="application/octet-stream",
         headers={"Content-Disposition": f'attachment; filename="{cl["name"]}.conf"'},
     )
 
@@ -2658,6 +2980,7 @@ def account_delete(request: Request, aid: int, csrf_token: str = Form(...)):
                 conn.execute(
                     "DELETE FROM client_internet_exits WHERE client_id = ?", (cid,)
                 )
+                drop_traffic(conn, cid)
             conn.execute("DELETE FROM account_exits WHERE account_id = ?", (aid,))
             conn.execute("DELETE FROM accounts WHERE id = ?", (aid,))
             apply_conf(cfg(), conn)
@@ -2699,6 +3022,13 @@ def me_page(request: Request, err: str | None = None, ok: str | None = None):
         limit=max_configs_for(account),
         has_app=ANDROID_APK.exists(),
     )
+
+
+@app.get("/me/account", response_class=HTMLResponse)
+def me_account(request: Request, err: str | None = None, ok: str | None = None):
+    token, account = require_user(request)
+    return render_page(request, "me_account.html", "account", role="user",
+                       csrf=csrf(token), email=account["email"], err=err, ok=ok)
 
 
 @app.get("/me/configs/new", response_class=HTMLResponse)
@@ -2744,10 +3074,42 @@ def me_create_config(
     )
 
 
+@app.post("/me/configs/{cid}/name")
+def me_config_rename(
+    request: Request, cid: int, name: str = Form(""),
+    csrf_token: str = Form(...),
+):
+    token, account = require_user(request)
+    if not hmac.compare_digest(csrf_token, csrf(token)):
+        raise HTTPException(status_code=400, detail="csrf")
+    cl = user_config(account, cid)
+    name = name.strip()
+    if not NAME_RE.match(name):
+        problem = "name: latin letters, digits, dot, dash; up to 32 characters"
+        return RedirectResponse(
+            f"/me/configs/{cid}?err=" + quote(problem), status_code=303
+        )
+    with db() as conn:
+        taken = conn.execute(
+            "SELECT id FROM clients WHERE name = ? AND id != ?", (name, cid)
+        ).fetchone()
+        if taken:
+            problem = "a configuration with this name already exists"
+            return RedirectResponse(
+                f"/me/configs/{cid}?err=" + quote(problem), status_code=303
+            )
+        conn.execute("UPDATE clients SET name = ? WHERE id = ?", (name, cid))
+    audit("user_config_renamed", f"{account['email']} {cl['name']} -> {name}")
+    return RedirectResponse(
+        f"/me/configs/{cid}?ok=name+updated", status_code=303
+    )
+
+
 @app.get("/me/configs/{cid}", response_class=HTMLResponse)
 def me_config_page(
     request: Request,
     cid: int,
+    period: str = Query("24h", alias="range"),
     err: str | None = None,
     ok: str | None = None,
 ):
@@ -2755,29 +3117,34 @@ def me_config_page(
     cl = user_config(account, cid)
     c = cfg()
     live = iface_dump(c["iface"])["peers"]
-    status = read_status()
+    status, routing_fresh = routing_status()
     granted = config_internet_exits(cl)
     current_iface = (status.get("clients") or {}).get(cl["ip"]) or ""
     current = next((e for e in granted if e["iface"] == current_iface), None)
+    states = status.get("exits") or {}
+    known = exits_rows()
     alive = {
-        iface: bool(info.get("alive"))
-        for iface, info in (status.get("exits") or {}).items()
+        e["iface"]: (bool(states.get(e["iface"], {}).get("alive")) if routing_fresh else None)
+        for e in known
     }
     latency = {
-        iface: info.get("rtt_ms")
-        for iface, info in (status.get("exits") or {}).items()
+        e["iface"]: (states.get(e["iface"], {}).get("rtt_ms") if routing_fresh else None)
+        for e in known
     }
     try:
         conf = mask_conf(config_conf(c, cl))
     except ValueError:
         conf = None
     chosen_routed = {e["id"] for e in config_routed_exits(cl)}
+    view = config_view(cl, live)
     return render_page(
         request, "me_config.html", "me", role="user",
         csrf=csrf(token), err=err, ok=ok, email=account["email"],
-        cl=config_view(cl, live),
+        cl=view, diagnosis=configuration_diagnosis(view, status, int(time.time())),
         conf=conf, internet_exits=granted, current_exit=current,
         alive=alive, latency=latency, has_app=ANDROID_APK.exists(),
+        routing_fresh=routing_fresh,
+        **traffic_context(cid, period),
         routed_choices=[
             {"id": r["id"], "name": r["comment"] or r["name"], "routes": r["routes"],
              "chosen": r["id"] in chosen_routed}
@@ -2889,6 +3256,7 @@ def me_config_delete(request: Request, cid: int, csrf_token: str = Form(...)):
             conn.execute("DELETE FROM clients WHERE id = ?", (cid,))
             conn.execute("DELETE FROM client_exits WHERE client_id = ?", (cid,))
             conn.execute("DELETE FROM client_internet_exits WHERE client_id = ?", (cid,))
+            drop_traffic(conn, cid)
             apply_conf(cfg(), conn)
     except RuntimeError as exc:
         print(f"config {cid}: {exc}", flush=True)
@@ -2991,10 +3359,10 @@ def me_password(
     if not hmac.compare_digest(csrf_token, csrf(token)):
         raise HTTPException(status_code=400, detail="csrf")
     if not check_password(current_password, account["password_hash"]):
-        return RedirectResponse("/me?err=" + quote("current password is wrong"), status_code=303)
+        return RedirectResponse("/me/account?err=" + quote("current password is wrong"), status_code=303)
     problem = password_error(new_password, "new password")
     if problem:
-        return RedirectResponse("/me?err=" + quote(problem), status_code=303)
+        return RedirectResponse("/me/account?err=" + quote(problem), status_code=303)
     new_hash = hash_password(new_password)
     with db() as conn:
         conn.execute(
@@ -3008,7 +3376,7 @@ def me_password(
             "SELECT token_version FROM accounts WHERE id = ?", (account["id"],)
         ).fetchone()[0]
     audit("user_password_changed", account["email"])
-    response = RedirectResponse("/me?ok=password+changed", status_code=303)
+    response = RedirectResponse("/me/account?ok=password+changed", status_code=303)
     response.set_cookie(
         COOKIE, start_session("user", int(account["id"]), int(tv)),
         httponly=True, secure=True, samesite="strict", max_age=SESSION_TTL,
@@ -3131,29 +3499,54 @@ def api_me(request: Request):
 
 
 @app.post("/api/me/configs")
-def api_create_config(request: Request, name: str = Form("")):
+def api_create_config(
+    request: Request, name: str = Form(""), device_id: str = Form("")
+):
+    """Creates a configuration, or returns the one this device already has.
+
+    The app sends the device identifier on every first connect, so a reinstall
+    must not leave the account with a second configuration of the same phone.
+    """
     _, account = api_user(request)
+    device_id = device_id.strip()
+    if device_id:
+        if not DEVICE_ID_RE.match(device_id):
+            raise HTTPException(
+                status_code=400,
+                detail="device_id: latin letters, digits, dash; 8 to 64 characters",
+            )
+        known = config_by_device(int(account["id"]), device_id)
+        if known:
+            audit("user_config_reused", f"{account['email']} {known['name']} via=api")
+            return {
+                "config": created_config_view(known),
+                "configs": api_configs(account),
+            }
     problem = config_limit_error(account)
     if problem:
         raise HTTPException(status_code=409, detail=problem)
     try:
         with db() as conn:
-            cid = spawn_config(conn, account, name)
+            cid = spawn_config(conn, account, name, device_id, uniquify=True)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+    except sqlite3.IntegrityError:
+        # Two first connects of one device raced: the unique index kept one
+        # row, and the loser answers with it instead of an error.
+        known = config_by_device(int(account["id"]), device_id) if device_id else None
+        if not known:
+            raise HTTPException(status_code=409, detail="configuration already exists")
+        audit("user_config_reused", f"{account['email']} {known['name']} via=api")
+        return {
+            "config": created_config_view(known),
+            "configs": api_configs(account),
+        }
     except RuntimeError as exc:
         raise HTTPException(status_code=500, detail=apply_error_message(exc, "not saved"))
     audit("user_config_added", f"{account['email']} {name or cid} via=api")
     apply_routing()
-    cl = config_row(cid)
     return {
-        "config": {
-            "id": cid,
-            "name": cl["name"],
-            "ip": cl["ip"],
-            "internet": config_has_internet(cl),
-            "enabled": True,
-        },
+        "config": created_config_view(config_row(cid)),
         "configs": api_configs(account),
     }
 
@@ -3186,6 +3579,7 @@ def api_delete_config(request: Request, cid: int):
             conn.execute("DELETE FROM clients WHERE id = ?", (cid,))
             conn.execute("DELETE FROM client_exits WHERE client_id = ?", (cid,))
             conn.execute("DELETE FROM client_internet_exits WHERE client_id = ?", (cid,))
+            drop_traffic(conn, cid)
             apply_conf(cfg(), conn)
     except RuntimeError as exc:
         raise HTTPException(status_code=500, detail=apply_error_message(exc, "not deleted"))
@@ -3200,7 +3594,7 @@ def api_conf(request: Request, config_id: int | None = None):
     _, account = api_user(request)
     cl = api_config(account, config_id)
     audit("config_downloaded", f"{account['email']} {cl['name']} via=api")
-    return conf_response(cl)
+    return conf_response(cl, download=False)
 
 
 @app.get("/api/me/configs/{cid}/conf")
@@ -3208,7 +3602,27 @@ def api_config_conf(request: Request, cid: int):
     _, account = api_user(request)
     cl = api_config(account, cid)
     audit("config_downloaded", f"{account['email']} {cl['name']} via=api")
-    return conf_response(cl)
+    return conf_response(cl, download=False)
+
+
+@app.get("/api/me/configs/{cid}/traffic")
+def api_config_traffic(request: Request, cid: int, hours: int = 24):
+    """Traffic deltas of one configuration.
+
+    Five-minute points for a week, hourly beyond that; a gap means the
+    sampler was not running, an empty list means there is no history yet.
+    """
+    _, account = api_user(request)
+    cl = api_config(account, cid)
+    hours = max(1, min(hours, 2160))
+    step, since, now, rows = config_traffic_rows(cl["id"], hours)
+    return {
+        "config_id": cl["id"],
+        "step_seconds": step,
+        "points": [
+            {"ts": r["ts"], "rx": r["rx"], "tx": r["tx"]} for r in rows
+        ],
+    }
 
 
 @app.post("/api/logout")
@@ -3228,14 +3642,18 @@ def api_exits(request: Request, config_id: int | None = None):
     """
     _, account = api_user(request)
     cl = api_config(account, config_id)
-    status = read_status().get("exits", {})
+    status, fresh = routing_status()
+    known = status.get("exits", {})
     return [
         {
             "id": e["id"],
             "name": e["name"],
             "comment": e["comment"],
-            "alive": bool(status.get(e["iface"], {}).get("alive")),
-            "rtt_ms": status.get(e["iface"], {}).get("rtt_ms"),
+            # null while the failover daemon has not reported: the panel has
+            # not observed this exit and must not claim that it is up.
+            "alive": bool(known.get(e["iface"], {}).get("alive")) if fresh else None,
+            "rtt_ms": known.get(e["iface"], {}).get("rtt_ms") if fresh else None,
+            "status_fresh": fresh,
         }
         for e in config_internet_exits(cl)
     ]
@@ -3322,6 +3740,83 @@ def api_subnets_update(
             {"id": e["id"], "name": e["name"], "enabled": e["id"] in chosen}
             for e in config_routed_choices(account)
         ],
+    }
+
+
+@app.get("/status.json")
+def status_json(request: Request, overview: bool = False):
+    """Live numbers for the page scripts.
+
+    The pages render everything server-side; this endpoint only feeds the
+    ticker that updates handshakes, traffic and exit health in place, so the
+    browse does not reload and lose scroll, focus or an open <details>.
+    """
+    token = request.cookies.get(COOKIE)
+    data = session_data(token)
+    if not data or not session_alive(data):
+        raise HTTPException(status_code=401, detail="sign in again")
+    role = data.get("role")
+    account = None
+    if role == "user":
+        account = account_row(int(data.get("uid", 0)))
+        if (not account or not account["enabled"]
+                or account["token_version"] != data.get("tv")):
+            raise HTTPException(status_code=401, detail="account disabled")
+    elif role != "admin":
+        raise HTTPException(status_code=401, detail="sign in again")
+
+    c = cfg()
+    status, status_fresh = routing_status()
+    live = iface_dump(c["iface"])["peers"]
+    now = int(time.time())
+    rows = account_configs(int(account["id"])) if account else config_rows()
+    views = [config_view(cl, live) for cl in rows]
+    shared = {cl["id"] for cl in rows if not cl["account_id"] and cl["internet"]
+              and not config_internet_exits(cl)}
+    exits = {
+        e["iface"]: {
+            "name": e["name"],
+            "enabled": bool(e["enabled"]),
+            "mode": e["mode"],
+            "alive": (status.get("exits") or {}).get(e["iface"], {}).get("alive"),
+            "rtt_ms": (status.get("exits") or {}).get(e["iface"], {}).get("rtt_ms"),
+            "last_ok": (status.get("exits") or {}).get(e["iface"], {}).get("last_ok", 0),
+        }
+        for e in exits_rows()
+    }
+    current = status.get("clients") or {}
+    health = {}
+    if overview and role == "admin":
+        active = run_dir("active-exit") if status_fresh else None
+        health["overview"] = overview_health(
+            [exit_view(e, status, active) for e in exits_rows()], status_fresh
+        )
+    return {
+        **health,
+        "ts": now,
+        "status_fresh": status_fresh,
+        "active": status.get("active"),
+        "online": sum(1 for v in views if v["handshake"] and now - v["handshake"] < 180),
+        "rx": sum(v["rx"] for v in views),
+        "tx": sum(v["tx"] for v in views),
+        "exits_alive": sum(1 for e in exits.values() if e["alive"]),
+        "exits_total": len(exits),
+        "configs_total": len(views),
+        "exits": exits,
+        "configs": {
+            v["ip"]: {
+                "name": v["name"],
+                "enabled": v["enabled"],
+                "handshake": v["handshake"],
+                "rx": v["rx"],
+                "tx": v["tx"],
+                "iface": current.get(v["ip"], ""),
+                "diagnosis": configuration_diagnosis(
+                    v, status, now, v["id"] in shared
+                ),
+            }
+            for v in views
+        },
     }
 
 

@@ -2,7 +2,7 @@
 {% block title %}{{ config.name }} — deeps kaskad{% endblock %}
 {% block topbar %}<a class="oc-mono topbar-link" href="/configs/{{ config.id }}">{{ config.ip }}</a>{% endblock %}
 {% block body %}
-<div class="crumbs"><a href="/configs">Configs</a><span>/</span><span>{{ config.name }}</span></div>
+<div class="crumbs"><a href="/configs">Configurations</a><span>/</span><span>{{ config.name }}</span></div>
 <div class="page-head">
   <div class="name-cell">
     <h1 style="margin:0">{{ config.name }}</h1>
@@ -12,13 +12,15 @@
   <p class="oc-muted" style="margin-top:6px">
     <span class="oc-mono">{{ config.ip }}/32</span> ·
     {% if account %}
-    <a class="oc-mono" href="/accounts/{{ account.id }}">{{ account.email }}</a>
+    <a class="oc-link oc-link--muted oc-mono" href="/accounts/{{ account.id }}">{{ account.email }}</a>
     {% else %}<span class="oc-badge oc-badge--warning">no account</span>{% endif %}
     ·
-    {% if config.internet %}<span class="oc-badge oc-badge--success">internet</span>{% endif %}
-    {% for e in routed %}<span class="oc-badge oc-badge--info">{{ e.name }}</span>{% endfor %}
+    {% if config.internet %}<span class="oc-badge oc-badge--subtle">internet</span>{% endif %}
+    {% for e in routed %}<span class="oc-badge oc-badge--subtle">{{ e.name }}</span>{% endfor %}
     {% if not config.internet and not routed %}<span class="oc-badge oc-badge--danger">no access</span>{% endif %}
   </p>
+  {% set diagnosis_ip = config.ip %}
+  {% include '_config_diagnosis.html' %}
 </div>
 
 {% if err %}<div class="oc-alert oc-alert--danger" style="margin-bottom:16px"><span class="oc-dot" style="margin-top:7px"></span><div class="oc-alert__body">{{ err }}</div></div>{% endif %}
@@ -47,10 +49,11 @@
 <div class="stack">
   <div class="oc-panel" style="padding:16px">
     <div class="kv-grid">
-      <div><div class="k">handshake</div><div class="v" data-hs="{{ config.handshake }}">—</div></div>
-      <div><div class="k">received</div><div class="v oc-num">{{ (config.rx / 1048576) | round(1) }} MiB</div></div>
-      <div><div class="k">sent</div><div class="v oc-num">{{ (config.tx / 1048576) | round(1) }} MiB</div></div>
+      <div><div class="k">handshake</div><div class="v" data-live="hs|{{ config.ip }}">—</div></div>
+      <div><div class="k">received</div><div class="v oc-num"><span data-live="rx|{{ config.ip }}">{{ (config.rx / 1048576) | round(1) }}</span> MiB</div></div>
+      <div><div class="k">sent</div><div class="v oc-num"><span data-live="tx|{{ config.ip }}">{{ (config.tx / 1048576) | round(1) }}</span> MiB</div></div>
       <div><div class="k">address</div><div class="v oc-mono">{{ config.ip }}</div></div>
+      {% if config.device_id %}<div><div class="k">device id</div><div class="v oc-mono">{{ config.device_id }}</div></div>{% endif %}
     </div>
   </div>
 
@@ -68,16 +71,17 @@
             <td>
               {{ e.comment or e.name }}
               <div class="actions" style="margin-top:4px; gap:8px">
-                {% if alive.get(e.iface) %}<span class="oc-badge oc-badge--success">up</span>
-                {% else %}<span class="oc-badge oc-badge--subtle">down</span>{% endif %}
+                {% set exit_state = alive.get(e.iface) %}
+                {% if exit_state is none %}<span class="oc-badge oc-badge--subtle" data-live="exit|{{ e.iface }}">no data</span>
+                {% elif exit_state %}<span class="oc-badge oc-badge--success" data-live="exit|{{ e.iface }}">up</span>
+                {% else %}<span class="oc-badge oc-badge--subtle" data-live="exit|{{ e.iface }}">down</span>{% endif %}
                 {% set exit_ms = latency.get(e.iface) %}
-                {% if exit_ms %}
-                  {% if client_rtt is not none %}
-                  <span class="cell-sub oc-mono" title="client to S1 {{ client_rtt }} ms + S1 to exit {{ exit_ms }} ms">≈ {{ client_rtt + exit_ms }} ms · client {{ client_rtt }} + exit {{ exit_ms }} ms</span>
-                  {% else %}
-                  <span class="cell-sub oc-mono" title="S1 to exit only; the client does not answer ping">exit {{ exit_ms }} ms</span>
-                  {% endif %}
-                {% endif %}
+                <span class="ping">
+                  <span class="oc-mono ping__total" data-live="ping|{{ e.iface }}"
+                    {% if exit_ms and client_rtt is not none %}title="client to S1 {{ client_rtt }} ms + S1 to exit {{ exit_ms }} ms"{% elif exit_ms %}title="S1 to exit only; the client does not answer ping"{% endif %}
+                    >{% if exit_ms and client_rtt is not none %}≈ {{ client_rtt + exit_ms }} ms{% elif exit_ms %}exit {{ exit_ms }} ms{% else %}—{% endif %}</span>
+                  <span class="cell-sub oc-mono" data-live="pingparts|{{ e.iface }}">{% if exit_ms and client_rtt is not none %}client {{ client_rtt }} + exit {{ exit_ms }} ms{% else %}&nbsp;{% endif %}</span>
+                </span>
               </div>
             </td>
             <td>
@@ -111,10 +115,15 @@
       <p class="oc-muted" style="margin:0">no internet exits granted</p>
       {% endif %}
 
+      {% if account %}
+      <div class="toolbar" style="margin-top:20px">
+        <h3 class="oc-section__title">Subnets</h3>
+        <a class="oc-btn oc-btn--outline oc-btn--sm" href="/accounts/{{ account.id }}#access">Edit account access</a>
+      </div>
       {% if routed_choices %}
       <form method="post" action="/configs/{{ config.id }}/routed" style="margin-top:20px">
         <input type="hidden" name="csrf_token" value="{{ csrf }}">
-        <p class="oc-section__title" style="margin:0 0 10px">subnets</p>
+        <p class="oc-muted">{{ routed_choices | selectattr('chosen') | list | length }} of {{ routed_choices | length }} allowed subnets included</p>
         <div class="actions" style="flex-direction:column; align-items:flex-start; gap:10px">
           {% for e in routed_choices %}
           <label class="oc-check">
@@ -127,17 +136,40 @@
         </div>
         <button class="oc-btn oc-btn--neutral oc-btn--sm" style="margin-top:12px">save subnets</button>
       </form>
+      {% else %}
+      <p class="oc-muted">No subnets allowed for this account</p>
+      {% endif %}
+      {% if ungranted_subnets %}
+      <details class="manage-block" style="margin-top:16px">
+        <summary>Not allowed for this account ({{ ungranted_subnets | length }})</summary>
+        <ul>
+          {% for e in ungranted_subnets %}
+          <li>{{ e.comment or e.name }} · <span class="oc-mono oc-muted">{{ e.routes }}</span></li>
+          {% endfor %}
+        </ul>
+      </details>
+      {% endif %}
       {% endif %}
     </div>
   </section>
 
+  {% set chart_url = '/configs/' ~ config.id %}
+  {% include '_traffic.html' %}
   <section>
     <h2 class="oc-section__title">configuration</h2>
     <div class="oc-panel" style="padding:16px">
+      <form method="post" action="/configs/{{ config.id }}/name"
+            class="actions" style="margin-bottom:14px">
+        <input type="hidden" name="csrf_token" value="{{ csrf }}">
+        <input class="oc-input oc-input--sm" type="text" name="name"
+               value="{{ config.name }}" maxlength="32" spellcheck="false"
+               aria-label="name" style="max-width:220px">
+        <button class="oc-btn oc-btn--outline oc-btn--sm">rename</button>
+      </form>
       <div class="actions">
         <a class="oc-btn oc-btn--outline oc-btn--sm" href="/configs/{{ config.id }}/conf">download .conf</a>
         <form method="post" action="/configs/{{ config.id }}/reissue"
-              onsubmit="return confirm('reissue the key? the current config stops working')">
+              data-confirm="Reissue the key for {{ config.name }}? The old .conf and QR code will stop working. Download and import a new configuration.">
           <input type="hidden" name="csrf_token" value="{{ csrf }}">
           <button class="oc-btn oc-btn--neutral oc-btn--sm">reissue key</button>
         </form>
@@ -165,7 +197,7 @@
           <button class="oc-btn oc-btn--neutral oc-btn--sm">{{ 'disable' if config.enabled else 'enable' }}</button>
         </form>
         <form method="post" action="/configs/{{ config.id }}/delete"
-              onsubmit="return confirm('delete {{ config.name }}? its keys are erased and the config stops working')">
+              data-confirm="Delete {{ config.name }}? Its keys and traffic history will be erased, and its .conf will stop working.">
           <input type="hidden" name="csrf_token" value="{{ csrf }}">
           <button class="oc-btn oc-btn--ghost-danger oc-btn--sm">delete configuration</button>
         </form>
@@ -176,15 +208,25 @@
 </div>
 
 <script>
-function rel(ts) {
-  if (!ts || Number(ts) <= 0) return 'no data';
-  const d = Math.floor(Date.now() / 1000 - Number(ts));
-  if (d < 60) return d + 's ago';
-  if (d < 3600) return Math.floor(d / 60) + 'm ago';
-  if (d < 86400) return Math.floor(d / 3600) + 'h ago';
-  return Math.floor(d / 86400) + 'd ago';
-}
-for (const el of document.querySelectorAll('[data-hs]')) el.textContent = rel(el.dataset.hs);
-kaskadAutoRefresh(30);
+(function () {
+  // The split under the total needs this device's own round-trip; the server
+  // value is a fallback for when the browser cannot measure it.
+  const fallback = {{ client_rtt if client_rtt is not none else 'null' }};
+  function sample(left, values) {
+    if (left <= 0) {
+      if (!values.length) { kaskadLive(20, fallback); return; }
+      values.sort((a, b) => a - b);
+      kaskadLive(20, Math.round(values[Math.floor(values.length / 2)]));
+      return;
+    }
+    const started = performance.now();
+    fetch('/ping', {cache: 'no-store'})
+      .then((r) => r.text())
+      .then(() => values.push(performance.now() - started))
+      .catch(() => {})
+      .finally(() => sample(left - 1, values));
+  }
+  sample(4, []);
+})();
 </script>
 {% endblock %}

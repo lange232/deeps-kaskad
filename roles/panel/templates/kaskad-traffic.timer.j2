@@ -1,0 +1,11 @@
+# {{ ansible_managed }}
+[Unit]
+Description=kaskad traffic history every five minutes
+
+[Timer]
+OnCalendar=*:0/5
+RandomizedDelaySec=20
+Persistent=true
+
+[Install]
+WantedBy=timers.target
