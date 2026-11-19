@@ -1384,6 +1384,47 @@ class RenameTests(PanelTestCase):
         self.assertEqual(app.config_row(cid2)["name"], "c2")
 
 
+class CabinetTrafficTests(PanelTestCase):
+    def seed_traffic(self, cid):
+        now = int(time.time())
+        with app.db() as conn:
+            conn.execute(
+                "INSERT INTO traffic (client_id, ts, step, rx, tx) "
+                "VALUES (?, ?, 300, 1000, 200000)",
+                (cid, now - 600),
+            )
+        return now
+
+    def test_the_cabinet_draws_the_chart(self):
+        aid, cid = self.seed_client()
+        self.seed_traffic(cid)
+        self.login("c1@example.com", USER_PASSWORD)
+        response = self.client.get(f"/me/configs/{cid}?range=24h")
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertIn("traffic-chart", response.text)
+        self.assertIn("traffic-line--down", response.text)
+        self.assertIn("traffic-line--up", response.text)
+        self.assertIn("downloaded", response.text)
+        self.assertIn(
+            f'href="/me/configs/{cid}?range=7d#traffic"', response.text
+        )
+
+    def test_an_unknown_range_falls_back_to_24h(self):
+        aid, cid = self.seed_client()
+        self.login("c1@example.com", USER_PASSWORD)
+        response = self.client.get(f"/me/configs/{cid}?range=bogus")
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertIn("no traffic recorded yet", response.text)
+
+    def test_a_foreign_configuration_is_not_found(self):
+        self.seed_client()
+        aid2, cid2 = self.seed_client(name="c2", ip="10.80.0.9",
+                                      email="c2@example.com")
+        self.login("c1@example.com", USER_PASSWORD)
+        response = self.client.get(f"/me/configs/{cid2}")
+        self.assertEqual(response.status_code, 404)
+
+
 class MobileApiTests(PanelTestCase):
     def api_login(self, email="c1@example.com", password=USER_PASSWORD):
         response = self.client.post("/api/login", data={

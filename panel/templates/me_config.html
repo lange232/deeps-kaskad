@@ -31,6 +31,39 @@
     </div>
   </div>
 
+  <section id="traffic">
+    <div class="toolbar">
+      <h2 class="oc-section__title" style="margin:0">traffic</h2>
+      <div class="actions" style="gap:4px">
+        {% for key in ranges %}
+        <a class="oc-btn oc-btn--sm {{ 'oc-btn--contrast' if key == period else 'oc-btn--ghost' }}"
+           href="/me/configs/{{ cl.id }}?range={{ key }}#traffic">{{ key }}</a>
+        {% endfor %}
+      </div>
+    </div>
+    <div class="oc-panel" style="padding:16px">
+      {% if chart %}
+      <div class="traffic-totals">
+        <span class="traffic-key traffic-key--down"></span>
+        <span class="oc-muted">downloaded</span><span class="oc-num">{{ chart.total_tx }}</span>
+        <span class="traffic-key traffic-key--up"></span>
+        <span class="oc-muted">uploaded</span><span class="oc-num">{{ chart.total_rx }}</span>
+        <span class="oc-muted" style="margin-left:auto">peak {{ chart.peak }}</span>
+      </div>
+      <svg class="traffic-chart" viewBox="0 0 {{ chart.width }} {{ chart.height }}"
+           preserveAspectRatio="none" role="img" aria-label="traffic">
+        <path class="traffic-area traffic-area--down" d="{{ chart.down_area }}"/>
+        <path class="traffic-area traffic-area--up" d="{{ chart.up_area }}"/>
+        <path class="traffic-line traffic-line--down" d="{{ chart.down_line }}"/>
+        <path class="traffic-line traffic-line--up" d="{{ chart.up_line }}"/>
+      </svg>
+      <div class="traffic-axis"><span>{{ chart.from }}</span><span>{{ chart.to }}</span></div>
+      {% else %}
+      <p class="oc-muted" style="margin:0">no traffic recorded yet</p>
+      {% endif %}
+    </div>
+  </section>
+
   {% if internet_exits and cl.internet %}
   <section>
     <h2 class="oc-section__title">exit priority</h2>

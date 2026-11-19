@@ -1151,4 +1151,71 @@
   font-size: var(--ui-fs-sm);
 }
 
+/* Traffic history: two series drawn as areas with a line on top. */
+.traffic-totals {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  font-size: var(--ui-fs-sm);
+  margin-bottom: 10px;
+}
+
+.traffic-key {
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  align-self: center;
+}
+
+.traffic-key--down {
+  background: var(--ui-state-info-fg);
+}
+
+.traffic-key--up {
+  background: var(--ui-state-success-fg);
+}
+
+.traffic-chart {
+  width: 100%;
+  height: 180px;
+  display: block;
+}
+
+.traffic-line {
+  fill: none;
+  stroke-width: 1.5;
+  vector-effect: non-scaling-stroke;
+}
+
+.traffic-line--down {
+  stroke: var(--ui-state-info-fg);
+}
+
+.traffic-line--up {
+  stroke: var(--ui-state-success-fg);
+}
+
+.traffic-area {
+  stroke: none;
+}
+
+.traffic-area--down {
+  fill: var(--ui-state-info-fg);
+  opacity: 0.14;
+}
+
+.traffic-area--up {
+  fill: var(--ui-state-success-fg);
+  opacity: 0.10;
+}
+
+.traffic-axis {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 6px;
+  font-size: var(--ui-fs-xs);
+  color: var(--ui-text-faint);
+}
+
 /* The theme is switched by an attribute on <html>: data-theme="light" | "dark" */

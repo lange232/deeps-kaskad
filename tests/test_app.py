@@ -369,6 +369,29 @@ class RenderTests(unittest.TestCase):
 
 
 @unittest.skipUnless(app, "fastapi is not installed")
+class TrafficChartTests(unittest.TestCase):
+    def test_both_series_and_totals_are_built(self):
+        now = 1794800100
+        rows = [
+            {"ts": now - 600, "rx": 100, "tx": 1000},
+            {"ts": now - 300, "rx": 200, "tx": 2000},
+        ]
+        chart = app.build_traffic_chart(300, now - 3600, now, rows)
+        self.assertEqual(chart["total_rx"], "300 B")
+        self.assertEqual(chart["total_tx"], "2.9 KiB")
+        self.assertTrue(chart["down_line"].startswith("M "))
+        self.assertTrue(chart["down_area"].endswith("Z"))
+        self.assertNotEqual(chart["down_line"], chart["up_line"])
+
+    def test_no_history_means_no_chart(self):
+        self.assertIsNone(app.build_traffic_chart(300, 0, 3600, []))
+
+    def test_zero_traffic_means_no_chart(self):
+        rows = [{"ts": 300, "rx": 0, "tx": 0}]
+        self.assertIsNone(app.build_traffic_chart(300, 0, 3600, rows))
+
+
+@unittest.skipUnless(app, "fastapi is not installed")
 class RemoteIpTests(unittest.TestCase):
     def test_the_port_is_dropped(self):
         self.assertEqual(app.remote_ip("77.88.99.3:51820"), "77.88.99.3")

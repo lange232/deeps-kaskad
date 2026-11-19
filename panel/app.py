@@ -19,6 +19,7 @@ from contextlib import contextmanager
 import hmac
 import ipaddress
 import json
+import math
 import os
 import re
 import secrets
@@ -33,7 +34,7 @@ from pathlib import Path
 
 from urllib.parse import quote
 
-from fastapi import FastAPI, Form, HTTPException, Request
+from fastapi import FastAPI, Form, HTTPException, Query, Request
 from fastapi.responses import (
     FileResponse,
     HTMLResponse,
@@ -645,6 +646,110 @@ def remote_ip(endpoint: str) -> str:
     if value.startswith("["):  # [2001:db8::1]:51820
         return value[1:].split("]", 1)[0]
     return value.rsplit(":", 1)[0] if ":" in value else value
+
+
+TRAFFIC_RANGES = {"1h": 1, "24h": 24, "7d": 7 * 24, "30d": 30 * 24, "90d": 90 * 24}
+CHART_WIDTH = 720
+CHART_HEIGHT = 180
+CHART_COLUMNS = 240
+
+
+def human_bytes(value) -> str:
+    value = float(value or 0)
+    for unit in ("B", "KiB", "MiB", "GiB", "TiB"):
+        if value < 1024 or unit == "TiB":
+            if unit == "B":
+                return f"{int(value)} B"
+            return f"{value:.1f} {unit}"
+        value /= 1024
+    return "0 B"
+
+
+def human_rate(value) -> str:
+    return human_bytes(value) + "/s"
+
+
+def traffic_time_label(ts: int) -> str:
+    moment = datetime.fromtimestamp(int(ts))
+    if moment.date() == datetime.now().date():
+        return moment.strftime("%H:%M")
+    return moment.strftime("%d.%m %H:%M")
+
+
+def config_traffic_rows(cid: int, hours: int):
+    """Traffic points of one configuration for the last `hours` hours."""
+    step = traffic.STEP if hours <= 7 * 24 else traffic.HOUR
+    now = int(time.time())
+    since = now - hours * 3600
+    with db() as conn:
+        rows = conn.execute(
+            "SELECT ts, rx, tx FROM traffic WHERE client_id = ? AND step = ? "
+            "AND ts >= ? ORDER BY ts",
+            (cid, step, since),
+        ).fetchall()
+    return step, since, now, rows
+
+
+def build_traffic_chart(step: int, since: int, now: int, rows) -> dict | None:
+    """Downsampled series and totals for the cabinet chart.
+
+    The stored buckets are summed into at most CHART_COLUMNS columns and drawn
+    as bytes per second, so a five-minute point and an hourly point look the
+    same on the time axis.
+    """
+    span = max(int(now) - int(since), 1)
+    bucket = max(step, math.ceil(span / CHART_COLUMNS / step) * step)
+    sums: dict[int, list[int]] = {}
+    total_rx = total_tx = 0
+    for row in rows:
+        rx, tx = int(row["rx"]), int(row["tx"])
+        total_rx += rx
+        total_tx += tx
+        key = int((int(row["ts"]) - since) // bucket)
+        pair = sums.setdefault(key, [0, 0])
+        pair[0] += rx
+        pair[1] += tx
+    if not sums:
+        return None
+    peak = max(max(pair) for pair in sums.values()) / bucket
+    if peak <= 0:
+        return None
+    top = 10
+    usable = CHART_HEIGHT - top - 2
+
+    def x_of(key: int) -> float:
+        return key * bucket / span * CHART_WIDTH
+
+    def y_of(rate: float) -> float:
+        return top + usable - (rate / peak) * usable
+
+    keys = sorted(sums)
+    down = [(x_of(k), y_of(sums[k][1] / bucket)) for k in keys]
+    up = [(x_of(k), y_of(sums[k][0] / bucket)) for k in keys]
+
+    def line(points) -> str:
+        return "M " + " L ".join(f"{x:.1f} {y:.1f}" for x, y in points)
+
+    def area(points) -> str:
+        return (
+            f"M {points[0][0]:.1f} {CHART_HEIGHT} L "
+            + " L ".join(f"{x:.1f} {y:.1f}" for x, y in points)
+            + f" L {points[-1][0]:.1f} {CHART_HEIGHT} Z"
+        )
+
+    return {
+        "width": CHART_WIDTH,
+        "height": CHART_HEIGHT,
+        "down_line": line(down),
+        "down_area": area(down),
+        "up_line": line(up),
+        "up_area": area(up),
+        "total_rx": human_bytes(total_rx),
+        "total_tx": human_bytes(total_tx),
+        "peak": human_rate(peak),
+        "from": traffic_time_label(since),
+        "to": traffic_time_label(now),
+    }
 
 
 def apply_routing() -> None:
@@ -2905,6 +3010,7 @@ def me_config_rename(
 def me_config_page(
     request: Request,
     cid: int,
+    period: str = Query("24h", alias="range"),
     err: str | None = None,
     ok: str | None = None,
 ):
@@ -2929,12 +3035,16 @@ def me_config_page(
     except ValueError:
         conf = None
     chosen_routed = {e["id"] for e in config_routed_exits(cl)}
+    if period not in TRAFFIC_RANGES:
+        period = "24h"
+    chart = build_traffic_chart(*config_traffic_rows(cl["id"], TRAFFIC_RANGES[period]))
     return render_page(
         request, "me_config.html", "me", role="user",
         csrf=csrf(token), err=err, ok=ok, email=account["email"],
         cl=config_view(cl, live),
         conf=conf, internet_exits=granted, current_exit=current,
         alive=alive, latency=latency, has_app=ANDROID_APK.exists(),
+        chart=chart, period=period, ranges=list(TRAFFIC_RANGES),
         routed_choices=[
             {"id": r["id"], "name": r["comment"] or r["name"], "routes": r["routes"],
              "chosen": r["id"] in chosen_routed}
@@ -3404,14 +3514,7 @@ def api_config_traffic(request: Request, cid: int, hours: int = 24):
     _, account = api_user(request)
     cl = api_config(account, cid)
     hours = max(1, min(hours, 2160))
-    step = traffic.STEP if hours <= 7 * 24 else traffic.HOUR
-    since = int(time.time()) - hours * 3600
-    with db() as conn:
-        rows = conn.execute(
-            "SELECT ts, rx, tx FROM traffic WHERE client_id = ? AND step = ? "
-            "AND ts >= ? ORDER BY ts",
-            (cl["id"], step, since),
-        ).fetchall()
+    step, since, now, rows = config_traffic_rows(cl["id"], hours)
     return {
         "config_id": cl["id"],
         "step_seconds": step,
