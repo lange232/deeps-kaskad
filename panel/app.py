@@ -705,7 +705,7 @@ def build_traffic_chart(step: int, since: int, now: int, rows) -> dict | None:
         rx, tx = int(row["rx"]), int(row["tx"])
         total_rx += rx
         total_tx += tx
-        key = int((int(row["ts"]) - since) // bucket)
+        key = min((span - 1) // bucket, int((int(row["ts"]) - since) // bucket))
         pair = sums.setdefault(key, [0, 0])
         pair[0] += rx
         pair[1] += tx
@@ -714,42 +714,30 @@ def build_traffic_chart(step: int, since: int, now: int, rows) -> dict | None:
     peak = max(max(pair) for pair in sums.values()) / bucket
     if peak <= 0:
         return None
-    top = 10
-    usable = CHART_HEIGHT - top - 2
-
-    def x_of(key: int) -> float:
-        return key * bucket / span * CHART_WIDTH
-
-    def y_of(rate: float) -> float:
-        return top + usable - (rate / peak) * usable
-
-    keys = sorted(sums)
-    down = [(x_of(k), y_of(sums[k][1] / bucket)) for k in keys]
-    up = [(x_of(k), y_of(sums[k][0] / bucket)) for k in keys]
-
-    def line(points) -> str:
-        return "M " + " L ".join(f"{x:.1f} {y:.1f}" for x, y in points)
-
-    def area(points) -> str:
-        return (
-            f"M {points[0][0]:.1f} {CHART_HEIGHT} L "
-            + " L ".join(f"{x:.1f} {y:.1f}" for x, y in points)
-            + f" L {points[-1][0]:.1f} {CHART_HEIGHT} Z"
-        )
-
+    # Two adjacent bars per time bucket. Missing buckets stay blank.
+    slot = CHART_WIDTH * bucket / span
+    bars = []
+    for key, (rx, tx) in sorted(sums.items()):
+        x = min(key * slot, CHART_WIDTH - slot)
+        bars.append({"x": round(x, 2), "up_x": round(x + slot / 2, 2),
+                     "down": round(tx / bucket / peak * (CHART_HEIGHT - 4), 2),
+                     "up": round(rx / bucket / peak * (CHART_HEIGHT - 4), 2)})
     return {
-        "width": CHART_WIDTH,
-        "height": CHART_HEIGHT,
-        "down_line": line(down),
-        "down_area": area(down),
-        "up_line": line(up),
-        "up_area": area(up),
+        "width": CHART_WIDTH, "height": CHART_HEIGHT,
+        "bars": bars, "bar_width": round(slot * 0.43, 2),
         "total_rx": human_bytes(total_rx),
         "total_tx": human_bytes(total_tx),
         "peak": human_rate(peak),
         "from": traffic_time_label(since),
         "to": traffic_time_label(now),
     }
+
+
+def traffic_context(cid: int, period: str) -> dict:
+    if period not in TRAFFIC_RANGES:
+        period = "24h"
+    return {"period": period, "ranges": TRAFFIC_RANGES,
+            "chart": build_traffic_chart(*config_traffic_rows(cid, TRAFFIC_RANGES[period]))}
 
 
 def apply_routing() -> None:
@@ -2206,6 +2194,7 @@ def config_rename(
 def config_page(
     request: Request,
     cid: int,
+    period: str = Query("24h", alias="range"),
     err: str | None = None,
     ok: str | None = None,
 ):
@@ -2237,7 +2226,7 @@ def config_page(
     chosen_routed = {e["id"] for e in config_routed_exits(cl)}
     return render_page(
         request, "config_detail.html", "configs",
-        csrf=csrf(token), err=err, ok=ok, config=view,
+        csrf=csrf(token), err=err, ok=ok, config=view, **traffic_context(cid, period),
         account=account, routed=config_routed_exits(cl),
         internet_exits=config_internet_exits(cl),
         latency=latency, alive=alive, client_rtt=client_rtt, conf=conf,
@@ -2932,6 +2921,13 @@ def me_page(request: Request, err: str | None = None, ok: str | None = None):
     )
 
 
+@app.get("/me/account", response_class=HTMLResponse)
+def me_account(request: Request, err: str | None = None, ok: str | None = None):
+    token, account = require_user(request)
+    return render_page(request, "me_account.html", "account", role="user",
+                       csrf=csrf(token), email=account["email"], err=err, ok=ok)
+
+
 @app.get("/me/configs/new", response_class=HTMLResponse)
 def me_config_new_page(request: Request, err: str | None = None):
     token, account = require_user(request)
@@ -3035,16 +3031,13 @@ def me_config_page(
     except ValueError:
         conf = None
     chosen_routed = {e["id"] for e in config_routed_exits(cl)}
-    if period not in TRAFFIC_RANGES:
-        period = "24h"
-    chart = build_traffic_chart(*config_traffic_rows(cl["id"], TRAFFIC_RANGES[period]))
     return render_page(
         request, "me_config.html", "me", role="user",
         csrf=csrf(token), err=err, ok=ok, email=account["email"],
         cl=config_view(cl, live),
         conf=conf, internet_exits=granted, current_exit=current,
         alive=alive, latency=latency, has_app=ANDROID_APK.exists(),
-        chart=chart, period=period, ranges=list(TRAFFIC_RANGES),
+        **traffic_context(cid, period),
         routed_choices=[
             {"id": r["id"], "name": r["comment"] or r["name"], "routes": r["routes"],
              "chosen": r["id"] in chosen_routed}
@@ -3258,10 +3251,10 @@ def me_password(
     if not hmac.compare_digest(csrf_token, csrf(token)):
         raise HTTPException(status_code=400, detail="csrf")
     if not check_password(current_password, account["password_hash"]):
-        return RedirectResponse("/me?err=" + quote("current password is wrong"), status_code=303)
+        return RedirectResponse("/me/account?err=" + quote("current password is wrong"), status_code=303)
     problem = password_error(new_password, "new password")
     if problem:
-        return RedirectResponse("/me?err=" + quote(problem), status_code=303)
+        return RedirectResponse("/me/account?err=" + quote(problem), status_code=303)
     new_hash = hash_password(new_password)
     with db() as conn:
         conn.execute(
@@ -3275,7 +3268,7 @@ def me_password(
             "SELECT token_version FROM accounts WHERE id = ?", (account["id"],)
         ).fetchone()[0]
     audit("user_password_changed", account["email"])
-    response = RedirectResponse("/me?ok=password+changed", status_code=303)
+    response = RedirectResponse("/me/account?ok=password+changed", status_code=303)
     response.set_cookie(
         COOKIE, start_session("user", int(account["id"]), int(tv)),
         httponly=True, secure=True, samesite="strict", max_age=SESSION_TTL,

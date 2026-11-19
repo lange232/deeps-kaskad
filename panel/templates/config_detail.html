@@ -2,7 +2,7 @@
 {% block title %}{{ config.name }} — deeps kaskad{% endblock %}
 {% block topbar %}<a class="oc-mono topbar-link" href="/configs/{{ config.id }}">{{ config.ip }}</a>{% endblock %}
 {% block body %}
-<div class="crumbs"><a href="/configs">Configs</a><span>/</span><span>{{ config.name }}</span></div>
+<div class="crumbs"><a href="/configs">Configurations</a><span>/</span><span>{{ config.name }}</span></div>
 <div class="page-head">
   <div class="name-cell">
     <h1 style="margin:0">{{ config.name }}</h1>
@@ -15,8 +15,8 @@
     <a class="oc-mono" href="/accounts/{{ account.id }}">{{ account.email }}</a>
     {% else %}<span class="oc-badge oc-badge--warning">no account</span>{% endif %}
     ·
-    {% if config.internet %}<span class="oc-badge oc-badge--success">internet</span>{% endif %}
-    {% for e in routed %}<span class="oc-badge oc-badge--info">{{ e.name }}</span>{% endfor %}
+    {% if config.internet %}<span class="oc-badge oc-badge--subtle">internet</span>{% endif %}
+    {% for e in routed %}<span class="oc-badge oc-badge--subtle">{{ e.name }}</span>{% endfor %}
     {% if not config.internet and not routed %}<span class="oc-badge oc-badge--danger">no access</span>{% endif %}
   </p>
 </div>
@@ -131,6 +131,8 @@
     </div>
   </section>
 
+  {% set chart_url = '/configs/' ~ config.id %}
+  {% include '_traffic.html' %}
   <section>
     <h2 class="oc-section__title">configuration</h2>
     <div class="oc-panel" style="padding:16px">

@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Interface
+
+- Overview links to affected exits and services. Administration uses a compact
+  menu on phones, with account and VPN address visible in configuration search.
+- The cabinet puts downloads and QR codes first; `/me/account` holds password
+  and session controls. Admin and cabinet configuration cards share the same
+  traffic chart with separate bars for download and upload.
+
 ### Added
 
 - Configurations have a `device_id` apart from the name. The mobile app sends

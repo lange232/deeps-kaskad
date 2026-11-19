@@ -1151,7 +1151,7 @@
   font-size: var(--ui-fs-sm);
 }
 
-/* Traffic history: two series drawn as areas with a line on top. */
+/* Traffic history: paired bars share a time axis and a rate scale. */
 .traffic-totals {
   display: flex;
   align-items: baseline;
@@ -1182,33 +1182,8 @@
   display: block;
 }
 
-.traffic-line {
-  fill: none;
-  stroke-width: 1.5;
-  vector-effect: non-scaling-stroke;
-}
-
-.traffic-line--down {
-  stroke: var(--ui-state-info-fg);
-}
-
-.traffic-line--up {
-  stroke: var(--ui-state-success-fg);
-}
-
-.traffic-area {
-  stroke: none;
-}
-
-.traffic-area--down {
-  fill: var(--ui-state-info-fg);
-  opacity: 0.14;
-}
-
-.traffic-area--up {
-  fill: var(--ui-state-success-fg);
-  opacity: 0.10;
-}
+.traffic-down { fill: var(--ui-state-info-fg); }
+.traffic-up { fill: var(--ui-state-success-fg); }
 
 .traffic-axis {
   display: flex;
@@ -1219,3 +1194,24 @@
 }
 
 /* The theme is switched by an attribute on <html>: data-theme="light" | "dark" */
+
+.nav-toggle { display: none; }
+.cab-nav { display: flex; gap: 18px; margin: 16px 0 20px; border-bottom: 1px solid var(--ui-border-base); }
+.cab-nav a { padding: 8px 0; color: var(--ui-text-muted); text-decoration: none; }
+.cab-nav [aria-current] { color: var(--ui-text-base); border-bottom: 2px solid var(--ui-border-focus); }
+.manage-block { border-top: 1px solid var(--ui-border-base); padding-top: 12px; }
+.manage-block > summary { cursor: pointer; font-weight: 530; }
+.manage-block[open] > * + * { margin-top: 16px; }
+.health-summary { padding: 12px 16px; display: grid; gap: 6px; }
+.health-summary a { color: var(--ui-state-warning-fg); }
+.config-qr { display: block; width: min(220px, 100%); image-rendering: pixelated; margin: 10px 0; }
+@media (max-width: 760px) {
+  .nav-toggle:not([hidden]) { display: inline-flex; }
+  .side .nav-toggle:not([hidden])[aria-expanded="false"] + nav { display: none; }
+  .config-list thead { display: none; }
+  .config-list tbody, .config-list tr { display: block; }
+  .config-list tr { padding: 10px 12px; border-bottom: 1px solid var(--ui-border-base); }
+  .config-list td { display: block; padding: 2px 0; width: auto !important; border: 0; }
+  .config-list .config-owner { overflow-wrap: anywhere; }
+  .config-list td:nth-child(4)::before { content: "Handshake · "; color: var(--ui-text-muted); }
+}

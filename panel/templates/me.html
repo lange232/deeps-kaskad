@@ -1,10 +1,10 @@
 {% extends "base.html" %}
-{% block title %}my access — deeps kaskad{% endblock %}
+{% block title %}my configurations — deeps kaskad{% endblock %}
 {% block topbar %}<a class="oc-mono topbar-link" href="/me">{{ email }}</a>{% endblock %}
 {% block body %}
 <div class="page-head">
   <div class="name-cell">
-    <h1 style="margin:0">My access</h1>
+    <h1 style="margin:0">My configurations</h1>
     <span class="oc-badge oc-badge--subtle">{{ configs | length }} of {{ limit }} configurations</span>
   </div>
   <p class="oc-muted" style="margin-top:6px">
@@ -42,8 +42,8 @@
             </td>
             <td>
               <div class="actions">
-                {% if c.internet %}<span class="oc-badge oc-badge--success">internet</span>{% endif %}
-                {% for name in c.exits %}<span class="oc-badge oc-badge--info">{{ name }}</span>{% endfor %}
+                {% if c.internet %}<span class="oc-badge oc-badge--subtle">internet</span>{% endif %}
+                {% for name in c.exits %}<span class="oc-badge oc-badge--subtle">{{ name }}</span>{% endfor %}
                 {% if not c.internet and not c.exits %}<span class="oc-badge oc-badge--danger">no access</span>{% endif %}
               </div>
             </td>
@@ -69,31 +69,7 @@
   </section>
   {% endif %}
 
-  <section>
-    <h2 class="oc-section__title">password</h2>
-    <div class="oc-panel" style="padding:16px">
-      <form method="post" action="/me/password" style="max-width:380px">
-        <input type="hidden" name="csrf_token" value="{{ csrf }}">
-        <label class="oc-field">
-          <span class="oc-field__label">current password</span>
-          <input class="oc-input" type="password" name="current_password"
-                 autocomplete="current-password" required>
-        </label>
-        <label class="oc-field" style="margin-top:12px">
-          <span class="oc-field__label">new password</span>
-          <input class="oc-input" type="password" name="new_password"
-                 autocomplete="new-password" minlength="12" required>
-        </label>
-        <p class="oc-hint" style="margin-top:8px">at least 12 characters</p>
 
-        <button class="oc-btn oc-btn--contrast oc-btn--sm" style="margin-top:12px">change password</button>
-      </form>
-      <form method="post" action="/me/logout-all" style="margin-top:16px">
-        <input type="hidden" name="csrf_token" value="{{ csrf }}">
-        <button class="oc-btn oc-btn--ghost oc-btn--sm">sign out everywhere</button>
-      </form>
-    </div>
-  </section>
 </div>
 
 <script>

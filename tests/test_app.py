@@ -379,9 +379,18 @@ class TrafficChartTests(unittest.TestCase):
         chart = app.build_traffic_chart(300, now - 3600, now, rows)
         self.assertEqual(chart["total_rx"], "300 B")
         self.assertEqual(chart["total_tx"], "2.9 KiB")
-        self.assertTrue(chart["down_line"].startswith("M "))
-        self.assertTrue(chart["down_area"].endswith("Z"))
-        self.assertNotEqual(chart["down_line"], chart["up_line"])
+        self.assertEqual(len(chart["bars"]), 2)
+        self.assertGreater(chart["bars"][0]["down"], chart["bars"][0]["up"])
+        self.assertGreater(chart["bars"][1]["x"], chart["bars"][0]["x"])
+
+    def test_isolated_buckets_do_not_fill_the_gap(self):
+        chart = app.build_traffic_chart(300, 0, 3600, [
+            {"ts": 300, "rx": 0, "tx": 10}, {"ts": 2700, "rx": 20, "tx": 0}])
+        a, b = chart["bars"]
+        self.assertGreater(a["down"], 0)
+        self.assertGreater(b["up"], 0)
+        self.assertEqual(b["x"] - a["x"], chart["width"] * 2400 / 3600)
+        self.assertLess(a["up_x"] + chart["bar_width"], b["x"])
 
     def test_no_history_means_no_chart(self):
         self.assertIsNone(app.build_traffic_chart(300, 0, 3600, []))

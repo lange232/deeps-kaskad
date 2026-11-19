@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="ru" data-theme="dark">
+<html lang="en" data-theme="dark">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -61,7 +61,7 @@
   .full { grid-column: 1 / -1; }
   .oc-textarea { min-height: 180px; resize: vertical; font-family: var(--ui-font-mono, ui-monospace, monospace); font-size: 12px; }
   .name-cell { display: flex; align-items: center; gap: 8px; }
-  .cell-sub { font-size: 11px; color: var(--ui-text-faint); }
+  .cell-sub { font-size: 12px; color: var(--ui-text-muted); }
   /* The latency is two lines: the total, then how it splits. */
   .ping { display: inline-flex; flex-direction: column; gap: 2px; line-height: 1.35; }
   .ping__total { font-size: 12px; color: var(--ui-text-base); }
@@ -186,6 +186,9 @@
         if (kind === 'hs') {
           item = configs[key];
           put(el, item ? kaskadRel(item.handshake) : 'no data');
+        } else if (kind === 'presence') {
+          item = configs[key];
+          put(el, item && item.handshake && data.ts - item.handshake < 180 ? 'online' : 'offline');
         } else if (kind === 'rx') {
           item = configs[key];
           put(el, mb(item ? item.rx : 0));
@@ -236,7 +239,7 @@
 </head>
 <body class="oc-shell">
 <header class="oc-topbar">
-  <a class="oc-brand" href="/" style="text-decoration:none">
+  <a class="oc-brand" href="{{ '/me' if role == 'user' else '/' }}" style="text-decoration:none">
     <span class="oc-brand__dim">deeps</span><span class="oc-brand__mark">kaskad</span>
   </a>
   <span class="oc-topbar__spacer"></span>
@@ -255,13 +258,14 @@
     {% set links = [
         ('/', 'Overview', 'overview'),
         ('/accounts', 'Accounts', 'accounts'),
-        ('/configs', 'Configs', 'configs'),
+        ('/configs', 'Configurations', 'configs'),
         ('/exits', 'Exits', 'exits'),
-        ('/journal', 'Journal', 'journal'),
-        ('/settings', 'Settings', 'settings')] %}
-    <nav aria-label="Main">
+        ('/journal', 'Activity', 'journal'),
+        ('/settings', 'System', 'settings')] %}
+    <button hidden class="oc-btn oc-btn--outline nav-toggle" aria-expanded="false" aria-controls="admin-nav">Menu · {% for href, label, key in links if nav == key %}{{ label }}{% endfor %}</button>
+    <nav id="admin-nav" aria-label="Main">
       {% for href, label, key in links %}
-      {% if key == 'journal' %}<div class="side__sep"></div>{% endif %}
+      {% if key in ('accounts', 'journal') %}<div class="side__sep"></div>{% endif %}
       <a href="{{ href }}" class="{{ 'is-active' if nav == key }}"
          {% if nav == key %}aria-current="page"{% endif %}>{{ label }}</a>
       {% endfor %}
@@ -269,6 +273,9 @@
   </aside>
   {% endif %}
   <main class="main">
+    {% if role == 'user' %}
+    <nav class="cab-nav" aria-label="Cabinet"><a href="/me" {% if nav != 'account' %}aria-current="page"{% endif %}>My configurations</a><a href="/me/account" {% if nav == 'account' %}aria-current="page"{% endif %}>Account</a></nav>
+    {% endif %}
     {% block body %}{% endblock %}
   </main>
 </div>
@@ -285,6 +292,11 @@
 </footer>
 
 <script>
+  const menu = document.querySelector('.nav-toggle');
+  if (menu) {
+    menu.hidden = false;
+    menu.addEventListener('click', () => menu.setAttribute('aria-expanded', menu.getAttribute('aria-expanded') === 'false'));
+  }
   const root = document.documentElement;
   try {
     const saved = localStorage.getItem('kaskad-theme');
@@ -303,7 +315,7 @@
   document.addEventListener('keydown', (event) => {
     if (event.key !== 'Enter') return;
     const row = event.target.closest('tr[data-href]');
-    if (!row) return;
+    if (!row || event.target !== row) return;
     window.location.href = row.dataset.href;
   });
 

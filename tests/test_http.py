@@ -229,7 +229,7 @@ class RoleTests(PanelTestCase):
         aid, _ = self.seed_client(email="c1@example.com")
         exit_id = self.seed_exit()
         self.login("c1@example.com", USER_PASSWORD)
-        csrf = self.csrf("/me")
+        csrf = self.csrf("/me/account")
         response = self.client.post(f"/accounts/{aid}/exits",
                                     data={"exits": [exit_id], "csrf_token": csrf})
         self.assertEqual(response.status_code, 303)
@@ -303,7 +303,7 @@ class SessionTests(PanelTestCase):
         self.seed_client(email="c1@example.com")
         self.login("c1@example.com", USER_PASSWORD)
         cookie = self.client.cookies.get(app.COOKIE)
-        csrf = self.csrf("/me")
+        csrf = self.csrf("/me/account")
         response = self.client.post("/me/logout-all", data={"csrf_token": csrf})
         self.assertEqual(response.status_code, 303)
         self.assertEqual(response.headers["location"], "/login")
@@ -520,7 +520,7 @@ class AdminPingTests(PanelTestCase):
         status = {"exits": {"awg1": {"alive": True, "rtt_ms": 40}},
                   "active": "awg1", "clients": {}, "ts": 0}
         self.login_admin()
-        with mock.patch.object(app, "read_status", return_value=status):
+        with mock.patch.object(app, "read_status", return_value=status), mock.patch.object(app, "run_dir", return_value="awg1"):
             response = self.client.get("/")
         self.assertEqual(response.status_code, 200)
         self.assertIn('data-live="ping|awg1"', response.text)
@@ -1004,6 +1004,17 @@ class NavigationTests(PanelTestCase):
         self.assertIn('aria-current="page"', text)
         self.assertEqual(text.count('aria-current="page"'), 1)
 
+    def test_account_controls_have_a_separate_authenticated_page(self):
+        self.assertEqual(self.client.get("/me/account").headers["location"], "/login")
+        self.seed_client()
+        self.login("c1@example.com", USER_PASSWORD)
+        home = self.client.get("/me").text
+        self.assertIn('href="/me/account"', home)
+        self.assertNotIn('action="/me/password"', home)
+        account = self.client.get("/me/account").text
+        self.assertIn('action="/me/password"', account)
+        self.assertIn('action="/me/logout-all"', account)
+
     def test_cabinet_has_no_sidebar(self):
         self.seed_client(email="c1@example.com")
         self.login("c1@example.com", USER_PASSWORD)
@@ -1184,7 +1195,7 @@ class UserPageTests(PanelTestCase):
         self.seed_client(email="c1@example.com")
         self.login("c1@example.com", USER_PASSWORD)
         old_cookie = self.client.cookies.get(app.COOKIE)
-        csrf = self.csrf("/me")
+        csrf = self.csrf("/me/account")
         response = self.client.post("/me/password", data={
             "current_password": USER_PASSWORD,
             "new_password": "another-password-456",
@@ -1208,7 +1219,7 @@ class UserPageTests(PanelTestCase):
     def test_wrong_current_password_changes_nothing(self):
         self.seed_client(email="c1@example.com")
         self.login("c1@example.com", USER_PASSWORD)
-        csrf = self.csrf("/me")
+        csrf = self.csrf("/me/account")
         response = self.client.post("/me/password", data={
             "current_password": "not-the-password",
             "new_password": "another-password-456",
@@ -1402,8 +1413,8 @@ class CabinetTrafficTests(PanelTestCase):
         response = self.client.get(f"/me/configs/{cid}?range=24h")
         self.assertEqual(response.status_code, 200, response.text)
         self.assertIn("traffic-chart", response.text)
-        self.assertIn("traffic-line--down", response.text)
-        self.assertIn("traffic-line--up", response.text)
+        self.assertIn("traffic-down", response.text)
+        self.assertIn("traffic-up", response.text)
         self.assertIn("downloaded", response.text)
         self.assertIn(
             f'href="/me/configs/{cid}?range=7d#traffic"', response.text

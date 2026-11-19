@@ -24,7 +24,7 @@
   <div class="oc-panel" style="padding:16px">
     <div class="kv-grid">
       <div><div class="k">mode</div><div class="v">
-        {% if exit.mode == 'routes' %}<span class="oc-badge oc-badge--info">subnets only</span>{% else %}<span class="oc-badge oc-badge--success">internet</span>{% endif %}
+        {% if exit.mode == 'routes' %}<span class="oc-badge oc-badge--subtle">subnets only</span>{% else %}<span class="oc-badge oc-badge--subtle">internet</span>{% endif %}
       </div></div>
       <div><div class="k">interface</div><div class="v oc-mono">{{ exit.iface }}</div></div>
       <div><div class="k">comment</div><div class="v">{{ exit.comment or '—' }}</div></div>

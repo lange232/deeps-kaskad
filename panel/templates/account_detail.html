@@ -86,8 +86,8 @@
             </td>
             <td>
               <div class="actions">
-                {% if c.internet %}<span class="oc-badge oc-badge--success">internet</span>{% endif %}
-                {% for name in c.exits %}<span class="oc-badge oc-badge--info">{{ name }}</span>{% endfor %}
+                {% if c.internet %}<span class="oc-badge oc-badge--subtle">internet</span>{% endif %}
+                {% for name in c.exits %}<span class="oc-badge oc-badge--subtle">{{ name }}</span>{% endfor %}
                 {% if not c.internet and not c.exits %}<span class="oc-badge oc-badge--danger">no access</span>{% endif %}
               </div>
             </td>
@@ -115,8 +115,9 @@
     {% endif %}
   </section>
 
+  <details class="manage-block" open><summary>Access</summary>
   <section>
-    <h2 class="oc-section__title">access</h2>
+    <h2 class="oc-section__title">Exit grants</h2>
     <div class="oc-panel" style="padding:16px">
       <form method="post" action="/accounts/{{ account.id }}/exits">
         <input type="hidden" name="csrf_token" value="{{ csrf }}">
@@ -204,6 +205,8 @@
     </div>
   </section>
 
+  </details>
+  <details class="manage-block"><summary>Account settings</summary>
   <section>
     <h2 class="oc-section__title">limit</h2>
     <div class="oc-panel" style="padding:16px">
@@ -245,6 +248,7 @@
       </div>
     </div>
   </section>
+  </details>
 </div>
 
 <script>

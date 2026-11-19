@@ -2,17 +2,17 @@
 {% block title %}{{ cl.name }} — deeps kaskad{% endblock %}
 {% block topbar %}<a class="oc-mono topbar-link" href="/me">{{ email }}</a>{% endblock %}
 {% block body %}
-<div class="crumbs"><a href="/me">My access</a><span>/</span><span>{{ cl.name }}</span></div>
+<div class="crumbs"><a href="/me">My configurations</a><span>/</span><span>{{ cl.name }}</span></div>
 <div class="page-head">
   <div class="name-cell">
     <h1 style="margin:0">{{ cl.name }}</h1>
-    {% if cl.enabled %}<span class="oc-badge oc-badge--success"><span class="oc-dot"></span>active</span>
+    {% if cl.enabled %}<span class="oc-badge oc-badge--success"><span class="oc-dot"></span>enabled</span>
     {% else %}<span class="oc-badge oc-badge--subtle">disabled</span>{% endif %}
   </div>
   <p class="oc-muted" style="margin-top:6px">
-    <span class="oc-mono">{{ cl.ip }}/32</span> ·
-    {% if cl.internet %}<span class="oc-badge oc-badge--success">internet</span>{% endif %}
-    {% for name in cl.exits %}<span class="oc-badge oc-badge--info">{{ name }}</span>{% endfor %}
+    <span class="oc-mono">{{ cl.ip }}/32</span> · <span data-live="presence|{{ cl.ip }}">—</span> · last handshake <span data-live="hs|{{ cl.ip }}">—</span> ·
+    {% if cl.internet %}<span class="oc-badge oc-badge--subtle">internet</span>{% endif %}
+    {% for name in cl.exits %}<span class="oc-badge oc-badge--subtle">{{ name }}</span>{% endfor %}
     {% if not cl.internet and not cl.exits %}<span class="oc-badge oc-badge--danger">no access</span>{% endif %}
   </p>
 </div>
@@ -21,49 +21,33 @@
 {% if ok %}<div class="oc-alert oc-alert--success" style="margin-bottom:16px"><span class="oc-dot" style="margin-top:7px"></span><div class="oc-alert__body">{{ ok }}</div></div>{% endif %}
 
 <div class="stack">
-  <div class="oc-panel" style="padding:16px">
-    <div class="kv-grid">
-      <div><div class="k">handshake</div><div class="v" data-live="hs|{{ cl.ip }}">—</div></div>
-      <div><div class="k">received</div><div class="v oc-num"><span data-live="rx|{{ cl.ip }}">{{ (cl.rx / 1048576) | round(1) }}</span> MiB</div></div>
-      <div><div class="k">sent</div><div class="v oc-num"><span data-live="tx|{{ cl.ip }}">{{ (cl.tx / 1048576) | round(1) }}</span> MiB</div></div>
-      <div><div class="k">address</div><div class="v oc-mono">{{ cl.ip }}</div></div>
-      {% if cl.device_id %}<div><div class="k">device id</div><div class="v oc-mono">{{ cl.device_id }}</div></div>{% endif %}
-    </div>
-  </div>
-
-  <section id="traffic">
-    <div class="toolbar">
-      <h2 class="oc-section__title" style="margin:0">traffic</h2>
-      <div class="actions" style="gap:4px">
-        {% for key in ranges %}
-        <a class="oc-btn oc-btn--sm {{ 'oc-btn--contrast' if key == period else 'oc-btn--ghost' }}"
-           href="/me/configs/{{ cl.id }}?range={{ key }}#traffic">{{ key }}</a>
-        {% endfor %}
-      </div>
-    </div>
+  <section>
+    <h2 class="oc-section__title">Connect</h2>
     <div class="oc-panel" style="padding:16px">
-      {% if chart %}
-      <div class="traffic-totals">
-        <span class="traffic-key traffic-key--down"></span>
-        <span class="oc-muted">downloaded</span><span class="oc-num">{{ chart.total_tx }}</span>
-        <span class="traffic-key traffic-key--up"></span>
-        <span class="oc-muted">uploaded</span><span class="oc-num">{{ chart.total_rx }}</span>
-        <span class="oc-muted" style="margin-left:auto">peak {{ chart.peak }}</span>
+      {% if conf %}
+      <div class="actions">
+        <a class="oc-btn oc-btn--contrast oc-btn--sm" href="/me/configs/{{ cl.id }}/conf">download .conf</a>
+        {% if has_app %}
+        <a class="oc-btn oc-btn--outline oc-btn--sm" href="/download/android">android app</a>
+        {% endif %}
+        <details><summary class="oc-btn oc-btn--outline oc-btn--sm">Show QR</summary>
+          <img class="config-qr" src="/me/configs/{{ cl.id }}/qr.png" alt="Configuration QR code">
+        </details>
       </div>
-      <svg class="traffic-chart" viewBox="0 0 {{ chart.width }} {{ chart.height }}"
-           preserveAspectRatio="none" role="img" aria-label="traffic">
-        <path class="traffic-area traffic-area--down" d="{{ chart.down_area }}"/>
-        <path class="traffic-area traffic-area--up" d="{{ chart.up_area }}"/>
-        <path class="traffic-line traffic-line--down" d="{{ chart.down_line }}"/>
-        <path class="traffic-line traffic-line--up" d="{{ chart.up_line }}"/>
-      </svg>
-      <div class="traffic-axis"><span>{{ chart.from }}</span><span>{{ chart.to }}</span></div>
+      <details style="margin-top:14px">
+        <summary class="oc-btn oc-btn--ghost oc-btn--sm" style="display:inline-flex">show config</summary>
+        <pre class="conf" style="margin-top:12px">{{ conf }}</pre>
+      </details>
       {% else %}
-      <p class="oc-muted" style="margin:0">no traffic recorded yet</p>
+      <p class="oc-muted" style="margin:0">no access assigned</p>
       {% endif %}
     </div>
   </section>
+  {% set chart_url = '/me/configs/' ~ cl.id %}
+  {% include '_traffic.html' %}
 
+  {% if internet_exits or routed_choices %}
+  <details class="manage-block"><summary>Routing{% if current_exit %} · {{ current_exit.comment or current_exit.name }}{% endif %}</summary>
   {% if internet_exits and cl.internet %}
   <section>
     <h2 class="oc-section__title">exit priority</h2>
@@ -149,9 +133,10 @@
   </section>
   {% endif %}
 
-  <section>
-    <h2 class="oc-section__title">configuration</h2>
-    <div class="oc-panel" style="padding:16px">
+  </details>
+  {% endif %}
+  <details class="manage-block"><summary>Manage configuration</summary>
+    {% if cl.device_id %}<p class="oc-muted">Device ID · <span class="oc-mono">{{ cl.device_id }}</span></p>{% endif %}
       <form method="post" action="/me/configs/{{ cl.id }}/name"
             class="actions" style="margin-bottom:14px">
         <input type="hidden" name="csrf_token" value="{{ csrf }}">
@@ -160,32 +145,7 @@
                aria-label="name" style="max-width:220px">
         <button class="oc-btn oc-btn--outline oc-btn--sm">rename</button>
       </form>
-      {% if conf %}
-      <div class="actions">
-        <a class="oc-btn oc-btn--outline oc-btn--sm" href="/me/configs/{{ cl.id }}/conf">download .conf</a>
-        {% if has_app %}
-        <a class="oc-btn oc-btn--outline oc-btn--sm" href="/download/android">android app</a>
-        {% endif %}
-        <details id="qr" style="display:inline-flex">
-          <summary class="oc-btn oc-btn--ghost oc-btn--sm" style="display:inline-flex">show qr</summary>
-        </details>
-      </div>
-      <div id="qr-box" style="margin-top:14px; background:var(--ui-bg-deep); padding:12px; border-radius:6px; display:none">
-        <img src="/me/configs/{{ cl.id }}/qr.png" alt="qr" style="width:240px; height:240px; image-rendering:pixelated">
-      </div>
-      <details style="margin-top:14px">
-        <summary class="oc-btn oc-btn--ghost oc-btn--sm" style="display:inline-flex">show config</summary>
-        <pre class="conf" style="margin-top:12px">{{ conf }}</pre>
-      </details>
-      <p class="oc-hint" style="margin-top:12px">
-        any WireGuard client works, or
-        <a href="https://www.wireguard.com/install/">wireguard.com/install</a>
-      </p>
-      {% else %}
-      <p class="oc-muted" style="margin:0">no access assigned</p>
-      {% endif %}
-    </div>
-  </section>
+
 
   {% if conf %}
   <section>
@@ -217,6 +177,7 @@
       </div>
     </div>
   </section>
+  </details>
 </div>
 
 <script>

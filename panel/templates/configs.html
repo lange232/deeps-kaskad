@@ -2,7 +2,7 @@
 {% block title %}configs — deeps kaskad{% endblock %}
 {% block body %}
 <div class="page-head">
-  <h1>Configs</h1>
+  <h1>Configurations</h1>
 </div>
 
 <div class="toolbar toolbar--list">
@@ -17,33 +17,31 @@
 {% if configs %}
 <div class="oc-panel">
   <div class="table-scroll">
-  <table class="oc-table">
+  <table class="oc-table config-list">
     <thead>
-      <tr><th>configuration</th><th style="width:1%">access</th></tr>
+      <tr><th>Configuration</th><th>Account</th><th>VPN address</th><th>Handshake</th><th style="width:1%">access</th></tr>
     </thead>
     <tbody>
     {% for c in configs %}
       <tr data-href="/configs/{{ c.id }}" tabindex="0">
         <td>
-          {{ c.name }}
+          <a href="/configs/{{ c.id }}">{{ c.name }}</a>
           {% if not c.enabled %}<span class="oc-badge oc-badge--subtle">disabled</span>{% endif %}
-          <div class="cell-sub oc-mono" style="display:flex; flex-wrap:wrap; gap:4px 8px">
-            <span>{{ c.ip }}</span>
+          </td><td class="config-owner">
             {% if c.account_email %}
               <a class="oc-mono" href="/accounts/{{ c.account_id }}">{{ c.account_email }}</a>
               {% if not c.account_enabled %}<span class="oc-badge oc-badge--subtle">login off</span>{% endif %}
             {% else %}<span class="oc-badge oc-badge--warning">unassigned</span>{% endif %}
-          </div>
-          <div class="cell-sub oc-num" style="display:flex; flex-wrap:wrap; gap:4px 10px">
-            <span>handshake <span data-live="hs|{{ c.ip }}">—</span></span>
+            </td><td class="oc-mono">{{ c.ip }}</td><td>
+            <span data-live="hs|{{ c.ip }}">—</span><div class="cell-sub oc-num">
             <span><span data-live="rx|{{ c.ip }}">{{ (c.rx / 1048576) | round(1) }}</span> /
               <span data-live="tx|{{ c.ip }}">{{ (c.tx / 1048576) | round(1) }}</span> MiB</span>
           </div>
         </td>
         <td>
           <div class="actions">
-            {% if c.internet %}<span class="oc-badge oc-badge--success">internet</span>{% endif %}
-            {% for name in c.exits %}<span class="oc-badge oc-badge--info">{{ name }}</span>{% endfor %}
+            {% if c.internet %}<span class="oc-badge oc-badge--subtle">internet</span>{% endif %}
+            {% for name in c.exits %}<span class="oc-badge oc-badge--subtle">{{ name }}</span>{% endfor %}
             {% if not c.internet and not c.exits %}<span class="oc-badge oc-badge--danger">no access</span>{% endif %}
           </div>
         </td>

@@ -334,10 +334,10 @@ reissue, link to the account, internet order, disable, delete.
 
 Pages: `/`, `/exits`, `/accounts`, `/configs`, `/journal`, `/settings`, plus
 `/accounts/new`, `/accounts/{id}`, `/configs/new`, `/configs/{id}` and the
-cabinet under `/me`, `/me/configs/new`, `/me/configs/{id}`. The cabinet's
-configuration page draws the traffic history for 1h, 24h, 7d, 30d or 90d
+cabinet under `/me`, `/me/configs/new`, `/me/configs/{id}` and `/me/account`
+(password and sessions). Both the admin and cabinet configuration pages draw the traffic history for 1h, 24h, 7d, 30d or 90d
 (`?range=`), with the downloaded and uploaded totals and the peak rate; the
-chart is an inline SVG with the theme's colours, no external library.
+chart uses paired SVG bars, leaving missing time buckets blank.
 
 Sign-in limits: five failed attempts for the same email from the same address
 block that pair for five minutes, twenty failures from one address block the
