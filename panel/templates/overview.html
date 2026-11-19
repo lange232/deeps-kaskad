@@ -11,30 +11,24 @@
 
 <div class="stack">
   <div class="health-summary oc-panel">
-    <span class="cell-sub">Health at page load</span>
-    {% set issues = namespace(count=0) %}
-    {% if not active_row or not active_row.alive %}
-    {% set issues.count = issues.count + 1 %}<a href="/exits">No healthy active internet exit → Exits</a>
-    {% endif %}
-    {% for e in exits if e.enabled and e.alive == false %}
-    {% set issues.count = issues.count + 1 %}<a href="/exits/{{ e.id }}">{{ e.name }} is down → Exit details</a>
+    <span id="overview-stale" class="oc-muted" role="status"></span>
+    <div id="overview-health" class="health-issues">
+    {% for issue in health.issues %}
+    <a class="oc-link oc-link--alert" href="{{ issue.url }}">{{ issue.text }}</a>
+    {% else %}
+    <span>All systems operational</span>
     {% endfor %}
-    {% for name, state in status.items() if state != 'active' %}
-    {% set issues.count = issues.count + 1 %}<a href="/settings#services">{{ name }}: {{ state }} → System</a>
-    {% endfor %}
-    {% if not issues.count %}<span>All systems operational</span>{% endif %}
+    </div>
   </div>
   <div class="stat-grid">
     <div class="stat-tile">
       <div class="stat-label">active exit</div>
-      <div class="stat-value">{% if active_row %}<a href="/exits/{{ active_row.id }}">{{ active_row.name }}</a>{% else %}—{% endif %}</div>
-      <div class="stat-sub oc-mono">
-        {% if active_row %}{{ active_row.iface }} · <span data-live="ping|{{ active_row.iface }}">—</span>{% else %}no healthy internet exit{% endif %}
-      </div>
+      <div class="stat-value" id="overview-active">{% if health.active %}<a class="oc-link" href="/exits/{{ health.active.id }}">{{ health.active.name }}</a>{% else %}—{% endif %}</div>
+      <div class="stat-sub oc-mono"><span id="overview-iface">{{ health.active.iface if health.active else '' }}</span><span id="overview-ping" data-live="ping|{{ health.active.iface if health.active else '' }}">—</span></div>
     </div>
     <div class="stat-tile">
       <div class="stat-label">configurations online</div>
-      <div class="stat-value"><span data-live="online">{{ online }}</span><span class="of">of {{ clients | length }}</span></div>
+      <div class="stat-value"><span data-live="online">{{ online }}</span><span class="of">of <span data-live="configs_total">{{ clients | length }}</span></span></div>
       <div class="stat-sub">handshake younger than 3 minutes</div>
     </div>
     <div class="stat-tile">
@@ -44,7 +38,7 @@
     </div>
     <div class="stat-tile">
       <div class="stat-label">exits</div>
-      <div class="stat-value"><span data-live="exits-alive">{{ exits | selectattr('alive') | list | length }}</span><span class="of">of {{ exits | length }}</span></div>
+      <div class="stat-value"><span data-live="exits-alive">{{ exits | selectattr('alive') | list | length }}</span><span class="of">of <span data-live="exits_total">{{ exits | length }}</span></span></div>
       <div class="stat-sub">alive by health-check</div>
     </div>
   </div>

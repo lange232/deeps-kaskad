@@ -12,7 +12,7 @@
   <p class="oc-muted" style="margin-top:6px">
     <span class="oc-mono">{{ config.ip }}/32</span> ·
     {% if account %}
-    <a class="oc-mono" href="/accounts/{{ account.id }}">{{ account.email }}</a>
+    <a class="oc-link oc-link--muted oc-mono" href="/accounts/{{ account.id }}">{{ account.email }}</a>
     {% else %}<span class="oc-badge oc-badge--warning">no account</span>{% endif %}
     ·
     {% if config.internet %}<span class="oc-badge oc-badge--subtle">internet</span>{% endif %}

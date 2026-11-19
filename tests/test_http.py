@@ -998,6 +998,36 @@ class ConfigPingTests(PanelTestCase):
 
 
 class NavigationTests(PanelTestCase):
+    def test_config_filters_combine_with_search(self):
+        _, disabled = self.seed_client(name="phone", enabled=0)
+        _, orphan = self.seed_client(name="tablet", ip="10.80.0.9", email="other@example.com")
+        with app.db() as conn:
+            conn.execute("UPDATE clients SET account_id = NULL WHERE id = ?", (orphan,))
+        self.login_admin()
+        for query, expected in (("state=disabled&q=phone", [disabled]),
+                                ("state=unassigned", [orphan]),
+                                ("state=disabled&q=tablet", [])):
+            response = self.client.get("/configs?" + query)
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(re.findall(r'data-href="/configs/(\d+)"', response.text),
+                             [str(cid) for cid in expected])
+
+    def test_overview_status_tracks_failover_and_is_admin_only(self):
+        first = self.seed_exit("first", "awg1")
+        second = self.seed_exit("second", "awg2")
+        status = {"exits": {"awg1": {"alive": False}, "awg2": {"alive": True}}}
+        self.login_admin()
+        with mock.patch.object(app, "read_status", return_value=status), \
+                mock.patch.object(app, "run_dir", return_value="awg2"), \
+                mock.patch.object(app, "services", return_value={"routing": "failed"}):
+            view = self.client.get("/status.json?overview=true").json()["overview"]
+        self.assertEqual(view["active"]["id"], second)
+        self.assertEqual([item["url"] for item in view["issues"]],
+                         [f"/exits/{first}", "/settings#services"])
+        self.seed_account()
+        self.login("c1@example.com", USER_PASSWORD)
+        self.assertNotIn("overview", self.client.get("/status.json?overview=true").json())
+
     def test_current_page_is_marked_for_screen_readers(self):
         self.login_admin()
         text = self.client.get("/accounts").text

@@ -145,6 +145,34 @@
     var put = function (el, text) {
       if (el.textContent !== text) el.textContent = text;
     };
+    var health = document.getElementById('overview-health');
+    var stale = document.getElementById('overview-stale');
+    var previousActive, previousIssues;
+    function updateOverview(view) {
+      function link(url, text, alert) {
+        var a = document.createElement('a');
+        a.className = alert ? 'oc-link oc-link--alert' : 'oc-link';
+        a.href = url;
+        a.textContent = text;
+        return a;
+      }
+      var active = view.active;
+      var activeKey = JSON.stringify(active);
+      var issuesKey = JSON.stringify(view.issues);
+      if (activeKey !== previousActive) {
+        previousActive = activeKey;
+        document.getElementById('overview-active').replaceChildren(
+          active ? link('/exits/' + active.id, active.name, false) : '—');
+        put(document.getElementById('overview-iface'), active ? active.iface : '');
+        document.getElementById('overview-ping').dataset.live = 'ping|' + (active ? active.iface : '');
+      }
+      if (issuesKey !== previousIssues) {
+        previousIssues = issuesKey;
+        health.replaceChildren(...(view.issues.length ? view.issues.map(function (issue) {
+          return link(issue.url, issue.text, true);
+        }) : ['All systems operational']));
+      }
+    }
     var badge = function (el, exit) {
       var cls = 'oc-badge ';
       var text;
@@ -218,18 +246,31 @@
           put(el, mb(data.tx));
         } else if (kind === 'exits-alive') {
           put(el, String(data.exits_alive));
+        } else if (kind === 'exits_total' || kind === 'configs_total') {
+          put(el, String(data[kind]));
         }
       }
     }
     function tick() {
       if (document.visibilityState === 'visible') {
-        fetch('/status.json', {cache: 'no-store', credentials: 'same-origin'})
+        var controller = new AbortController();
+        var deadline = setTimeout(function () { controller.abort(); }, 10000);
+        fetch(health ? '/status.json?overview=true' : '/status.json',
+          {cache: 'no-store', credentials: 'same-origin', signal: controller.signal})
           .then(function (r) {
             if (r.status === 401) { window.location.href = '/login'; return null; }
             return r.ok ? r.json() : null;
           })
-          .then(function (data) { if (data) apply(data); })
-          .catch(function () {});
+          .then(function (data) {
+            if (!data || (health && !data.overview)) throw new Error('status unavailable');
+            if (health) {
+              updateOverview(data.overview);
+              put(stale, '');
+            }
+            apply(data);
+          })
+          .catch(function () { if (stale) put(stale, 'Stale · status unavailable'); })
+          .finally(function () { clearTimeout(deadline); });
       }
       setTimeout(tick, seconds * 1000);
     }

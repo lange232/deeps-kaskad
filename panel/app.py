@@ -1617,14 +1617,29 @@ def overview(request: Request, err: str | None = None, ok: str | None = None):
     online = sum(1 for cl in configs if cl["handshake"] and now - cl["handshake"] < 180)
     rx = sum(cl["rx"] for cl in configs)
     tx = sum(cl["tx"] for cl in configs)
-    active_exit = next((e for e in exits if e["active"]), None)
+    health = overview_health(exits)
     return render_page(
         request, "overview.html", "overview",
         csrf=csrf(token), err=err, ok=ok,
-        clients=configs, exits=exits, active_exit=active, manual_exit=manual,
-        active_row=active_exit, online=online, rx=rx, tx=tx,
-        status=services(), events=events, net=c["net"],
+        clients=configs, exits=exits, health=health, online=online, rx=rx, tx=tx,
+        events=events,
     )
+
+
+def overview_health(exits: list[dict]) -> dict:
+    active = next((e for e in exits if e["active"] and e["enabled"]
+                   and e["mode"] == "internet"), None)
+    issues = []
+    if not active or not active["alive"]:
+        issues.append({"url": "/exits", "text": "No healthy active internet exit → Exits"})
+    for e in exits:
+        if e["enabled"] and e["alive"] is False:
+            issues.append({"url": f"/exits/{e['id']}", "text": f"{e['name']} is down → Exit details"})
+    for name, state in services().items():
+        if state != "active":
+            issues.append({"url": "/settings#services", "text": f"{name}: {state} → System"})
+    return {"active": {key: active[key] for key in ("id", "name", "iface")} if active else None,
+            "issues": issues}
 
 
 # ---------------------------------------------------------------- exits
@@ -2078,7 +2093,7 @@ def reset_config_order(conn, cl) -> None:
 
 
 @app.get("/configs", response_class=HTMLResponse)
-def configs_page(request: Request, q: str | None = None):
+def configs_page(request: Request, q: str | None = None, state: str = ""):
     token = require_admin(request)
     live = iface_dump(cfg()["iface"])["peers"]
     with db() as conn:
@@ -2099,9 +2114,21 @@ def configs_page(request: Request, q: str | None = None):
             or needle in c["ip"]
             or needle in c["account_email"].lower()
         ]
+    filters = {"": "All", "recent": "Recent handshake", "disabled": "Disabled",
+               "unassigned": "Unassigned"}
+    if state not in filters:
+        state = ""
+    now = int(time.time())
+    if state == "recent":
+        items = [c for c in items if c["enabled"] and c["handshake"]
+                 and now - c["handshake"] < 180]
+    elif state == "disabled":
+        items = [c for c in items if not c["enabled"]]
+    elif state == "unassigned":
+        items = [c for c in items if not c["account_email"]]
     return render_page(
         request, "configs.html", "configs",
-        csrf=csrf(token), configs=items, q=q or "",
+        csrf=csrf(token), configs=items, q=q or "", state=state, filters=filters,
     )
 
 
@@ -3632,7 +3659,7 @@ def api_subnets_update(
 
 
 @app.get("/status.json")
-def status_json(request: Request):
+def status_json(request: Request, overview: bool = False):
     """Live numbers for the page scripts.
 
     The pages render everything server-side; this endpoint only feeds the
@@ -3674,7 +3701,14 @@ def status_json(request: Request):
         for e in exits_rows()
     }
     current = status.get("clients") or {}
+    health = {}
+    if overview and role == "admin":
+        active = run_dir("active-exit")
+        health["overview"] = overview_health(
+            [exit_view(e, status, active) for e in exits_rows()]
+        )
     return {
+        **health,
         "ts": now,
         "active": status.get("active"),
         "online": sum(1 for v in views if v["handshake"] and now - v["handshake"] < 180),
@@ -3682,6 +3716,7 @@ def status_json(request: Request):
         "tx": sum(v["tx"] for v in views),
         "exits_alive": sum(1 for e in exits.values() if e["alive"]),
         "exits_total": len(exits),
+        "configs_total": len(views),
         "exits": exits,
         "configs": {
             v["ip"]: {
