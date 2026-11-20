@@ -350,6 +350,8 @@ class SessionTests(PanelTestCase):
             response = self.client.get("/healthz")
         self.assertEqual(response.status_code, 200)
         self.assertTrue(response.json()["ok"])
+        # A public endpoint must not describe the product or its release.
+        self.assertEqual(set(response.json()), {"ok", "failover_age"})
 
     def test_ping_is_a_tiny_public_target(self):
         response = self.client.get("/ping")
@@ -363,11 +365,137 @@ class SessionTests(PanelTestCase):
             response = self.client.get("/healthz")
         self.assertEqual(response.status_code, 503)
         self.assertFalse(response.json()["ok"])
+        self.assertEqual(set(response.json()), {"ok", "failover_age"})
 
     def test_healthz_fails_without_a_database(self):
         with mock.patch.object(app, "db", side_effect=RuntimeError("boom")):
             response = self.client.get("/healthz")
         self.assertEqual(response.status_code, 503)
+
+
+class AnonymousLoginTests(PanelTestCase):
+    def set_anonymous(self, enabled):
+        self.login_admin()
+        data = {"csrf_token": self.csrf("/settings")}
+        if enabled:
+            data["enabled"] = "1"
+        response = self.client.post("/settings/login-anonymous", data=data)
+        self.assertEqual(response.status_code, 303)
+
+    def test_the_signed_out_page_can_hide_the_project(self):
+        self.assertIn("deeps", self.client.get("/login").text)
+        self.set_anonymous(True)
+        with app.db() as conn:
+            self.assertEqual(conn.execute(
+                "SELECT value FROM settings WHERE key = 'login_anonymous'"
+            ).fetchone()[0], "1")
+            self.assertEqual(conn.execute(
+                "SELECT count(*) FROM audit "
+                "WHERE action = 'settings_login_anonymous'"
+            ).fetchone()[0], 1)
+        self.client.post("/logout")
+        page = self.client.get("/login").text
+        self.assertIn("<title>Sign in</title>", page)
+        self.assertIn(">Sign in</h1>", page)
+        self.assertIn('action="/login"', page)
+        # The whole source, not just the visible text: no product name, no
+        # stack, no panel scripts or styles, no hint of what is behind it.
+        lowered = page.lower()
+        for token in ("deeps", "kaskad", "deffhost", "github", "amnezia", "awg",
+                      "wireguard", "vpn", "tunnel", "peer", "exit", "handshake",
+                      "traffic", "status.json", "config", "client", "panel",
+                      "oc-", "/static/", "vtest"):
+            self.assertNotIn(token, lowered, token)
+
+    def test_a_failed_sign_in_stays_anonymous(self):
+        self.set_anonymous(True)
+        self.client.post("/logout")
+        response = self.client.post(
+            "/login", data={"email": "admin", "password": "wrong-password"}
+        )
+        self.assertEqual(response.status_code, 401)
+        self.assertIn(">Sign in</h1>", response.text)
+        self.assertNotIn("kaskad", response.text.lower())
+        self.assertNotIn("/static/", response.text)
+
+    def test_turning_it_off_restores_the_brand(self):
+        self.set_anonymous(True)
+        self.client.post("/logout")
+        self.assertNotIn("kaskad", self.client.get("/login").text.lower())
+        self.set_anonymous(False)
+        self.client.post("/logout")
+        page = self.client.get("/login").text
+        self.assertIn('class="oc-brand"', page)
+        self.assertIn('class="site-footer"', page)
+        self.assertIn("deeps", page)
+
+    def test_authenticated_pages_keep_the_brand(self):
+        self.set_anonymous(True)
+        page = self.client.get("/configs").text
+        self.assertIn('class="oc-brand"', page)
+        self.assertIn('class="site-footer"', page)
+
+    def test_the_setting_rejects_a_bad_csrf_token(self):
+        self.login_admin()
+        response = self.client.post(
+            "/settings/login-anonymous",
+            data={"csrf_token": "nope", "enabled": "1"},
+        )
+        self.assertEqual(response.status_code, 400)
+        with app.db() as conn:
+            self.assertIsNone(conn.execute(
+                "SELECT value FROM settings WHERE key = 'login_anonymous'"
+            ).fetchone())
+
+
+class ErrorSurfaceTests(PanelTestCase):
+    def test_browser_errors_do_not_describe_the_framework(self):
+        self.assertEqual(self.client.get("/").status_code, 303)
+        root = self.client.get("/")
+        self.assertEqual(root.headers["location"], "/login")
+        self.assertEqual(root.content, b"")
+        missing = self.client.get("/nope")
+        self.assertEqual(missing.status_code, 404)
+        self.assertEqual(missing.content, b"")
+        slash = self.client.get("/login/")
+        self.assertEqual(slash.status_code, 404)
+        self.assertEqual(slash.content, b"")
+        status = self.client.get("/status.json")
+        self.assertEqual(status.status_code, 401)
+        self.assertEqual(status.content, b"")
+
+    def test_the_mobile_api_keeps_its_json_errors(self):
+        response = self.client.get("/api/me")
+        self.assertEqual(response.status_code, 401)
+        self.assertEqual(response.json()["detail"], "sign in again")
+
+    def test_a_malformed_form_gets_an_empty_422(self):
+        response = self.client.post("/login", data={"email": "x"})
+        self.assertEqual(response.status_code, 422)
+        self.assertEqual(response.content, b"")
+
+    def test_the_mobile_api_keeps_its_json_validation_errors(self):
+        response = self.client.post("/api/login", data={"email": "x"})
+        self.assertEqual(response.status_code, 422)
+        self.assertIn("detail", response.json())
+
+    def test_static_is_hidden_only_while_sign_in_is_anonymous(self):
+        self.assertEqual(self.client.get("/static/theme.css").status_code, 200)
+        app.set_setting("login_anonymous", "1")
+        hidden = self.client.get("/static/theme.css")
+        self.assertEqual(hidden.status_code, 404)
+        self.assertEqual(hidden.content, b"")
+        self.login_admin()
+        self.assertEqual(self.client.get("/static/theme.css").status_code, 200)
+
+
+class PublicAssetTests(unittest.TestCase):
+    def test_stylesheets_do_not_name_their_origin(self):
+        static = Path(__file__).resolve().parents[1] / "panel" / "static"
+        for name in ("theme.css", "components.css"):
+            text = (static / name).read_text().lower()
+            for token in ("opencode", "traffic history", "brand accent"):
+                self.assertNotIn(token, text, f"{name}: {token}")
 
 
 class RollbackMessageTests(PanelTestCase):

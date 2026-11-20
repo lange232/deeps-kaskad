@@ -1,5 +1,5 @@
 /*
-  opencode-ui — components in plain CSS.
+  UI components in plain CSS.
 
   Requires theme.css (--ui-* variables). Assumes no JavaScript: everything
   works on native elements and CSS states. The .oc- prefix keeps it from
@@ -859,7 +859,7 @@
   background: var(--ui-text-base);
 }
 
-/* pill variant, as used in the OpenCode panels */
+/* pill variant */
 .oc-tabs--pill {
   border-bottom: 0;
   gap: 6px;
@@ -1171,7 +1171,6 @@
   outline-offset: 2px;
 }
 
-/* Traffic history: paired bars share a time axis and a rate scale. */
 .traffic-totals {
   display: flex;
   align-items: baseline;

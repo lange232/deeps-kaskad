@@ -29,6 +29,25 @@
     </div>
   </section>
 
+  <section id="sign-in">
+    <h2 class="oc-section__title">Sign-in page</h2>
+    <div class="oc-panel" style="padding:16px">
+      <form method="post" action="/settings/login-anonymous">
+        <input type="hidden" name="csrf_token" value="{{ csrf }}">
+        <label class="oc-check">
+          <input type="checkbox" name="enabled" value="1" {% if login_anonymous %}checked{% endif %}>
+          <span class="oc-check__box"></span>
+          Hide the project from the signed-out page
+        </label>
+        <p class="oc-hint" style="margin-top:8px; max-width:560px">
+          Removes the brand, the footer, the version and the favicon from the
+          sign-in page. The domain and the certificate stay visible.
+        </p>
+        <button class="oc-btn oc-btn--neutral oc-btn--sm" style="margin-top:12px">save</button>
+      </form>
+    </div>
+  </section>
+
   <section id="services">
     <h2 class="oc-section__title">services</h2>
     <div class="oc-panel">

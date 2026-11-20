@@ -35,6 +35,8 @@ from pathlib import Path
 from urllib.parse import quote
 
 from fastapi import FastAPI, Form, HTTPException, Query, Request
+from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import (
     FileResponse,
     HTMLResponse,
@@ -45,6 +47,7 @@ from fastapi.responses import (
 )
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 import auth
 import awgconf
@@ -72,8 +75,59 @@ def human_ts(value) -> str:
 
 templates = Jinja2Templates(directory=str(BASE / "templates"))
 templates.env.filters["ts"] = human_ts
-app = FastAPI(title="deeps kaskad", docs_url=None, redoc_url=None, openapi_url=None)
+app = FastAPI(title="panel", docs_url=None, redoc_url=None, openapi_url=None)
 app.mount("/static", StaticFiles(directory=str(BASE / "static")), name="static")
+# Trailing-slash redirects are a framework fingerprint and buy nothing: the
+# panel links never end with a slash.
+app.router.redirect_slashes = False
+
+
+@app.exception_handler(StarletteHTTPException)
+async def http_error(request: Request, exc: StarletteHTTPException):
+    """Empty bodies for web errors; the mobile API keeps its JSON detail.
+
+    FastAPI's defaults answer ``{"detail": ...}`` to every browser, which
+    tells a stranger both the framework and that an API lives here.
+    """
+    headers = exc.headers or {}
+    location = headers.get("location") or headers.get("Location")
+    if location and exc.status_code in (301, 302, 303, 307, 308):
+        return RedirectResponse(location, status_code=exc.status_code)
+    if request.url.path.startswith("/api/"):
+        return JSONResponse(
+            {"detail": exc.detail}, status_code=exc.status_code, headers=headers or None
+        )
+    return Response(status_code=exc.status_code, headers=headers or None)
+
+
+@app.exception_handler(RequestValidationError)
+async def invalid_request(request: Request, exc: RequestValidationError):
+    """A malformed browser form gets an empty 422, not a schema dump."""
+    if request.url.path.startswith("/api/"):
+        return JSONResponse(
+            {"detail": jsonable_encoder(exc.errors())}, status_code=422
+        )
+    return Response(status_code=422)
+
+
+@app.middleware("http")
+async def hide_static_when_anonymous(request, call_next):
+    """With the anonymous sign-in page on, assets stop being public.
+
+    That page carries its own inline styles, so a signed-out visitor has no
+    reason to fetch the panel's stylesheets; after signing in the browser
+    sends the session cookie with every asset request.
+    """
+    if request.url.path.startswith("/static/"):
+        try:
+            anonymous = setting("login_anonymous") == "1"
+            if anonymous:
+                data = session_data(request.cookies.get(COOKIE))
+                if not data or not session_alive(data):
+                    return Response(status_code=404)
+        except Exception:
+            pass
+    return await call_next(request)
 
 
 # A page must never come from the browser cache: the panel changes on deploy,
@@ -1530,9 +1584,23 @@ def login_context(error=None, email=""):
     }
 
 
+def login_response(request: Request, error=None, email="", status: int = 200):
+    """The sign-in page, or its standalone anonymous form.
+
+    The anonymous variant shares nothing with the panel template: its source
+    must not mention the product, its stack or its features, so it has no
+    inherited scripts, styles or navigation.
+    """
+    anonymous = setting("login_anonymous") == "1"
+    template = "login_anon.html" if anonymous else "login.html"
+    return templates.TemplateResponse(
+        request, template, login_context(error, email), status_code=status
+    )
+
+
 @app.get("/login", response_class=HTMLResponse)
 def login_page(request: Request):
-    return templates.TemplateResponse(request, "login.html", login_context())
+    return login_response(request)
 
 
 @app.post("/login")
@@ -1542,9 +1610,7 @@ def login(request: Request, email: str = Form(""), password: str = Form(...)):
     email = normalize_email(email)
 
     def fail(message: str, status: int = 401):
-        return templates.TemplateResponse(
-            request, "login.html", login_context(message, email), status_code=status
-        )
+        return login_response(request, message, email, status)
 
     if rate_limited(ip_key, email):
         return fail("too many attempts, wait 5 minutes", 429)
@@ -1625,11 +1691,14 @@ def ping():
 
 @app.get("/healthz")
 def healthz():
-    """Liveness for monitoring: database readable and failover reporting."""
+    """Liveness for monitoring: database readable and failover reporting.
+
+    Deliberately says nothing about the product or its version: this endpoint
+    is public, and the signed-out page can be configured to stay anonymous.
+    """
     try:
         with db() as conn:
             conn.execute("SELECT 1").fetchone()
-        c = cfg()
     except Exception as exc:
         print(f"healthz: {exc}", flush=True)
         return JSONResponse({"ok": False, "error": "database"}, status_code=503)
@@ -1638,14 +1707,10 @@ def healthz():
     now = int(time.time())
     age = now - ts if ts else None
     fresh = fresh_routing_status(status, now)
-    active = run_dir("active-exit") if fresh else None
-    return JSONResponse({
-        "ok": fresh,
-        "version": c.get("version", ""),
-        "commit": c.get("commit", ""),
-        "active": None if active in ("", "none") else active,
-        "failover_age": age,
-    }, status_code=200 if fresh else 503)
+    return JSONResponse(
+        {"ok": fresh, "failover_age": age},
+        status_code=200 if fresh else 503,
+    )
 
 
 # ---------------------------------------------------------------- overview
@@ -3864,6 +3929,7 @@ def settings_page(request: Request, ok: str | None = None, err: str | None = Non
         cfg=c, csrf=csrf(token), ok=ok, err=err,
         accounts_n=accounts_n, configs_n=configs_n, exits_n=exits_n,
         audits_n=audits_n, default_max_configs=setting("default_max_configs"),
+        login_anonymous=setting("login_anonymous") == "1",
         db_size=db_size, status=services(),
     )
 
@@ -3889,6 +3955,21 @@ def settings_max_configs(
     set_setting("default_max_configs", str(value))
     audit("settings_max_configs", str(value))
     return RedirectResponse("/settings?ok=default+limit+updated", status_code=303)
+
+
+@app.post("/settings/login-anonymous")
+def settings_login_anonymous(
+    request: Request,
+    csrf_token: str = Form(...),
+    enabled: str = Form(""),
+):
+    token = require_admin(request)
+    if not hmac.compare_digest(csrf_token, csrf(token)):
+        raise HTTPException(status_code=400, detail="csrf")
+    value = "1" if enabled else "0"
+    set_setting("login_anonymous", value)
+    audit("settings_login_anonymous", value)
+    return RedirectResponse("/settings?ok=sign-in+page+updated", status_code=303)
 
 
 # ---------------------------------------------------------------- cli

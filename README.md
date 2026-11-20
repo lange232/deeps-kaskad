@@ -339,6 +339,14 @@ cabinet under `/me`, `/me/configs/new`, `/me/configs/{id}` and `/me/account`
 (`?range=`), with the downloaded and uploaded totals and the peak rate; the
 chart uses paired SVG bars, leaving missing time buckets blank.
 
+`/settings` has a `Sign-in page` switch: it serves a standalone minimal page
+with its own inline styles instead of the panel template, so the source names
+neither the product nor what it does, and loads none of the panel's scripts,
+styles or navigation. While it is on, `/static` is answered with an empty 404
+unless the request carries a valid session. It applies to the whole panel, not
+to one account, and does not change the authenticated pages. The domain and
+the TLS certificate stay visible.
+
 Sign-in limits: five failed attempts for the same email from the same address
 block that pair for five minutes, twenty failures from one address block the
 address, and repeated guesses against one email only add a growing delay — so
@@ -357,8 +365,10 @@ panel trusts it for sixty seconds; after that every page, `/status.json` and
 the last known state.
 
 `/healthz` answers without authentication and returns
-`{"ok": true, "version": ..., "active": ...}`; it is meant for monitoring and
-returns 503 when the database cannot be read or the failover status is stale.
+`{"ok": true, "failover_age": 10}`; it is meant for monitoring and returns 503
+when the database cannot be read or the failover status is stale. It says
+nothing about the product or the release, so a host with an anonymous sign-in
+page does not describe itself through this endpoint either.
 
 Internet exits are granted per account: the administrator ticks the exits an
 account may use, and every configuration puts them in its own order on `/me`
@@ -376,6 +386,9 @@ A small bearer-token API for the mobile app (a WireGuard Android fork). It
 uses the same accounts as `/me`; the administrator login is not accepted.
 Form-encoded requests, JSON responses, the same sign-in limits and fail2ban
 logging as the web login (`via=api` in the journal line).
+
+The full reference, with request and response bodies, the error catalogue and
+examples, is in [`docs/API.md`](docs/API.md). The list below is a quick index.
 
 ```
 POST /api/login                   email, password -> {token, expires_at, email, client, configs}

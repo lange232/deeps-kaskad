@@ -5,6 +5,30 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.7] - 2026-11-20
+
+### Added
+
+- `Sign-in page` on `/settings`: one switch serves a standalone minimal page
+  instead of the panel template. Its source has no brand, footer, version,
+  favicon, panel styles, scripts or navigation, and names neither the product
+  nor its features. It applies to the whole panel.
+- `docs/API.md`: a complete reference for the mobile API, with authentication,
+  every endpoint, object shapes, the error catalogue, status codes and
+  examples. The README links to it.
+
+### Changed
+
+- `/healthz` no longer reports the version, commit or active exit: it answers
+  `{"ok": ..., "failover_age": ...}` so an anonymous host does not describe
+  itself through the monitoring endpoint.
+- Browser-facing errors, redirects and 404s carry no body, and trailing-slash
+  redirects are disabled: no framework JSON or extra paths are handed out.
+  The mobile API keeps its JSON `detail`.
+- While the anonymous sign-in page is on, `/static` is answered with an empty
+  404 unless the request carries a valid session.
+- Stylesheet comments no longer name the design system or its origin.
+
 ## [0.4.6] - 2026-11-20
 
 ### Interface
