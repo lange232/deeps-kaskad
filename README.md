@@ -194,13 +194,21 @@ Exit tables start at 1000 and the system tables are excluded explicitly.
 
 ## Failover
 
-Every 10 seconds each enabled internet exit is probed (`ping -I awgN`), the
-first alive one by ascending `priority` becomes active, and the route
-`default dev awgN table 100` is replaced. Returning to a higher-priority exit
-happens only after 60 seconds of stable operation. An exit is considered dead
-after 3 failed probes and alive after 2 successful ones. Client conntrack
-entries are flushed on switch, otherwise the old NAT would send packets to the
-wrong address.
+Every 10 seconds each enabled internet exit is probed with ICMP
+(`ping -I awgN`) and two HTTP targets fetched through the interface. The first
+alive one by ascending `priority` becomes active, and the route
+`default dev awgN table 100` is replaced. An exit that answers ping but cannot
+reach every HTTP target is marked `degraded` after 3 bad rounds; clients and
+the active exit prefer a healthy one, and the degraded exit returns only after
+3 good rounds and 60 seconds of stability. An exit is dead after 3 failed ICMP
+probes and alive after 2 successful ones. Client conntrack entries are flushed
+on switch, otherwise the old NAT would send packets to the wrong address.
+
+An account can keep up to three of its own destinations — an HTTP URL or a
+host for ICMP — in the cabinet (`/me/checks`). They are probed through every
+exit the account may use; an exit that fails them for that account is skipped
+for that account's configurations only, and only while another allowed exit
+works. Other accounts and the global active exit are not affected.
 
 Manual switching is a button in the panel: the chosen interface is stored in
 the `manual_exit` setting and stays pinned while that exit is alive; "return
@@ -339,7 +347,8 @@ reissue, link to the account, internet order, disable, delete.
 
 Pages: `/`, `/exits`, `/accounts`, `/configs`, `/journal`, `/settings`, plus
 `/accounts/new`, `/accounts/{id}`, `/configs/new`, `/configs/{id}` and the
-cabinet under `/me`, `/me/configs/new`, `/me/configs/{id}` and `/me/account`
+cabinet under `/me`, `/me/configs/new`, `/me/configs/{id}`, `/me/checks` and
+`/me/account`
 (password and sessions). Both the admin and cabinet configuration pages draw the traffic history for 1h, 24h, 7d, 30d or 90d
 (`?range=`), with the downloaded and uploaded totals and the peak rate; the
 chart uses paired SVG bars, leaving missing time buckets blank.
@@ -584,8 +593,9 @@ a client.
 
 ## Limitations
 
-- Internet exits are health-checked with ICMP through the tunnel. A provider
-  that filters ICMP will be considered dead even though it may work.
+- Internet exits are probed with ICMP and two HTTP targets. A provider that
+  filters ICMP is considered dead; a destination it blackholes can still be
+  missed unless the account adds it as one of its own checks.
 - Two exits must not share the same provider config: the provider sees one
   public key from two endpoints and roams the session between them. The panel
   rejects such configs.

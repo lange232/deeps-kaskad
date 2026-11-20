@@ -57,9 +57,15 @@ PROBE_HTTP = (
     ("http://example.com/", 200),
 )
 HTTP_TIMEOUT = 4
+# Extra targets are per account: a destination that matters to one user must
+# not mark an exit bad for everybody.
+CHECK_DEAD_AFTER = 3
+CHECK_RECOVER = 3
+CHECK_TIMEOUT = 5
 RTT_RE = re.compile(r"time=([0-9.]+)\s*ms")
 
 state: dict[str, dict] = {}
+check_state: dict[tuple[int, str], dict] = {}
 # Tunnels that were present on the previous tick. A change means old routes
 # may be stale and new ones were never created: routing is re-applied then,
 # because kaskad-routing.service only runs once at boot and cannot know that
@@ -130,7 +136,7 @@ def client_grants() -> list[dict]:
             dict(r)
             for r in conn.execute(
                 "SELECT ce.client_id, ce.priority AS choice, c.ip, "
-                "c.table_num AS client_table, e.iface "
+                "c.table_num AS client_table, c.account_id, e.iface "
                 "FROM client_internet_exits ce "
                 "JOIN clients c ON c.id = ce.client_id "
                 "AND c.enabled = 1 AND (c.internet = 1 OR c.account_id IS NOT NULL) "
@@ -160,18 +166,25 @@ def current_default(table: int) -> str | None:
     return None
 
 
-def apply_client_routes(choices: dict[tuple[int, str], list[str]], alive) -> dict[str, str]:
-    """Points each client table at its first alive granted exit.
+def apply_client_routes(
+    choices: dict[tuple[int, str], list[str]], alive, avoid=None
+) -> dict[str, str]:
+    """Points each client table at its first usable granted exit.
 
-    The reported mapping comes from the routing table after the change, so a
-    failed `ip route` never shows up as a working exit.
+    ``avoid`` maps a client key to the exits its account's own checks are
+    currently failing. They are skipped when another exit remains; when every
+    exit is avoided the original order is used, so a bad check never leaves
+    the account without a working exit.
     """
     used: dict[str, str] = {}
+    avoid = avoid or {}
     for (table, ip), order in choices.items():
         if table <= 0:
             log(f"client {ip}: no routing table allocated")
             continue
-        desired = pick_client_exit(order, alive)
+        blocked = avoid.get((table, ip), set())
+        allowed = [iface for iface in order if iface not in blocked]
+        desired = pick_client_exit(allowed or order, alive)
         before = current_default(table)
         # When nothing is alive the old route is left in place: it points at
         # a dead exit, so traffic already fails, and a daemon restart does
@@ -318,6 +331,134 @@ def probe_safe(exit: dict) -> tuple[bool, float | None, bool]:
     except Exception as exc:  # a probe must never kill the daemon
         log(f"probe {exit['iface']}: {exc}")
         return False, None, False
+
+
+def account_checks() -> list[dict]:
+    """Enabled checks of enabled accounts; empty on an old database."""
+    conn = sqlite3.connect(DB_PATH, timeout=5)
+    conn.row_factory = sqlite3.Row
+    try:
+        return [
+            dict(r)
+            for r in conn.execute(
+                "SELECT ch.id, ch.account_id, ch.kind, ch.target "
+                "FROM account_checks ch "
+                "JOIN accounts a ON a.id = ch.account_id AND a.enabled = 1 "
+                "WHERE ch.enabled = 1 ORDER BY ch.account_id, ch.id"
+            ).fetchall()
+        ]
+    except sqlite3.Error:
+        return []
+    finally:
+        conn.close()
+
+
+def account_grants() -> list[dict]:
+    """Internet exits each account may use, in the account's order."""
+    conn = sqlite3.connect(DB_PATH, timeout=5)
+    conn.row_factory = sqlite3.Row
+    try:
+        return [
+            dict(r)
+            for r in conn.execute(
+                "SELECT ae.account_id, e.iface FROM account_exits ae "
+                "JOIN exits e ON e.id = ae.exit_id "
+                "AND e.enabled = 1 AND e.mode = 'internet' "
+                "JOIN accounts a ON a.id = ae.account_id AND a.enabled = 1 "
+                "ORDER BY ae.account_id, ae.priority, e.priority, e.id"
+            ).fetchall()
+        ]
+    except sqlite3.Error:
+        return []
+    finally:
+        conn.close()
+
+
+def check_ok(kind: str, target: str, iface: str) -> bool:
+    try:
+        if kind == "http":
+            res = run(
+                ["curl", "-4", "-s", "-o", "/dev/null", "-w", "%{http_code}",
+                 "--max-time", str(CHECK_TIMEOUT), "--interface", iface, target],
+                timeout=CHECK_TIMEOUT + 2,
+            )
+            code = (res.stdout or "").strip()
+            return res.returncode == 0 and code.isdigit() and 200 <= int(code) < 400
+        if kind == "icmp":
+            res = run(["ping", "-c1", "-W2", "-I", iface, target], timeout=4)
+            return res.returncode == 0
+    except (subprocess.TimeoutExpired, OSError):
+        return False
+    return False
+
+
+def update_check_state(
+    check_id: int, target: str, iface: str, ok: bool
+) -> None:
+    st = check_state.setdefault(
+        (check_id, iface), {"oks": 0, "fails": 0, "bad": False}
+    )
+    if ok:
+        st["fails"] = 0
+        st["oks"] += 1
+        if st["bad"] and st["oks"] >= CHECK_RECOVER:
+            st["bad"] = False
+            log(f"check {target}: passing via {iface} again")
+    else:
+        st["oks"] = 0
+        st["fails"] += 1
+        if not st["bad"] and st["fails"] >= CHECK_DEAD_AFTER:
+            st["bad"] = True
+            log(f"check {target}: failing via {iface}")
+
+
+def run_account_checks() -> tuple[dict[int, set[str]], dict]:
+    """Probes the accounts' targets through their exits.
+
+    Returns the exits each account should avoid and a compact report for the
+    panel: account -> check -> failing interfaces.
+    """
+    checks = account_checks()
+    by_account: dict[int, list[str]] = {}
+    for grant in account_grants():
+        ifaces = by_account.setdefault(grant["account_id"], [])
+        if grant["iface"] not in ifaces:
+            ifaces.append(grant["iface"])
+    tasks = [
+        (ch, iface)
+        for ch in checks
+        for iface in by_account.get(ch["account_id"], [])
+    ]
+    if tasks:
+        with ThreadPoolExecutor(max_workers=min(8, len(tasks))) as pool:
+            results = list(pool.map(
+                lambda task: check_ok(task[0]["kind"], task[0]["target"], task[1]),
+                tasks,
+            ))
+        for (ch, iface), ok in zip(tasks, results):
+            update_check_state(ch["id"], ch["target"], iface, ok)
+
+    active = {
+        (ch["id"], iface)
+        for ch in checks
+        for iface in by_account.get(ch["account_id"], [])
+    }
+    for key in list(check_state):
+        if key not in active:
+            check_state.pop(key, None)
+
+    avoid: dict[int, set[str]] = {}
+    report: dict = {}
+    for ch in checks:
+        failing = []
+        for iface in by_account.get(ch["account_id"], []):
+            if check_state.get((ch["id"], iface), {}).get("bad"):
+                failing.append(iface)
+                avoid.setdefault(ch["account_id"], set()).add(iface)
+        report.setdefault(str(ch["account_id"]), {})[str(ch["id"])] = {
+            "failing": failing,
+        }
+    return avoid, report
 
 
 def client_rows() -> list[dict]:
@@ -470,13 +611,14 @@ def update_state(
 
 
 def write_status(active, rows: list[dict], manual: str = "", clients=None,
-                 client_ping=None) -> None:
+                 client_ping=None, checks=None) -> None:
     payload = {
         "ts": int(time.time()),
         "active": active,
         "manual": manual,
         "clients": clients or {},
         "client_ping": client_ping or {},
+        "checks": checks or {},
         "exits": {
             e["iface"]: {
                 "name": e["name"],
@@ -578,14 +720,21 @@ def tick(c: dict) -> None:
         log(f"no alive internet exit: {active} is no longer active")
 
     record_exit_transition(active, read_active(), manual, alive, degraded)
+    avoid, check_report = run_account_checks()
     choices: dict[tuple[int, str], list[str]] = {}
+    avoid_by_client: dict[tuple[int, str], set[str]] = {}
     for grant in client_grants():
         key = (grant["client_table"], grant["ip"])
         choices.setdefault(key, []).append(grant["iface"])
-    client_routes = apply_client_routes(choices, usable)
+        if grant.get("account_id"):
+            avoid_by_client.setdefault(key, set()).update(
+                avoid.get(int(grant["account_id"]), set())
+            )
+    client_routes = apply_client_routes(choices, usable, avoid_by_client)
 
     pings = client_pings()
-    write_status(read_active(), rows, manual, client_routes, client_ping=pings)
+    write_status(read_active(), rows, manual, client_routes,
+                 client_ping=pings, checks=check_report)
 
 
 def main() -> None:

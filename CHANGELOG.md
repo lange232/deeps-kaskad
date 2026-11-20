@@ -5,6 +5,16 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- Accounts can keep up to three destinations that matter to them (HTTP or
+  ICMP) in the cabinet. The failover probes them through every exit the
+  account may use; an exit failing them is skipped for that account's
+  configurations while another allowed exit works. Other accounts and the
+  global active exit are not affected. Only public targets are accepted.
+
 ## [0.4.8] - 2026-11-20
 
 ### Changed

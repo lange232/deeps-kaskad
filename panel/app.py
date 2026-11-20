@@ -24,6 +24,7 @@ import os
 import re
 import secrets
 import shlex
+import socket
 import sqlite3
 import subprocess
 import sys
@@ -32,7 +33,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-from urllib.parse import quote
+from urllib.parse import quote, urlparse
 
 from fastapi import FastAPI, Form, HTTPException, Query, Request
 from fastapi.encoders import jsonable_encoder
@@ -65,6 +66,10 @@ NAME_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,31}$")
 DEVICE_ID_RE = re.compile(r"^[A-Za-z0-9-]{8,64}$")
 # Configurations per account unless the administrator sets a personal value.
 DEFAULT_MAX_CONFIGS = 5
+# A check is run through every exit the account may use; three is enough to
+# describe the destinations that matter without turning the failover loop
+# into a scanner.
+MAX_ACCOUNT_CHECKS = 3
 
 def human_ts(value) -> str:
     if not value:
@@ -203,6 +208,17 @@ def init_db() -> None:
                 priority INTEGER NOT NULL DEFAULT 0,
                 PRIMARY KEY (account_id, exit_id)
             );
+            CREATE TABLE IF NOT EXISTS account_checks (
+                id INTEGER PRIMARY KEY,
+                account_id INTEGER NOT NULL,
+                kind TEXT NOT NULL,
+                target TEXT NOT NULL,
+                label TEXT NOT NULL DEFAULT '',
+                enabled INTEGER NOT NULL DEFAULT 1,
+                created_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS account_checks_account
+                ON account_checks(account_id);
             CREATE TABLE IF NOT EXISTS client_exits (
                 client_id INTEGER NOT NULL,
                 exit_id INTEGER NOT NULL,
@@ -2794,6 +2810,7 @@ def account_page(
         request, "account_detail.html", "accounts",
         csrf=csrf(token), err=err, ok=ok, account=account,
         configs=configs, routed=routed, granted=granted,
+        checks=account_check_rows(aid),
         internet_exits=internet_exits_rows(),
         order=account_exits(aid, "internet"),
         limit=max_configs_for(account),
@@ -3055,6 +3072,7 @@ def account_delete(request: Request, aid: int, csrf_token: str = Form(...)):
                 )
                 drop_traffic(conn, cid)
             conn.execute("DELETE FROM account_exits WHERE account_id = ?", (aid,))
+            conn.execute("DELETE FROM account_checks WHERE account_id = ?", (aid,))
             conn.execute("DELETE FROM accounts WHERE id = ?", (aid,))
             apply_conf(cfg(), conn)
     except RuntimeError as exc:
@@ -3073,6 +3091,72 @@ def account_delete(request: Request, aid: int, csrf_token: str = Form(...)):
 def account_first_config(account):
     configs = account_configs(int(account["id"]))
     return configs[0] if configs else None
+
+
+CHECK_KINDS = ("http", "icmp")
+
+
+def check_target_error(kind: str, target: str) -> str | None:
+    """Why this probe target is rejected, or None when it is allowed.
+
+    The server fetches the target through an exit, so private, loopback and
+    link-local addresses are refused: a user's check must not become a
+    request into the server's own network.
+    """
+    if kind not in CHECK_KINDS:
+        return "unknown check type"
+    target = target.strip()
+    if not target:
+        return "target is required"
+    if len(target) > 300:
+        return "target is too long"
+    if kind == "http":
+        try:
+            parsed = urlparse(target)
+            host = parsed.hostname or ""
+        except ValueError:
+            return "invalid URL"
+        if parsed.scheme not in ("http", "https") or not host:
+            return "http:// or https:// URL expected"
+        if parsed.username or parsed.password:
+            return "credentials in the URL are not allowed"
+    else:
+        host = target
+        if "/" in host or " " in host:
+            return "an address or host name expected"
+    if host.lower() == "localhost" or host.lower().endswith(".local"):
+        return "only public addresses are allowed"
+    try:
+        infos = socket.getaddrinfo(host, None)
+    except OSError:
+        return "the host does not resolve"
+    addresses = {info[4][0] for info in infos}
+    if not addresses:
+        return "the host does not resolve"
+    for address in addresses:
+        try:
+            ip = ipaddress.ip_address(address.split("%", 1)[0])
+        except ValueError:
+            return "the host does not resolve"
+        if not ip.is_global:
+            return "only public addresses are allowed"
+    return None
+
+
+def account_check_rows(aid: int):
+    with db() as conn:
+        return conn.execute(
+            "SELECT * FROM account_checks WHERE account_id = ? ORDER BY id",
+            (aid,),
+        ).fetchall()
+
+
+def account_check_row(aid: int, cid: int):
+    with db() as conn:
+        return conn.execute(
+            "SELECT * FROM account_checks WHERE id = ? AND account_id = ?",
+            (cid, aid),
+        ).fetchone()
 
 
 def user_config(account, cid: int):
@@ -3102,6 +3186,85 @@ def me_account(request: Request, err: str | None = None, ok: str | None = None):
     token, account = require_user(request)
     return render_page(request, "me_account.html", "account", role="user",
                        csrf=csrf(token), email=account["email"], err=err, ok=ok)
+
+
+@app.get("/me/checks", response_class=HTMLResponse)
+def me_checks(request: Request, err: str | None = None, ok: str | None = None):
+    token, account = require_user(request)
+    status = read_status()
+    fresh = fresh_routing_status(status, int(time.time()))
+    results = (status.get("checks") or {}).get(str(account["id"]), {}) if fresh else {}
+    checks = []
+    for ch in account_check_rows(int(account["id"])):
+        item = dict(ch)
+        item["failing"] = results.get(str(ch["id"]), {}).get("failing", [])
+        checks.append(item)
+    return render_page(
+        request, "me_checks.html", "checks", role="user",
+        csrf=csrf(token), email=account["email"], err=err, ok=ok,
+        checks=checks, limit=MAX_ACCOUNT_CHECKS, status_fresh=fresh,
+    )
+
+
+@app.post("/me/checks")
+def me_check_add(
+    request: Request,
+    kind: str = Form(...),
+    target: str = Form(""),
+    label: str = Form(""),
+    csrf_token: str = Form(...),
+):
+    token, account = require_user(request)
+    if not hmac.compare_digest(csrf_token, csrf(token)):
+        raise HTTPException(status_code=400, detail="csrf")
+    if len(account_check_rows(int(account["id"]))) >= MAX_ACCOUNT_CHECKS:
+        problem = f"at most {MAX_ACCOUNT_CHECKS} checks per account"
+    else:
+        problem = check_target_error(kind, target)
+    label = label.strip()
+    if not problem and len(label) > 40:
+        problem = "label is too long"
+    if problem:
+        return RedirectResponse("/me/checks?err=" + quote(problem), status_code=303)
+    with db() as conn:
+        conn.execute(
+            "INSERT INTO account_checks (account_id, kind, target, label, enabled, created_at) "
+            "VALUES (?, ?, ?, ?, 1, ?)",
+            (int(account["id"]), kind, target.strip(), label, _now_iso()),
+        )
+    audit("user_check_added", f"{account['email']} {kind} {target.strip()}")
+    return RedirectResponse("/me/checks?ok=check+added", status_code=303)
+
+
+@app.post("/me/checks/{cid}/toggle")
+def me_check_toggle(request: Request, cid: int, csrf_token: str = Form(...)):
+    token, account = require_user(request)
+    if not hmac.compare_digest(csrf_token, csrf(token)):
+        raise HTTPException(status_code=400, detail="csrf")
+    ch = account_check_row(int(account["id"]), cid)
+    if not ch:
+        raise HTTPException(status_code=404)
+    with db() as conn:
+        conn.execute(
+            "UPDATE account_checks SET enabled = ? WHERE id = ?",
+            (0 if ch["enabled"] else 1, cid),
+        )
+    audit("user_check_toggled", f"{account['email']} {ch['kind']} {ch['target']}")
+    return RedirectResponse("/me/checks?ok=check+updated", status_code=303)
+
+
+@app.post("/me/checks/{cid}/delete")
+def me_check_delete(request: Request, cid: int, csrf_token: str = Form(...)):
+    token, account = require_user(request)
+    if not hmac.compare_digest(csrf_token, csrf(token)):
+        raise HTTPException(status_code=400, detail="csrf")
+    ch = account_check_row(int(account["id"]), cid)
+    if not ch:
+        raise HTTPException(status_code=404)
+    with db() as conn:
+        conn.execute("DELETE FROM account_checks WHERE id = ?", (cid,))
+    audit("user_check_deleted", f"{account['email']} {ch['kind']} {ch['target']}")
+    return RedirectResponse("/me/checks?ok=check+deleted", status_code=303)
 
 
 @app.get("/me/configs/new", response_class=HTMLResponse)

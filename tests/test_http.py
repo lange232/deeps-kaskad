@@ -498,6 +498,122 @@ class PublicAssetTests(unittest.TestCase):
                 self.assertNotIn(token, text, f"{name}: {token}")
 
 
+class AccountCheckTests(PanelTestCase):
+    def start(self, email="c1@example.com", password=USER_PASSWORD):
+        aid, cid = self.seed_client(email=email)
+        self.login(email, password)
+        return aid, cid
+
+    def add(self, target="http://1.1.1.1/", kind="http", label=""):
+        return self.client.post("/me/checks", data={
+            "kind": kind, "target": target, "label": label,
+            "csrf_token": self.csrf("/me/checks"),
+        })
+
+    def test_add_list_toggle_and_delete(self):
+        aid, _ = self.start()
+        response = self.add(label="public dns")
+        self.assertEqual(response.status_code, 303)
+        with app.db() as conn:
+            row = conn.execute(
+                "SELECT * FROM account_checks WHERE account_id = ?", (aid,)
+            ).fetchone()
+        self.assertEqual(row["target"], "http://1.1.1.1/")
+        page = self.client.get("/me/checks").text
+        self.assertIn("http://1.1.1.1/", page)
+        self.assertIn("public dns", page)
+        toggle = self.client.post(f"/me/checks/{row['id']}/toggle", data={
+            "csrf_token": self.csrf("/me/checks")})
+        self.assertEqual(toggle.status_code, 303)
+        with app.db() as conn:
+            self.assertEqual(conn.execute(
+                "SELECT enabled FROM account_checks WHERE id = ?", (row["id"],)
+            ).fetchone()[0], 0)
+        delete = self.client.post(f"/me/checks/{row['id']}/delete", data={
+            "csrf_token": self.csrf("/me/checks")})
+        self.assertEqual(delete.status_code, 303)
+        with app.db() as conn:
+            self.assertEqual(conn.execute(
+                "SELECT count(*) FROM account_checks").fetchone()[0], 0)
+
+    def test_the_limit_is_three(self):
+        self.start()
+        for _ in range(3):
+            self.assertEqual(self.add().status_code, 303)
+        response = self.add()
+        self.assertEqual(response.status_code, 303)
+        self.assertIn("at%20most%203", response.headers["location"])
+        with app.db() as conn:
+            self.assertEqual(conn.execute(
+                "SELECT count(*) FROM account_checks").fetchone()[0], 3)
+
+    def test_private_targets_are_refused(self):
+        self.start()
+        for target, kind in (
+            ("http://127.0.0.1/", "http"),
+            ("http://10.0.0.1/", "http"),
+            ("192.168.1.1", "icmp"),
+            ("127.0.0.1", "icmp"),
+            ("file:///etc/passwd", "http"),
+        ):
+            response = self.add(target=target, kind=kind)
+            self.assertIn("err=", response.headers["location"])
+        with app.db() as conn:
+            self.assertEqual(conn.execute(
+                "SELECT count(*) FROM account_checks").fetchone()[0], 0)
+
+    def test_another_account_cannot_touch_the_check(self):
+        aid, _ = self.start()
+        self.add()
+        with app.db() as conn:
+            cid = conn.execute(
+                "SELECT id FROM account_checks WHERE account_id = ?", (aid,)
+            ).fetchone()[0]
+        self.seed_client(name="other", ip="10.80.0.9", email="c2@example.com")
+        self.login("c2@example.com", USER_PASSWORD)
+        for action in ("toggle", "delete"):
+            response = self.client.post(f"/me/checks/{cid}/{action}", data={
+                "csrf_token": self.csrf("/me/checks")})
+            self.assertEqual(response.status_code, 404)
+        with app.db() as conn:
+            self.assertEqual(conn.execute(
+                "SELECT count(*) FROM account_checks WHERE id = ?", (cid,)
+            ).fetchone()[0], 1)
+
+    def test_the_admin_sees_the_checks(self):
+        aid, _ = self.start()
+        self.add(label="corp")
+        self.login_admin()
+        page = self.client.get(f"/accounts/{aid}").text
+        self.assertIn("corp", page)
+        self.assertIn("http://1.1.1.1/", page)
+
+    def test_the_cabinet_shows_a_failing_exit(self):
+        import time as _time
+        aid, _ = self.start()
+        self.add()
+        with app.db() as conn:
+            cid = conn.execute(
+                "SELECT id FROM account_checks WHERE account_id = ?", (aid,)
+            ).fetchone()[0]
+        status = {"ts": int(_time.time()),
+                  "checks": {str(aid): {str(cid): {"failing": ["awg1"]}}}}
+        with mock.patch.object(app, "read_status", return_value=status):
+            page = self.client.get("/me/checks").text
+        self.assertIn("failing via awg1", page)
+
+    def test_target_validation(self):
+        self.assertIsNone(app.check_target_error("http", "http://1.1.1.1/"))
+        self.assertIsNone(app.check_target_error("icmp", "1.1.1.1"))
+        for kind, target in (
+            ("http", "http://127.0.0.1/"), ("http", "http://10.0.0.1/"),
+            ("http", "http://192.168.0.1/"), ("icmp", "127.0.0.1"),
+            ("icmp", "10.0.0.1"), ("http", "file:///etc/passwd"),
+            ("http", "http://user:pass@1.1.1.1/"),
+        ):
+            self.assertIsNotNone(app.check_target_error(kind, target), target)
+
+
 class RollbackMessageTests(PanelTestCase):
     """A failed device rollback must not be reported as 'nothing changed'."""
 

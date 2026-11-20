@@ -206,6 +206,32 @@
   </section>
 
   </details>
+  <details class="manage-block"><summary>Checks ({{ checks | length }})</summary>
+    <section>
+      <h2 class="oc-section__title">Destinations this account checks</h2>
+      {% if checks %}
+      <div class="oc-panel">
+        <div class="table-scroll">
+        <table class="oc-table">
+          <tbody>
+          {% for c in checks %}
+          <tr>
+            <td>{{ c.label or c.target }}
+              {% if not c.enabled %}<span class="oc-badge oc-badge--subtle">disabled</span>{% endif %}
+              <div class="cell-sub oc-mono" style="word-break:break-all">{{ c.target }}</div>
+            </td>
+            <td style="width:1%"><span class="oc-badge oc-badge--subtle">{{ c.kind }}</span></td>
+          </tr>
+          {% endfor %}
+          </tbody>
+        </table>
+        </div>
+      </div>
+      {% else %}
+      <div class="oc-empty">none</div>
+      {% endif %}
+    </section>
+  </details>
   <details class="manage-block"><summary>Account settings</summary>
   <section>
     <h2 class="oc-section__title">limit</h2>
