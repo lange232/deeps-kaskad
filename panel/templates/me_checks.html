@@ -36,7 +36,7 @@
             <td><span class="oc-badge oc-badge--subtle">{{ c.kind }}</span></td>
             <td>
               {% if not c.enabled %}<span class="oc-muted">—</span>
-              {% elif not status_fresh %}<span class="oc-muted">unknown</span>
+              {% elif not status_fresh or not c.known %}<span class="oc-muted">unknown</span>
               {% elif c.failing %}<span class="oc-badge oc-badge--warning">failing via {{ c.failing | join(', ') }}</span>
               {% else %}<span class="oc-badge oc-badge--success">passing</span>{% endif %}
             </td>

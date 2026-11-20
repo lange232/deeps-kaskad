@@ -3197,6 +3197,7 @@ def me_checks(request: Request, err: str | None = None, ok: str | None = None):
     checks = []
     for ch in account_check_rows(int(account["id"])):
         item = dict(ch)
+        item["known"] = str(ch["id"]) in results
         item["failing"] = results.get(str(ch["id"]), {}).get("failing", [])
         checks.append(item)
     return render_page(
