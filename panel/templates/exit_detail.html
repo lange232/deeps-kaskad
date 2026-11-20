@@ -28,6 +28,7 @@
         {% if exit.mode == 'routes' %}<span class="oc-badge oc-badge--subtle">subnets only</span>{% else %}<span class="oc-badge oc-badge--subtle">internet</span>{% endif %}
       </div></div>
       <div><div class="k">interface</div><div class="v oc-mono">{{ exit.iface }}</div></div>
+      <div><div class="k">country</div><div class="v">{{ exit.country or '—' }}</div></div>
       <div><div class="k">comment</div><div class="v">{{ exit.comment or '—' }}</div></div>
       <div><div class="k">priority</div><div class="v oc-num">{{ exit.priority }}</div></div>
       <div><div class="k">ping</div><div class="v">
@@ -60,14 +61,20 @@
       <div><div class="k">last check</div><div class="v" data-live="lastok|{{ exit.iface }}">—</div></div>
     </div>
 
-    <form method="post" action="/exits/{{ exit.id }}/comment" style="margin-top:18px; max-width:420px">
+    <form method="post" action="/exits/{{ exit.id }}/details" style="margin-top:18px; max-width:420px">
       <input type="hidden" name="csrf_token" value="{{ csrf }}">
-      <label class="oc-field">
+      <label class="oc-field" style="max-width:280px">
+        <span class="oc-field__label">country</span>
+        <input class="oc-input" type="text" name="country" maxlength="40"
+               value="{{ exit.country }}" placeholder="Netherlands">
+        <span class="oc-hint">shown to clients instead of the comment</span>
+      </label>
+      <label class="oc-field" style="margin-top:12px">
         <span class="oc-field__label">public comment</span>
         <input class="oc-input" type="text" name="comment" maxlength="120"
-               value="{{ exit.comment }}" placeholder="Finland, Helsinki">
+               value="{{ exit.comment }}" placeholder="Amsterdam, 2 Gbit/s">
       </label>
-      <button class="oc-btn oc-btn--outline oc-btn--sm" style="margin-top:10px">save comment</button>
+      <button class="oc-btn oc-btn--outline oc-btn--sm" style="margin-top:10px">save</button>
     </form>
 
     <div class="actions" style="margin-top:18px">

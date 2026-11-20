@@ -665,6 +665,55 @@ class CabinetExitStateTests(PanelTestCase):
         # exit as the one in use when the failover stopped reporting.
         self.assertNotIn("nl-1", page)
 
+    def test_me_shows_the_country_before_the_comment(self):
+        aid, cid = self.seed_client()
+        eid = self.seed_exit(name="nl-1", iface="awg1")
+        with app.db() as conn:
+            conn.execute(
+                "UPDATE exits SET country = 'Netherlands', comment = 'Amsterdam' "
+                "WHERE id = ?", (eid,))
+        self.grant(aid, cid, eid)
+        self.login("c1@example.com", USER_PASSWORD)
+        status = {
+            "ts": int(time.time()),
+            "clients": {"10.80.0.2": "awg1"},
+            "exits": {"awg1": {"alive": True, "degraded": False, "rtt_ms": 30}},
+        }
+        with mock.patch.object(app, "read_status", return_value=status):
+            page = self.client.get("/me").text
+        self.assertIn("Netherlands", page)
+        self.assertNotIn("Amsterdam", page)
+
+    def test_admin_saves_the_exit_country(self):
+        self.login_admin()
+        eid = self.seed_exit(name="nl-1", iface="awg1")
+        response = self.client.post(f"/exits/{eid}/details", data={
+            "country": "Netherlands", "comment": "Amsterdam",
+            "csrf_token": self.csrf(f"/exits/{eid}"),
+        })
+        self.assertEqual(response.status_code, 303)
+        with app.db() as conn:
+            row = conn.execute(
+                "SELECT country, comment FROM exits WHERE id = ?", (eid,)
+            ).fetchone()
+        self.assertEqual(row["country"], "Netherlands")
+        self.assertEqual(row["comment"], "Amsterdam")
+        page = self.client.get(f"/exits/{eid}").text
+        self.assertIn("Netherlands", page)
+
+    def test_a_long_country_is_refused(self):
+        self.login_admin()
+        eid = self.seed_exit(name="nl-1", iface="awg1")
+        response = self.client.post(f"/exits/{eid}/details", data={
+            "country": "x" * 41, "comment": "",
+            "csrf_token": self.csrf(f"/exits/{eid}"),
+        })
+        self.assertEqual(response.status_code, 303)
+        self.assertIn("err=", response.headers["location"])
+        with app.db() as conn:
+            self.assertEqual(conn.execute(
+                "SELECT country FROM exits WHERE id = ?", (eid,)).fetchone()[0], "")
+
     def test_account_shows_the_default_exit_order(self):
         aid, cid = self.seed_client()
         first = self.seed_exit(name="nl-1", iface="awg1", priority=10)

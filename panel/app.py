@@ -246,6 +246,7 @@ def init_db() -> None:
                 routes TEXT NOT NULL DEFAULT '',
                 dns TEXT NOT NULL DEFAULT '',
                 comment TEXT NOT NULL DEFAULT '',
+                country TEXT NOT NULL DEFAULT '',
                 table_num INTEGER NOT NULL DEFAULT 0,
                 nat INTEGER NOT NULL DEFAULT 1
             );
@@ -284,6 +285,10 @@ def migrate(conn: sqlite3.Connection, existing: set[str]) -> None:
         ("routes", "ALTER TABLE exits ADD COLUMN routes TEXT NOT NULL DEFAULT ''"),
         ("dns", "ALTER TABLE exits ADD COLUMN dns TEXT NOT NULL DEFAULT ''"),
         ("comment", "ALTER TABLE exits ADD COLUMN comment TEXT NOT NULL DEFAULT ''"),
+        # Where the exit is hosted, in plain words: the cabinet shows it
+        # instead of the comment, so a client sees "Netherlands" rather than
+        # an internal name.
+        ("country", "ALTER TABLE exits ADD COLUMN country TEXT NOT NULL DEFAULT ''"),
         ("table_num", "ALTER TABLE exits ADD COLUMN table_num INTEGER NOT NULL DEFAULT 0"),
         ("nat", "ALTER TABLE exits ADD COLUMN nat INTEGER NOT NULL DEFAULT 1"),
     ):
@@ -1557,6 +1562,7 @@ def exit_view(e, status: dict, active, manual: str = "") -> dict:
         "routes": e["routes"],
         "dns": e["dns"],
         "comment": e["comment"],
+        "country": e["country"],
         "nat": bool(e["nat"]) if "nat" in e.keys() else True,
         "endpoint": awgconf.endpoint(e["conf"]),
         "alive": st.get("alive"),
@@ -1783,7 +1789,10 @@ def overview_health(exits: list[dict], status_fresh: bool) -> dict:
 
 # ---------------------------------------------------------------- exits
 
-EXIT_DEFAULTS = {"name": "", "mode": "internet", "priority": "", "routes": "", "dns": "", "conf": ""}
+EXIT_DEFAULTS = {
+    "name": "", "mode": "internet", "priority": "", "routes": "", "dns": "",
+    "conf": "", "country": "", "comment": "",
+}
 
 
 @app.get("/exits", response_class=HTMLResponse)
@@ -1878,6 +1887,7 @@ def create_exit(
     routes: str = Form(""),
     dns: str = Form(""),
     comment: str = Form(""),
+    country: str = Form(""),
     nat: str = Form(""),
     conf: str = Form(...),
     csrf_token: str = Form(...),
@@ -1887,6 +1897,7 @@ def create_exit(
         raise HTTPException(status_code=400, detail="csrf")
     name = name.strip()
     comment = comment.strip()
+    country = country.strip()
 
     def fail(msg: str):
         return RedirectResponse("/exits/new?err=" + quote(msg), status_code=303)
@@ -1895,6 +1906,8 @@ def create_exit(
         return fail("name: latin letters, digits, dot, dash; up to 32 characters")
     if len(comment) > 120:
         return fail("comment: up to 120 characters")
+    if len(country) > 40:
+        return fail("country: up to 40 characters")
     errors = awgconf.validate(conf)
     if errors:
         return fail("; ".join(errors))
@@ -1952,10 +1965,11 @@ def create_exit(
             return fail("an exit with this name already exists")
         iface = free_iface(conn)
         cur = conn.execute(
-            "INSERT INTO exits (name, iface, priority, enabled, conf, created_at, mode, routes, dns, comment, table_num, nat) "
-            "VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?, ?, 0, ?)",
+            "INSERT INTO exits (name, iface, priority, enabled, conf, created_at, "
+            "mode, routes, dns, comment, country, table_num, nat) "
+            "VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, 0, ?)",
             (name, iface, prio, conf, datetime.now(timezone.utc).isoformat(timespec="seconds"),
-             mode, ", ".join(nets), dns.strip(), comment,
+             mode, ", ".join(nets), dns.strip(), comment, country,
              1 if mode == "internet" or nat else 0),
         )
         eid = cur.lastrowid
@@ -1976,25 +1990,36 @@ def create_exit(
     return RedirectResponse(f"/exits/{row['id']}?ok=exit+added", status_code=303)
 
 
-@app.post("/exits/{eid}/comment")
-def update_exit_comment(
-    request: Request, eid: int, comment: str = Form(""), csrf_token: str = Form(...)
+@app.post("/exits/{eid}/details")
+def update_exit_details(
+    request: Request,
+    eid: int,
+    comment: str = Form(""),
+    country: str = Form(""),
+    csrf_token: str = Form(...),
 ):
     token = require_admin(request)
     if not hmac.compare_digest(csrf_token, csrf(token)):
         raise HTTPException(status_code=400, detail="csrf")
     comment = comment.strip()
+    country = country.strip()
+    problem = ""
     if len(comment) > 120:
-        return RedirectResponse(
-            f"/exits/{eid}?err=" + quote("comment: up to 120 characters"), status_code=303
-        )
+        problem = "comment: up to 120 characters"
+    elif len(country) > 40:
+        problem = "country: up to 40 characters"
+    if problem:
+        return RedirectResponse(f"/exits/{eid}?err=" + quote(problem), status_code=303)
     with db() as conn:
         row = conn.execute("SELECT * FROM exits WHERE id = ?", (eid,)).fetchone()
         if not row:
             raise HTTPException(status_code=404)
-        conn.execute("UPDATE exits SET comment = ? WHERE id = ?", (comment, eid))
-    audit("exit_comment", f"{row['name']}: {comment}")
-    return RedirectResponse(f"/exits/{eid}?ok=comment+saved", status_code=303)
+        conn.execute(
+            "UPDATE exits SET comment = ?, country = ? WHERE id = ?",
+            (comment, country, eid),
+        )
+    audit("exit_details", f"{row['name']}: {country or '—'} / {comment or '—'}")
+    return RedirectResponse(f"/exits/{eid}?ok=details+saved", status_code=303)
 
 
 @app.post("/exits/{eid}/nat")
@@ -4033,6 +4058,7 @@ def status_json(request: Request, overview: bool = False):
         e["iface"]: {
             "name": e["name"],
             "comment": e["comment"],
+            "country": e["country"],
             "enabled": bool(e["enabled"]),
             "mode": e["mode"],
             "alive": (status.get("exits") or {}).get(e["iface"], {}).get("alive"),
