@@ -1,8 +1,5 @@
 /*
-  opencode-ui — OpenCode-style design tokens.
-
-  Naming: the project uses its own names (--ui-*); values are taken from the
-  real OpenCode system (@opencode/ui, theme oc-2) and normalized.
+  Design tokens.
 
   Theme: dark by default. Light is enabled by <html data-theme="light"> or by
   the system preference when the attribute is not set.
@@ -162,7 +159,7 @@
   --ui-lh-normal: 130%;
   --ui-lh-large: 150%;
 
-  /* -0.04px is the signature OpenCode density: 13–14px text is tightened */
+  /* Tighten 13–14px text by 0.04px. */
   --ui-ls-tight: -0.04px;
   --ui-ls-wide: 0.05px;
 
@@ -245,7 +242,7 @@
   --ui-state-info-fg: var(--ui-blue-500);
   --ui-state-info-border: var(--ui-blue-900);
 
-  /* OpenCode brand accent: warm peach */
+  /* Warm accent */
   --ui-brand: #fab283;
   --ui-brand-fg: var(--ui-grey-1100);
 }

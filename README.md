@@ -342,9 +342,10 @@ chart uses paired SVG bars, leaving missing time buckets blank.
 `/settings` has a `Sign-in page` switch: it serves a standalone minimal page
 with its own inline styles instead of the panel template, so the source names
 neither the product nor what it does, and loads none of the panel's scripts,
-styles or navigation. It applies to the whole panel, not to one account, and
-does not change the authenticated pages. The domain and the TLS certificate
-stay visible.
+styles or navigation. While it is on, `/static` is answered with an empty 404
+unless the request carries a valid session. It applies to the whole panel, not
+to one account, and does not change the authenticated pages. The domain and
+the TLS certificate stay visible.
 
 Sign-in limits: five failed attempts for the same email from the same address
 block that pair for five minutes, twenty failures from one address block the

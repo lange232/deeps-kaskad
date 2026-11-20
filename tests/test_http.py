@@ -448,6 +448,56 @@ class AnonymousLoginTests(PanelTestCase):
             ).fetchone())
 
 
+class ErrorSurfaceTests(PanelTestCase):
+    def test_browser_errors_do_not_describe_the_framework(self):
+        self.assertEqual(self.client.get("/").status_code, 303)
+        root = self.client.get("/")
+        self.assertEqual(root.headers["location"], "/login")
+        self.assertEqual(root.content, b"")
+        missing = self.client.get("/nope")
+        self.assertEqual(missing.status_code, 404)
+        self.assertEqual(missing.content, b"")
+        slash = self.client.get("/login/")
+        self.assertEqual(slash.status_code, 404)
+        self.assertEqual(slash.content, b"")
+        status = self.client.get("/status.json")
+        self.assertEqual(status.status_code, 401)
+        self.assertEqual(status.content, b"")
+
+    def test_the_mobile_api_keeps_its_json_errors(self):
+        response = self.client.get("/api/me")
+        self.assertEqual(response.status_code, 401)
+        self.assertEqual(response.json()["detail"], "sign in again")
+
+    def test_a_malformed_form_gets_an_empty_422(self):
+        response = self.client.post("/login", data={"email": "x"})
+        self.assertEqual(response.status_code, 422)
+        self.assertEqual(response.content, b"")
+
+    def test_the_mobile_api_keeps_its_json_validation_errors(self):
+        response = self.client.post("/api/login", data={"email": "x"})
+        self.assertEqual(response.status_code, 422)
+        self.assertIn("detail", response.json())
+
+    def test_static_is_hidden_only_while_sign_in_is_anonymous(self):
+        self.assertEqual(self.client.get("/static/theme.css").status_code, 200)
+        app.set_setting("login_anonymous", "1")
+        hidden = self.client.get("/static/theme.css")
+        self.assertEqual(hidden.status_code, 404)
+        self.assertEqual(hidden.content, b"")
+        self.login_admin()
+        self.assertEqual(self.client.get("/static/theme.css").status_code, 200)
+
+
+class PublicAssetTests(unittest.TestCase):
+    def test_stylesheets_do_not_name_their_origin(self):
+        static = Path(__file__).resolve().parents[1] / "panel" / "static"
+        for name in ("theme.css", "components.css"):
+            text = (static / name).read_text().lower()
+            for token in ("opencode", "traffic history", "brand accent"):
+                self.assertNotIn(token, text, f"{name}: {token}")
+
+
 class RollbackMessageTests(PanelTestCase):
     """A failed device rollback must not be reported as 'nothing changed'."""
 

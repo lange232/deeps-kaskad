@@ -35,6 +35,8 @@ from pathlib import Path
 from urllib.parse import quote
 
 from fastapi import FastAPI, Form, HTTPException, Query, Request
+from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import (
     FileResponse,
     HTMLResponse,
@@ -45,6 +47,7 @@ from fastapi.responses import (
 )
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 import auth
 import awgconf
@@ -72,8 +75,59 @@ def human_ts(value) -> str:
 
 templates = Jinja2Templates(directory=str(BASE / "templates"))
 templates.env.filters["ts"] = human_ts
-app = FastAPI(title="deeps kaskad", docs_url=None, redoc_url=None, openapi_url=None)
+app = FastAPI(title="panel", docs_url=None, redoc_url=None, openapi_url=None)
 app.mount("/static", StaticFiles(directory=str(BASE / "static")), name="static")
+# Trailing-slash redirects are a framework fingerprint and buy nothing: the
+# panel links never end with a slash.
+app.router.redirect_slashes = False
+
+
+@app.exception_handler(StarletteHTTPException)
+async def http_error(request: Request, exc: StarletteHTTPException):
+    """Empty bodies for web errors; the mobile API keeps its JSON detail.
+
+    FastAPI's defaults answer ``{"detail": ...}`` to every browser, which
+    tells a stranger both the framework and that an API lives here.
+    """
+    headers = exc.headers or {}
+    location = headers.get("location") or headers.get("Location")
+    if location and exc.status_code in (301, 302, 303, 307, 308):
+        return RedirectResponse(location, status_code=exc.status_code)
+    if request.url.path.startswith("/api/"):
+        return JSONResponse(
+            {"detail": exc.detail}, status_code=exc.status_code, headers=headers or None
+        )
+    return Response(status_code=exc.status_code, headers=headers or None)
+
+
+@app.exception_handler(RequestValidationError)
+async def invalid_request(request: Request, exc: RequestValidationError):
+    """A malformed browser form gets an empty 422, not a schema dump."""
+    if request.url.path.startswith("/api/"):
+        return JSONResponse(
+            {"detail": jsonable_encoder(exc.errors())}, status_code=422
+        )
+    return Response(status_code=422)
+
+
+@app.middleware("http")
+async def hide_static_when_anonymous(request, call_next):
+    """With the anonymous sign-in page on, assets stop being public.
+
+    That page carries its own inline styles, so a signed-out visitor has no
+    reason to fetch the panel's stylesheets; after signing in the browser
+    sends the session cookie with every asset request.
+    """
+    if request.url.path.startswith("/static/"):
+        try:
+            anonymous = setting("login_anonymous") == "1"
+            if anonymous:
+                data = session_data(request.cookies.get(COOKIE))
+                if not data or not session_alive(data):
+                    return Response(status_code=404)
+        except Exception:
+            pass
+    return await call_next(request)
 
 
 # A page must never come from the browser cache: the panel changes on deploy,
