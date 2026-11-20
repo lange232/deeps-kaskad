@@ -45,6 +45,16 @@
                 {% if c.internet %}<span class="oc-badge oc-badge--subtle">internet</span>{% endif %}
                 {% for name in c.exits %}<span class="oc-badge oc-badge--subtle">{{ name }}</span>{% endfor %}
                 {% if not c.internet and not c.exits %}<span class="oc-badge oc-badge--danger">no access</span>{% endif %}
+                {% set iface = current_exit_of.get(c.ip) %}
+                {% if iface %}
+                {% set st = exit_states.get(iface, {}) %}
+                <div class="cell-sub" style="margin-top:6px; display:flex; gap:6px; align-items:center">
+                  <span>in use</span>
+                  <span class="oc-mono" data-live="current|{{ c.ip }}">{{ iface }}</span>
+                  <span class="oc-badge {% if not status_fresh or st.get('alive') is none %}oc-badge--subtle{% elif st.get('degraded') %}oc-badge--warning{% elif st.get('alive') %}oc-badge--success{% else %}oc-badge--danger{% endif %}"
+                        data-live="current-state|{{ c.ip }}">{% if not status_fresh or st.get('alive') is none %}no data{% elif st.get('degraded') %}degraded{% elif st.get('alive') %}up{% else %}down{% endif %}</span>
+                </div>
+                {% endif %}
               </div>
             </td>
           </tr>

@@ -614,6 +614,74 @@ class AccountCheckTests(PanelTestCase):
             self.assertIsNotNone(app.check_target_error(kind, target), target)
 
 
+
+class CabinetExitStateTests(PanelTestCase):
+    def test_me_shows_the_exit_in_use_and_its_state(self):
+        aid, cid = self.seed_client()
+        eid = self.seed_exit(name="nl-1", iface="awg1")
+        self.grant(aid, cid, eid)
+        self.login("c1@example.com", USER_PASSWORD)
+        status = {
+            "ts": int(time.time()),
+            "clients": {"10.80.0.2": "awg1"},
+            "exits": {"awg1": {"alive": True, "degraded": True, "rtt_ms": 30}},
+        }
+        with mock.patch.object(app, "read_status", return_value=status):
+            page = self.client.get("/me").text
+        self.assertIn("in use", page)
+        self.assertIn("awg1", page)
+        self.assertIn("degraded", page)
+
+    def test_me_claims_no_state_when_the_failover_is_silent(self):
+        aid, cid = self.seed_client()
+        eid = self.seed_exit(name="nl-1", iface="awg1")
+        self.grant(aid, cid, eid)
+        self.login("c1@example.com", USER_PASSWORD)
+        status = {
+            "ts": int(time.time()) - 3600,
+            "clients": {"10.80.0.2": "awg1"},
+            "exits": {"awg1": {"alive": True, "degraded": False, "rtt_ms": 30}},
+        }
+        with mock.patch.object(app, "read_status", return_value=status):
+            page = self.client.get("/me").text
+        # A stale status is dropped entirely: the cabinet must not claim an
+        # exit is in use when the failover stopped reporting.
+        self.assertNotIn("in use", page)
+
+    def test_account_shows_the_default_exit_order(self):
+        aid, cid = self.seed_client()
+        first = self.seed_exit(name="nl-1", iface="awg1", priority=10)
+        second = self.seed_exit(name="us-1", iface="awg2", priority=20)
+        self.grant(aid, cid, first, 10)
+        self.grant(aid, cid, second, 20)
+        self.login("c1@example.com", USER_PASSWORD)
+        status = {
+            "ts": int(time.time()),
+            "clients": {},
+            "exits": {
+                "awg1": {"alive": True, "degraded": False, "rtt_ms": 20},
+                "awg2": {"alive": True, "degraded": True, "rtt_ms": 90},
+            },
+        }
+        with mock.patch.object(app, "read_status", return_value=status):
+            page = self.client.get("/me/account").text
+        self.assertIn("exit order", page)
+        self.assertLess(page.index("nl-1"), page.index("us-1"))
+        self.assertIn("degraded", page)
+        self.assertIn("up", page)
+
+    def test_account_order_lists_only_granted_exits(self):
+        aid, cid = self.seed_client()
+        first = self.seed_exit(name="nl-1", iface="awg1")
+        self.seed_exit(name="spare", iface="awg2", priority=20)
+        self.grant(aid, cid, first)
+        self.login("c1@example.com", USER_PASSWORD)
+        with mock.patch.object(app, "read_status", return_value={"ts": int(time.time())}):
+            page = self.client.get("/me/account").text
+        self.assertIn("nl-1", page)
+        self.assertNotIn("spare", page)
+
+
 class RollbackMessageTests(PanelTestCase):
     """A failed device rollback must not be reported as 'nothing changed'."""
 

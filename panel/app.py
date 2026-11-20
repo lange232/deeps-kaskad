@@ -3172,20 +3172,33 @@ def me_page(request: Request, err: str | None = None, ok: str | None = None):
     token, account = require_user(request)
     live = iface_dump(cfg()["iface"])["peers"]
     configs = [config_view(cl, live) for cl in account_configs(int(account["id"]))]
+    status, fresh = routing_status()
     return render_page(
         request, "me.html", "me", role="user",
         csrf=csrf(token), err=err, ok=ok, configs=configs,
         email=account["email"], last_login=human_ts(account["last_login"]),
         limit=max_configs_for(account),
         has_app=ANDROID_APK.exists(),
+        # Which exit each configuration rides right now, plus the state the
+        # failover reported for it: the cabinet must show it without a click.
+        current_exit_of=status.get("clients") or {},
+        exit_states=status.get("exits") or {},
+        status_fresh=fresh,
     )
 
 
 @app.get("/me/account", response_class=HTMLResponse)
 def me_account(request: Request, err: str | None = None, ok: str | None = None):
     token, account = require_user(request)
-    return render_page(request, "me_account.html", "account", role="user",
-                       csrf=csrf(token), email=account["email"], err=err, ok=ok)
+    status, fresh = routing_status()
+    return render_page(
+        request, "me_account.html", "account", role="user",
+        csrf=csrf(token), email=account["email"], err=err, ok=ok,
+        # The account's own order: what a new configuration starts with.
+        order=account_exits(int(account["id"]), "internet"),
+        exit_states=status.get("exits") or {},
+        status_fresh=fresh,
+    )
 
 
 @app.get("/me/checks", response_class=HTMLResponse)

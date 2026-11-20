@@ -237,6 +237,9 @@
           put(el, item && item.enabled ? 'enabled' : 'disabled');
         } else if (kind === 'exit') {
           badge(el, exits[key]);
+        } else if (kind === 'current-state') {
+          item = configs[key];
+          badge(el, item && exits[item.iface]);
         } else if (kind === 'ping') {
           ping(el, exits[key]);
         } else if (kind === 'pingparts') {
