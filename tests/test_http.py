@@ -2060,6 +2060,18 @@ class MobileApiTests(PanelTestCase):
             exits = self.client.get("/api/me/exits", headers=headers).json()
         self.assertEqual([e["active"] for e in exits], [False, True])
 
+    def test_exits_api_reports_the_country(self):
+        aid, cid = self.seed_client()
+        self.grant(aid, cid, self.seed_exit("nl-1", "awg1"))
+        with app.db() as conn:
+            conn.execute("UPDATE exits SET country = 'Netherlands', comment = 'Amsterdam'")
+        headers, _ = self.api_login()
+        with mock.patch.object(app, "read_status",
+                               return_value={"ts": int(time.time())}):
+            exit_row = self.client.get("/api/me/exits", headers=headers).json()[0]
+        self.assertEqual(exit_row["country"], "Netherlands")
+        self.assertEqual(exit_row["comment"], "Amsterdam")
+
     def test_create_conf_order_and_delete(self):
         aid, cid = self.seed_client(max_configs=5)
         exit_id = self.seed_exit()

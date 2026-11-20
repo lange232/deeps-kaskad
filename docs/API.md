@@ -283,6 +283,7 @@ Optional `config_id`; omitted or `0` means the first configuration.
     "id": 2,
     "name": "nl-1",
     "comment": "Amsterdam",
+    "country": "Netherlands",
     "alive": true,
     "degraded": false,
     "rtt_ms": 42,
@@ -297,6 +298,9 @@ Optional `config_id`; omitted or `0` means the first configuration.
 - `alive` is `true` or `false`. It is `null` when the failover daemon has not
   reported for more than 60 seconds; `rtt_ms`, `degraded` and `active` are also
   `null` then and `status_fresh` is `false`. Do not treat `null` as "down".
+- `country` is where the exit is hosted, set by the administrator; an empty
+  string means it was left blank. Show it in preference to `comment`, which is
+  an internal note such as the provider or the bandwidth.
 - `degraded` means the exit answers ICMP but cannot reach every HTTP probe
   target. Clients and the active exit prefer a healthy one.
 - `active` is `true` for the exit the default route (`table 100`) points at

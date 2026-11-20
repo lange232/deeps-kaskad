@@ -3953,6 +3953,9 @@ def api_exits(request: Request, config_id: int | None = None):
             "id": e["id"],
             "name": e["name"],
             "comment": e["comment"],
+            # Where the exit is hosted, in plain words; empty when the
+            # administrator has not filled it in.
+            "country": e["country"],
             # null while the failover daemon has not reported: the panel has
             # not observed this exit and must not claim that it is up.
             "alive": bool(known.get(e["iface"], {}).get("alive")) if fresh else None,
