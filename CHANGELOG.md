@@ -5,7 +5,7 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.4.7] - 2026-11-20
 
 ### Added
 
@@ -13,6 +13,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   instead of the panel template. Its source has no brand, footer, version,
   favicon, panel styles, scripts or navigation, and names neither the product
   nor its features. It applies to the whole panel.
+- `docs/API.md`: a complete reference for the mobile API, with authentication,
+  every endpoint, object shapes, the error catalogue, status codes and
+  examples. The README links to it.
 
 ### Changed
 
