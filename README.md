@@ -339,11 +339,12 @@ cabinet under `/me`, `/me/configs/new`, `/me/configs/{id}` and `/me/account`
 (`?range=`), with the downloaded and uploaded totals and the peak rate; the
 chart uses paired SVG bars, leaving missing time buckets blank.
 
-`/settings` has a `Sign-in page` switch: it removes the brand, footer, version
-and favicon from the signed-out page, leaving only the form and a `Sign in`
-heading. It applies to the whole panel, not to one account, and does not
-change the authenticated pages. The domain and the TLS certificate stay
-visible, as does the static favicon if requested by its full URL.
+`/settings` has a `Sign-in page` switch: it serves a standalone minimal page
+with its own inline styles instead of the panel template, so the source names
+neither the product nor what it does, and loads none of the panel's scripts,
+styles or navigation. It applies to the whole panel, not to one account, and
+does not change the authenticated pages. The domain and the TLS certificate
+stay visible.
 
 Sign-in limits: five failed attempts for the same email from the same address
 block that pair for five minutes, twenty failures from one address block the

@@ -398,18 +398,30 @@ class AnonymousLoginTests(PanelTestCase):
         self.assertIn("<title>Sign in</title>", page)
         self.assertIn(">Sign in</h1>", page)
         self.assertIn('action="/login"', page)
-        self.assertNotIn('class="oc-brand"', page)
-        self.assertNotIn("manage clients and exits", page)
-        self.assertNotIn('class="site-footer"', page)
-        self.assertNotIn("deffhost", page)
-        self.assertNotIn("github.com/lange232", page)
-        self.assertNotIn("/static/favicon.svg", page)
-        self.assertNotIn("vtest", page)
+        # The whole source, not just the visible text: no product name, no
+        # stack, no panel scripts or styles, no hint of what is behind it.
+        lowered = page.lower()
+        for token in ("deeps", "kaskad", "deffhost", "github", "amnezia", "awg",
+                      "wireguard", "vpn", "tunnel", "peer", "exit", "handshake",
+                      "traffic", "status.json", "config", "client", "panel",
+                      "oc-", "/static/", "vtest"):
+            self.assertNotIn(token, lowered, token)
+
+    def test_a_failed_sign_in_stays_anonymous(self):
+        self.set_anonymous(True)
+        self.client.post("/logout")
+        response = self.client.post(
+            "/login", data={"email": "admin", "password": "wrong-password"}
+        )
+        self.assertEqual(response.status_code, 401)
+        self.assertIn(">Sign in</h1>", response.text)
+        self.assertNotIn("kaskad", response.text.lower())
+        self.assertNotIn("/static/", response.text)
 
     def test_turning_it_off_restores_the_brand(self):
         self.set_anonymous(True)
         self.client.post("/logout")
-        self.assertNotIn('class="oc-brand"', self.client.get("/login").text)
+        self.assertNotIn("kaskad", self.client.get("/login").text.lower())
         self.set_anonymous(False)
         self.client.post("/logout")
         page = self.client.get("/login").text

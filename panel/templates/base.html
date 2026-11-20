@@ -4,8 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{% block title %}deeps kaskad{% endblock %}</title>
-{% if anonymous|default(false) %}<link rel="icon" href="data:,">
-{% else %}<link rel="icon" type="image/svg+xml" href="/static/favicon.svg">{% endif %}
+<link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
 <link rel="stylesheet" href="/static/theme.css">
 <link rel="stylesheet" href="/static/components.css">
 <style>
@@ -295,11 +294,9 @@
 </head>
 <body class="oc-shell">
 <header class="oc-topbar">
-  {% if not anonymous|default(false) %}
   <a class="oc-brand" href="{{ '/me' if role == 'user' else '/' }}" style="text-decoration:none">
     <span class="oc-brand__dim">deeps</span><span class="oc-brand__mark">kaskad</span>
   </a>
-  {% endif %}
   <span class="oc-topbar__spacer"></span>
   {% block topbar %}{% endblock %}
   <button class="oc-btn oc-btn--ghost-muted oc-btn--sm" id="theme-toggle" type="button">light theme</button>
@@ -341,7 +338,6 @@
   </main>
 </div>
 
-{% if not anonymous|default(false) %}
 <footer class="site-footer">
   <div class="site-footer__left">
     <span class="oc-mono oc-muted">v{{ version }}{% if commit %} · {{ commit }}{% endif %}</span>
@@ -352,7 +348,6 @@
     <span class="oc-muted">MIT</span>
   </div>
 </footer>
-{% endif %}
 
 <script>
   const menu = document.querySelector('.nav-toggle');

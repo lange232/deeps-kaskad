@@ -1525,15 +1525,28 @@ def login_context(error=None, email=""):
         "error": error,
         "email": email,
         "hide_nav": True,
-        "anonymous": setting("login_anonymous") == "1",
         "version": c.get("version", "dev"),
         "commit": c.get("commit", ""),
     }
 
 
+def login_response(request: Request, error=None, email="", status: int = 200):
+    """The sign-in page, or its standalone anonymous form.
+
+    The anonymous variant shares nothing with the panel template: its source
+    must not mention the product, its stack or its features, so it has no
+    inherited scripts, styles or navigation.
+    """
+    anonymous = setting("login_anonymous") == "1"
+    template = "login_anon.html" if anonymous else "login.html"
+    return templates.TemplateResponse(
+        request, template, login_context(error, email), status_code=status
+    )
+
+
 @app.get("/login", response_class=HTMLResponse)
 def login_page(request: Request):
-    return templates.TemplateResponse(request, "login.html", login_context())
+    return login_response(request)
 
 
 @app.post("/login")
@@ -1543,9 +1556,7 @@ def login(request: Request, email: str = Form(""), password: str = Form(...)):
     email = normalize_email(email)
 
     def fail(message: str, status: int = 401):
-        return templates.TemplateResponse(
-            request, "login.html", login_context(message, email), status_code=status
-        )
+        return login_response(request, message, email, status)
 
     if rate_limited(ip_key, email):
         return fail("too many attempts, wait 5 minutes", 429)

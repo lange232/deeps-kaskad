@@ -9,9 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- `Sign-in page` on `/settings`: one switch removes the brand, footer, version
-  and favicon from the signed-out page, leaving a neutral `Sign in` heading
-  and the form. It applies to the whole panel.
+- `Sign-in page` on `/settings`: one switch serves a standalone minimal page
+  instead of the panel template. Its source has no brand, footer, version,
+  favicon, panel styles, scripts or navigation, and names neither the product
+  nor its features. It applies to the whole panel.
 
 ### Changed
 
