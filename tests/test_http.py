@@ -498,6 +498,280 @@ class PublicAssetTests(unittest.TestCase):
                 self.assertNotIn(token, text, f"{name}: {token}")
 
 
+class AccountCheckTests(PanelTestCase):
+    def start(self, email="c1@example.com", password=USER_PASSWORD):
+        aid, cid = self.seed_client(email=email)
+        self.login(email, password)
+        return aid, cid
+
+    def add(self, target="http://1.1.1.1/", kind="http", label=""):
+        return self.client.post("/me/checks", data={
+            "kind": kind, "target": target, "label": label,
+            "csrf_token": self.csrf("/me/checks"),
+        })
+
+    def test_add_list_toggle_and_delete(self):
+        aid, _ = self.start()
+        response = self.add(label="public dns")
+        self.assertEqual(response.status_code, 303)
+        with app.db() as conn:
+            row = conn.execute(
+                "SELECT * FROM account_checks WHERE account_id = ?", (aid,)
+            ).fetchone()
+        self.assertEqual(row["target"], "http://1.1.1.1/")
+        page = self.client.get("/me/checks").text
+        self.assertIn("http://1.1.1.1/", page)
+        self.assertIn("public dns", page)
+        toggle = self.client.post(f"/me/checks/{row['id']}/toggle", data={
+            "csrf_token": self.csrf("/me/checks")})
+        self.assertEqual(toggle.status_code, 303)
+        with app.db() as conn:
+            self.assertEqual(conn.execute(
+                "SELECT enabled FROM account_checks WHERE id = ?", (row["id"],)
+            ).fetchone()[0], 0)
+        delete = self.client.post(f"/me/checks/{row['id']}/delete", data={
+            "csrf_token": self.csrf("/me/checks")})
+        self.assertEqual(delete.status_code, 303)
+        with app.db() as conn:
+            self.assertEqual(conn.execute(
+                "SELECT count(*) FROM account_checks").fetchone()[0], 0)
+
+    def test_the_limit_is_three(self):
+        self.start()
+        for _ in range(3):
+            self.assertEqual(self.add().status_code, 303)
+        response = self.add()
+        self.assertEqual(response.status_code, 303)
+        self.assertIn("at%20most%203", response.headers["location"])
+        with app.db() as conn:
+            self.assertEqual(conn.execute(
+                "SELECT count(*) FROM account_checks").fetchone()[0], 3)
+
+    def test_private_targets_are_refused(self):
+        self.start()
+        for target, kind in (
+            ("http://127.0.0.1/", "http"),
+            ("http://10.0.0.1/", "http"),
+            ("192.168.1.1", "icmp"),
+            ("127.0.0.1", "icmp"),
+            ("file:///etc/passwd", "http"),
+        ):
+            response = self.add(target=target, kind=kind)
+            self.assertIn("err=", response.headers["location"])
+        with app.db() as conn:
+            self.assertEqual(conn.execute(
+                "SELECT count(*) FROM account_checks").fetchone()[0], 0)
+
+    def test_another_account_cannot_touch_the_check(self):
+        aid, _ = self.start()
+        self.add()
+        with app.db() as conn:
+            cid = conn.execute(
+                "SELECT id FROM account_checks WHERE account_id = ?", (aid,)
+            ).fetchone()[0]
+        self.seed_client(name="other", ip="10.80.0.9", email="c2@example.com")
+        self.login("c2@example.com", USER_PASSWORD)
+        for action in ("toggle", "delete"):
+            response = self.client.post(f"/me/checks/{cid}/{action}", data={
+                "csrf_token": self.csrf("/me/checks")})
+            self.assertEqual(response.status_code, 404)
+        with app.db() as conn:
+            self.assertEqual(conn.execute(
+                "SELECT count(*) FROM account_checks WHERE id = ?", (cid,)
+            ).fetchone()[0], 1)
+
+    def test_the_admin_sees_the_checks(self):
+        aid, _ = self.start()
+        self.add(label="corp")
+        self.login_admin()
+        page = self.client.get(f"/accounts/{aid}").text
+        self.assertIn("corp", page)
+        self.assertIn("http://1.1.1.1/", page)
+
+    def test_the_cabinet_shows_a_failing_exit(self):
+        import time as _time
+        aid, _ = self.start()
+        self.add()
+        with app.db() as conn:
+            cid = conn.execute(
+                "SELECT id FROM account_checks WHERE account_id = ?", (aid,)
+            ).fetchone()[0]
+        status = {"ts": int(_time.time()),
+                  "checks": {str(aid): {str(cid): {"failing": ["awg1"]}}}}
+        with mock.patch.object(app, "read_status", return_value=status):
+            page = self.client.get("/me/checks").text
+        self.assertIn("failing via awg1", page)
+
+    def test_the_cabinet_names_the_exit_country(self):
+        aid, _ = self.start()
+        self.add()
+        self.seed_exit(name="nl-1", iface="awg1")
+        with app.db() as conn:
+            conn.execute("UPDATE exits SET country = 'Netherlands' WHERE iface = 'awg1'")
+            cid = conn.execute(
+                "SELECT id FROM account_checks WHERE account_id = ?", (aid,)
+            ).fetchone()[0]
+        status = {"ts": int(time.time()),
+                  "checks": {str(aid): {str(cid): {"failing": ["awg1"]}}}}
+        with mock.patch.object(app, "read_status", return_value=status):
+            page = self.client.get("/me/checks").text
+        self.assertIn("failing via Netherlands", page)
+        self.assertNotIn("failing via awg1", page)
+
+    def test_an_unreported_check_reads_unknown(self):
+        aid, _ = self.start()
+        self.add()
+        status = {"ts": int(time.time()), "checks": {str(aid): {}}}
+        with mock.patch.object(app, "read_status", return_value=status):
+            page = self.client.get("/me/checks").text
+        self.assertIn("unknown", page)
+
+    def test_target_validation(self):
+        self.assertIsNone(app.check_target_error("http", "http://1.1.1.1/"))
+        self.assertIsNone(app.check_target_error("icmp", "1.1.1.1"))
+        for kind, target in (
+            ("http", "http://127.0.0.1/"), ("http", "http://10.0.0.1/"),
+            ("http", "http://192.168.0.1/"), ("icmp", "127.0.0.1"),
+            ("icmp", "10.0.0.1"), ("http", "file:///etc/passwd"),
+            ("http", "http://user:pass@1.1.1.1/"),
+        ):
+            self.assertIsNotNone(app.check_target_error(kind, target), target)
+
+
+
+class CabinetExitStateTests(PanelTestCase):
+    def test_me_shows_the_exit_in_use_and_its_state(self):
+        aid, cid = self.seed_client()
+        eid = self.seed_exit(name="nl-1", iface="awg1")
+        self.grant(aid, cid, eid)
+        self.login("c1@example.com", USER_PASSWORD)
+        status = {
+            "ts": int(time.time()),
+            "clients": {"10.80.0.2": "awg1"},
+            "exits": {"awg1": {"alive": True, "degraded": True, "rtt_ms": 30}},
+        }
+        with mock.patch.object(app, "read_status", return_value=status):
+            page = self.client.get("/me").text
+        self.assertIn("nl-1", page)
+        self.assertIn("degraded", page)
+
+    def test_me_prefers_the_exit_comment_over_its_name(self):
+        aid, cid = self.seed_client()
+        eid = self.seed_exit(name="nl-1", iface="awg1")
+        with app.db() as conn:
+            conn.execute(
+                "UPDATE exits SET comment = 'Amsterdam' WHERE id = ?", (eid,))
+        self.grant(aid, cid, eid)
+        self.login("c1@example.com", USER_PASSWORD)
+        status = {
+            "ts": int(time.time()),
+            "clients": {"10.80.0.2": "awg1"},
+            "exits": {"awg1": {"alive": True, "degraded": False, "rtt_ms": 30}},
+        }
+        with mock.patch.object(app, "read_status", return_value=status):
+            page = self.client.get("/me").text
+        self.assertIn("Amsterdam", page)
+        self.assertNotIn(">nl-1<", page)
+
+    def test_me_claims_no_state_when_the_failover_is_silent(self):
+        aid, cid = self.seed_client()
+        eid = self.seed_exit(name="nl-1", iface="awg1")
+        self.grant(aid, cid, eid)
+        self.login("c1@example.com", USER_PASSWORD)
+        status = {
+            "ts": int(time.time()) - 3600,
+            "clients": {"10.80.0.2": "awg1"},
+            "exits": {"awg1": {"alive": True, "degraded": False, "rtt_ms": 30}},
+        }
+        with mock.patch.object(app, "read_status", return_value=status):
+            page = self.client.get("/me").text
+        # A stale status is dropped entirely: the cabinet must not name an
+        # exit as the one in use when the failover stopped reporting.
+        self.assertNotIn("nl-1", page)
+
+    def test_me_shows_the_country_before_the_comment(self):
+        aid, cid = self.seed_client()
+        eid = self.seed_exit(name="nl-1", iface="awg1")
+        with app.db() as conn:
+            conn.execute(
+                "UPDATE exits SET country = 'Netherlands', comment = 'Amsterdam' "
+                "WHERE id = ?", (eid,))
+        self.grant(aid, cid, eid)
+        self.login("c1@example.com", USER_PASSWORD)
+        status = {
+            "ts": int(time.time()),
+            "clients": {"10.80.0.2": "awg1"},
+            "exits": {"awg1": {"alive": True, "degraded": False, "rtt_ms": 30}},
+        }
+        with mock.patch.object(app, "read_status", return_value=status):
+            page = self.client.get("/me").text
+        self.assertIn("Netherlands", page)
+        self.assertNotIn("Amsterdam", page)
+
+    def test_admin_saves_the_exit_country(self):
+        self.login_admin()
+        eid = self.seed_exit(name="nl-1", iface="awg1")
+        response = self.client.post(f"/exits/{eid}/details", data={
+            "country": "Netherlands", "comment": "Amsterdam",
+            "csrf_token": self.csrf(f"/exits/{eid}"),
+        })
+        self.assertEqual(response.status_code, 303)
+        with app.db() as conn:
+            row = conn.execute(
+                "SELECT country, comment FROM exits WHERE id = ?", (eid,)
+            ).fetchone()
+        self.assertEqual(row["country"], "Netherlands")
+        self.assertEqual(row["comment"], "Amsterdam")
+        page = self.client.get(f"/exits/{eid}").text
+        self.assertIn("Netherlands", page)
+
+    def test_a_long_country_is_refused(self):
+        self.login_admin()
+        eid = self.seed_exit(name="nl-1", iface="awg1")
+        response = self.client.post(f"/exits/{eid}/details", data={
+            "country": "x" * 41, "comment": "",
+            "csrf_token": self.csrf(f"/exits/{eid}"),
+        })
+        self.assertEqual(response.status_code, 303)
+        self.assertIn("err=", response.headers["location"])
+        with app.db() as conn:
+            self.assertEqual(conn.execute(
+                "SELECT country FROM exits WHERE id = ?", (eid,)).fetchone()[0], "")
+
+    def test_account_shows_the_default_exit_order(self):
+        aid, cid = self.seed_client()
+        first = self.seed_exit(name="nl-1", iface="awg1", priority=10)
+        second = self.seed_exit(name="us-1", iface="awg2", priority=20)
+        self.grant(aid, cid, first, 10)
+        self.grant(aid, cid, second, 20)
+        self.login("c1@example.com", USER_PASSWORD)
+        status = {
+            "ts": int(time.time()),
+            "clients": {},
+            "exits": {
+                "awg1": {"alive": True, "degraded": False, "rtt_ms": 20},
+                "awg2": {"alive": True, "degraded": True, "rtt_ms": 90},
+            },
+        }
+        with mock.patch.object(app, "read_status", return_value=status):
+            page = self.client.get("/me/account").text
+        self.assertIn("exit order", page)
+        self.assertLess(page.index("nl-1"), page.index("us-1"))
+        self.assertIn("degraded", page)
+        self.assertIn("up", page)
+
+    def test_account_order_lists_only_granted_exits(self):
+        aid, cid = self.seed_client()
+        first = self.seed_exit(name="nl-1", iface="awg1")
+        self.seed_exit(name="spare", iface="awg2", priority=20)
+        self.grant(aid, cid, first)
+        self.login("c1@example.com", USER_PASSWORD)
+        with mock.patch.object(app, "read_status", return_value={"ts": int(time.time())}):
+            page = self.client.get("/me/account").text
+        self.assertIn("nl-1", page)
+        self.assertNotIn("spare", page)
+
+
 class RollbackMessageTests(PanelTestCase):
     """A failed device rollback must not be reported as 'nothing changed'."""
 
@@ -1758,11 +2032,12 @@ class MobileApiTests(PanelTestCase):
         aid, cid = self.seed_client()
         self.grant(aid, cid, self.seed_exit("first", "awg1"))
         headers, _ = self.api_login()
-        fresh = {"ts": int(time.time()),
+        fresh = {"ts": int(time.time()), "active": "awg1",
                  "exits": {"awg1": {"alive": True, "rtt_ms": 12}}}
         with mock.patch.object(app, "read_status", return_value=fresh):
             live = self.client.get("/api/me/exits", headers=headers).json()[0]
         self.assertTrue(live["alive"])
+        self.assertTrue(live["active"])
         self.assertTrue(live["status_fresh"])
         old = {"ts": int(time.time()) - 300,
                "exits": {"awg1": {"alive": True, "rtt_ms": 12}}}
@@ -1770,7 +2045,20 @@ class MobileApiTests(PanelTestCase):
             silent = self.client.get("/api/me/exits", headers=headers).json()[0]
         self.assertIsNone(silent["alive"])
         self.assertIsNone(silent["rtt_ms"])
+        self.assertIsNone(silent["active"])
         self.assertFalse(silent["status_fresh"])
+
+    def test_exits_api_marks_only_the_active_exit(self):
+        aid, cid = self.seed_client()
+        self.grant(aid, cid, self.seed_exit("first", "awg1"), 10)
+        self.grant(aid, cid, self.seed_exit("second", "awg2", priority=20), 20)
+        headers, _ = self.api_login()
+        status = {"ts": int(time.time()), "active": "awg2",
+                  "exits": {"awg1": {"alive": True, "rtt_ms": 10},
+                            "awg2": {"alive": True, "rtt_ms": 90}}}
+        with mock.patch.object(app, "read_status", return_value=status):
+            exits = self.client.get("/api/me/exits", headers=headers).json()
+        self.assertEqual([e["active"] for e in exits], [False, True])
 
     def test_create_conf_order_and_delete(self):
         aid, cid = self.seed_client(max_configs=5)

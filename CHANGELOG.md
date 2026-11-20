@@ -5,6 +5,44 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.9] - 2026-11-20
+
+### Added
+
+- Accounts can keep up to three destinations that matter to them (HTTP or
+  ICMP) in the cabinet (`/me/checks`). The failover probes them through every
+  exit the account may use; an exit failing them is skipped for that account's
+  configurations while another allowed exit works. Other accounts and the
+  global active exit are not affected. Only public targets are accepted, and
+  the address is re-checked at probe time so a name that starts resolving into
+  private space is not followed.
+- The cabinet shows which exit each configuration rides and its state: up,
+  degraded, down or no data. The exit is named by its country, then its
+  comment, then its name.
+- An account page in the cabinet lists its own exit order - the order a new
+  configuration starts with - with the same state badges.
+- Exits carry a `country` field, editable next to the comment in the exit
+  page; the administrator's exit list shows it too.
+- `GET /api/me/exits` reports `active`: whether the default route points at
+  that exit right now. It is `null` while the failover status is stale, like
+  `alive`, `degraded` and `rtt_ms`.
+
+### Changed
+
+- Account checks are probed for a rotating slice of accounts per failover
+  cycle, at most four accounts at a time, so a host with many accounts does
+  not stretch the ten-second interval. Each account is still covered within a
+  few cycles.
+
+### Fixed
+
+- A check whose account has no exit yet is shown as unknown instead of
+  passing: nothing was probed, so nothing may look green.
+- Checks left behind by a removed account are cleaned up on start, the same
+  way as stale exit grants.
+- The three-check limit is enforced by the insert itself, so two parallel
+  requests cannot add a fourth check.
+
 ## [0.4.8] - 2026-11-20
 
 ### Changed

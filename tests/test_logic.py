@@ -487,6 +487,160 @@ class ProbeTests(unittest.TestCase):
                 failover.state.update(old_state)
 
 
+class ClientCheckTests(unittest.TestCase):
+    def test_an_avoided_exit_is_skipped_for_that_client(self):
+        calls = []
+
+        def fake_run(cmd, timeout=5):
+            calls.append(cmd)
+            return subprocess.CompletedProcess(cmd, 0, "", "")
+
+        with mock.patch.object(failover, "run", side_effect=fake_run), \
+             mock.patch.object(failover, "current_default", return_value="awg1"):
+            failover.apply_client_routes(
+                {(1002, "10.80.0.2"): ["awg1", "awg2"]},
+                ["awg1", "awg2"],
+                {(1002, "10.80.0.2"): {"awg1"}},
+            )
+        self.assertTrue(any("awg2" in cmd for cmd in calls))
+
+    def test_when_every_exit_is_avoided_the_order_is_used_anyway(self):
+        calls = []
+
+        def fake_run(cmd, timeout=5):
+            calls.append(cmd)
+            return subprocess.CompletedProcess(cmd, 0, "", "")
+
+        with mock.patch.object(failover, "run", side_effect=fake_run), \
+             mock.patch.object(failover, "current_default", return_value="awg1"):
+            failover.apply_client_routes(
+                {(1002, "10.80.0.2"): ["awg1", "awg2"]},
+                ["awg1", "awg2"],
+                {(1002, "10.80.0.2"): {"awg1", "awg2"}},
+            )
+        # awg1 is already the route, so nothing is replaced; the point is that
+        # the client keeps a working exit instead of losing its route.
+        self.assertFalse(any("replace" in cmd for cmd in calls))
+
+    def test_a_check_marks_an_exit_after_three_failures(self):
+        failover.check_state.clear()
+        try:
+            for _ in range(failover.CHECK_DEAD_AFTER):
+                failover.update_check_state(1, "http://1.1.1.1/", "awg1", False)
+            self.assertTrue(failover.check_state[(1, "awg1")]["bad"])
+            for _ in range(failover.CHECK_RECOVER):
+                failover.update_check_state(1, "http://1.1.1.1/", "awg1", True)
+            self.assertFalse(failover.check_state[(1, "awg1")]["bad"])
+        finally:
+            failover.check_state.clear()
+
+    def test_the_account_report_lists_only_failing_exits(self):
+        checks = [{"id": 5, "account_id": 1, "kind": "http",
+                   "target": "http://1.1.1.1/"}]
+        grants = [{"account_id": 1, "iface": "awg1"},
+                  {"account_id": 1, "iface": "awg2"}]
+        failover.check_state.clear()
+        try:
+            with mock.patch.object(failover, "account_checks", return_value=checks), \
+                 mock.patch.object(failover, "account_grants", return_value=grants), \
+                 mock.patch.object(failover, "check_ok",
+                                   side_effect=lambda k, t, i: i == "awg2"):
+                for _ in range(failover.CHECK_DEAD_AFTER):
+                    avoid, report = failover.run_account_checks()
+            self.assertEqual(avoid, {1: {"awg1"}})
+            self.assertEqual(report["1"]["5"]["failing"], ["awg1"])
+        finally:
+            failover.check_state.clear()
+
+
+class AccountCheckSchedulingTests(unittest.TestCase):
+    def tearDown(self):
+        failover.check_state.clear()
+        failover.check_cursor = 0
+
+    def checks(self, accounts):
+        return [
+            {"id": i, "account_id": a, "kind": "http",
+             "target": f"http://a{a}.example/"}
+            for i, a in enumerate(sorted(accounts), start=1)
+        ]
+
+    def grants(self, accounts):
+        return [{"account_id": a, "iface": "awg1"} for a in accounts]
+
+    def test_a_check_without_exits_is_not_reported(self):
+        checks = [{"id": 5, "account_id": 1, "kind": "http",
+                   "target": "http://a1.example/"}]
+        with mock.patch.object(failover, "account_checks", return_value=checks), \
+             mock.patch.object(failover, "account_grants", return_value=[]), \
+             mock.patch.object(failover, "check_ok", return_value=True) as probe:
+            avoid, report = failover.run_account_checks()
+        self.assertEqual(report, {})
+        self.assertEqual(avoid, {})
+        self.assertFalse(probe.called)
+
+    def test_a_granted_check_not_yet_probed_is_not_reported(self):
+        checks = [{"id": 1, "account_id": 1, "kind": "http",
+                   "target": "http://a1.example/"}]
+        grants = [{"account_id": 1, "iface": "awg1"}]
+        with mock.patch.object(failover, "account_checks", return_value=checks), \
+             mock.patch.object(failover, "account_grants", return_value=grants), \
+             mock.patch.object(failover, "check_ok", return_value=True) as probe:
+            avoid, report = failover.run_account_checks(alive=[])
+        self.assertEqual(report, {})
+        self.assertFalse(probe.called)
+
+    def test_dead_exits_are_not_probed(self):
+        checks = [
+            {"id": 1, "account_id": 1, "kind": "http",
+             "target": "http://a1.example/"},
+        ]
+        grants = [{"account_id": 1, "iface": "awg1"},
+                  {"account_id": 1, "iface": "awg2"}]
+        probed = []
+
+        def fake(kind, target, iface):
+            probed.append(iface)
+            return True
+
+        with mock.patch.object(failover, "account_checks", return_value=checks), \
+             mock.patch.object(failover, "account_grants", return_value=grants), \
+             mock.patch.object(failover, "check_ok", side_effect=fake):
+            failover.run_account_checks(alive=["awg2"])
+        self.assertEqual(probed, ["awg2"])
+
+    def test_accounts_rotate_between_ticks(self):
+        accounts = list(range(1, 7))
+        checks = self.checks(accounts)
+        grants = self.grants(accounts)
+        probed = []
+
+        def fake(kind, target, iface):
+            probed.append(target)
+            return True
+
+        with mock.patch.object(failover, "account_checks", return_value=checks), \
+             mock.patch.object(failover, "account_grants", return_value=grants), \
+             mock.patch.object(failover, "check_ok", side_effect=fake):
+            failover.run_account_checks()
+            first = set(probed)
+            probed.clear()
+            failover.run_account_checks()
+            second = set(probed)
+        self.assertEqual(len(first), failover.CHECK_ACCOUNTS_PER_TICK)
+        self.assertEqual(len(second), failover.CHECK_ACCOUNTS_PER_TICK)
+        self.assertNotEqual(first, second)
+        # Every account is covered within a couple of ticks.
+        self.assertEqual(first | second, {f"http://a{a}.example/" for a in accounts})
+
+    def test_a_rebound_name_is_not_probed(self):
+        info = [(2, 1, 6, "", ("10.8.1.4", 0))]
+        with mock.patch.object(failover.socket, "getaddrinfo", return_value=info), \
+             mock.patch.object(failover, "run") as run:
+            self.assertFalse(failover.check_ok("http", "http://a1.example/", "awg1"))
+        self.assertFalse(run.called)
+
+
 class ClientPingTests(unittest.TestCase):
     def test_client_probe_returns_the_latency(self):
         answered = subprocess.CompletedProcess([], 0, "time=8.4 ms", "")

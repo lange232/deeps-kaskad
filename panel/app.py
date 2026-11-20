@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 import hmac
 import ipaddress
@@ -24,6 +25,7 @@ import os
 import re
 import secrets
 import shlex
+import socket
 import sqlite3
 import subprocess
 import sys
@@ -32,7 +34,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-from urllib.parse import quote
+from urllib.parse import quote, urlparse
 
 from fastapi import FastAPI, Form, HTTPException, Query, Request
 from fastapi.encoders import jsonable_encoder
@@ -65,6 +67,13 @@ NAME_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,31}$")
 DEVICE_ID_RE = re.compile(r"^[A-Za-z0-9-]{8,64}$")
 # Configurations per account unless the administrator sets a personal value.
 DEFAULT_MAX_CONFIGS = 5
+# A check is run through every exit the account may use; three is enough to
+# describe the destinations that matter without turning the failover loop
+# into a scanner.
+MAX_ACCOUNT_CHECKS = 3
+# A name that does not resolve quickly is treated as invalid: the request
+# handler must not hang on a slow resolver.
+RESOLVE_TIMEOUT = 3
 
 def human_ts(value) -> str:
     if not value:
@@ -203,6 +212,17 @@ def init_db() -> None:
                 priority INTEGER NOT NULL DEFAULT 0,
                 PRIMARY KEY (account_id, exit_id)
             );
+            CREATE TABLE IF NOT EXISTS account_checks (
+                id INTEGER PRIMARY KEY,
+                account_id INTEGER NOT NULL,
+                kind TEXT NOT NULL,
+                target TEXT NOT NULL,
+                label TEXT NOT NULL DEFAULT '',
+                enabled INTEGER NOT NULL DEFAULT 1,
+                created_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS account_checks_account
+                ON account_checks(account_id);
             CREATE TABLE IF NOT EXISTS client_exits (
                 client_id INTEGER NOT NULL,
                 exit_id INTEGER NOT NULL,
@@ -230,6 +250,7 @@ def init_db() -> None:
                 routes TEXT NOT NULL DEFAULT '',
                 dns TEXT NOT NULL DEFAULT '',
                 comment TEXT NOT NULL DEFAULT '',
+                country TEXT NOT NULL DEFAULT '',
                 table_num INTEGER NOT NULL DEFAULT 0,
                 nat INTEGER NOT NULL DEFAULT 1
             );
@@ -268,6 +289,10 @@ def migrate(conn: sqlite3.Connection, existing: set[str]) -> None:
         ("routes", "ALTER TABLE exits ADD COLUMN routes TEXT NOT NULL DEFAULT ''"),
         ("dns", "ALTER TABLE exits ADD COLUMN dns TEXT NOT NULL DEFAULT ''"),
         ("comment", "ALTER TABLE exits ADD COLUMN comment TEXT NOT NULL DEFAULT ''"),
+        # Where the exit is hosted, in plain words: the cabinet shows it
+        # instead of the comment, so a client sees "Netherlands" rather than
+        # an internal name.
+        ("country", "ALTER TABLE exits ADD COLUMN country TEXT NOT NULL DEFAULT ''"),
         ("table_num", "ALTER TABLE exits ADD COLUMN table_num INTEGER NOT NULL DEFAULT 0"),
         ("nat", "ALTER TABLE exits ADD COLUMN nat INTEGER NOT NULL DEFAULT 1"),
     ):
@@ -326,6 +351,9 @@ def migrate(conn: sqlite3.Connection, existing: set[str]) -> None:
     conn.execute(
         "DELETE FROM account_exits WHERE account_id NOT IN (SELECT id FROM accounts) "
         "OR exit_id NOT IN (SELECT id FROM exits)"
+    )
+    conn.execute(
+        "DELETE FROM account_checks WHERE account_id NOT IN (SELECT id FROM accounts)"
     )
     # The subnets a configuration uses are now an explicit choice. The first
     # start on an older database writes the old default — everything the
@@ -1541,6 +1569,7 @@ def exit_view(e, status: dict, active, manual: str = "") -> dict:
         "routes": e["routes"],
         "dns": e["dns"],
         "comment": e["comment"],
+        "country": e["country"],
         "nat": bool(e["nat"]) if "nat" in e.keys() else True,
         "endpoint": awgconf.endpoint(e["conf"]),
         "alive": st.get("alive"),
@@ -1767,7 +1796,10 @@ def overview_health(exits: list[dict], status_fresh: bool) -> dict:
 
 # ---------------------------------------------------------------- exits
 
-EXIT_DEFAULTS = {"name": "", "mode": "internet", "priority": "", "routes": "", "dns": "", "conf": ""}
+EXIT_DEFAULTS = {
+    "name": "", "mode": "internet", "priority": "", "routes": "", "dns": "",
+    "conf": "", "country": "", "comment": "",
+}
 
 
 @app.get("/exits", response_class=HTMLResponse)
@@ -1862,6 +1894,7 @@ def create_exit(
     routes: str = Form(""),
     dns: str = Form(""),
     comment: str = Form(""),
+    country: str = Form(""),
     nat: str = Form(""),
     conf: str = Form(...),
     csrf_token: str = Form(...),
@@ -1871,6 +1904,7 @@ def create_exit(
         raise HTTPException(status_code=400, detail="csrf")
     name = name.strip()
     comment = comment.strip()
+    country = country.strip()
 
     def fail(msg: str):
         return RedirectResponse("/exits/new?err=" + quote(msg), status_code=303)
@@ -1879,6 +1913,8 @@ def create_exit(
         return fail("name: latin letters, digits, dot, dash; up to 32 characters")
     if len(comment) > 120:
         return fail("comment: up to 120 characters")
+    if len(country) > 40:
+        return fail("country: up to 40 characters")
     errors = awgconf.validate(conf)
     if errors:
         return fail("; ".join(errors))
@@ -1936,10 +1972,11 @@ def create_exit(
             return fail("an exit with this name already exists")
         iface = free_iface(conn)
         cur = conn.execute(
-            "INSERT INTO exits (name, iface, priority, enabled, conf, created_at, mode, routes, dns, comment, table_num, nat) "
-            "VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?, ?, 0, ?)",
+            "INSERT INTO exits (name, iface, priority, enabled, conf, created_at, "
+            "mode, routes, dns, comment, country, table_num, nat) "
+            "VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, 0, ?)",
             (name, iface, prio, conf, datetime.now(timezone.utc).isoformat(timespec="seconds"),
-             mode, ", ".join(nets), dns.strip(), comment,
+             mode, ", ".join(nets), dns.strip(), comment, country,
              1 if mode == "internet" or nat else 0),
         )
         eid = cur.lastrowid
@@ -1960,25 +1997,36 @@ def create_exit(
     return RedirectResponse(f"/exits/{row['id']}?ok=exit+added", status_code=303)
 
 
-@app.post("/exits/{eid}/comment")
-def update_exit_comment(
-    request: Request, eid: int, comment: str = Form(""), csrf_token: str = Form(...)
+@app.post("/exits/{eid}/details")
+def update_exit_details(
+    request: Request,
+    eid: int,
+    comment: str = Form(""),
+    country: str = Form(""),
+    csrf_token: str = Form(...),
 ):
     token = require_admin(request)
     if not hmac.compare_digest(csrf_token, csrf(token)):
         raise HTTPException(status_code=400, detail="csrf")
     comment = comment.strip()
+    country = country.strip()
+    problem = ""
     if len(comment) > 120:
-        return RedirectResponse(
-            f"/exits/{eid}?err=" + quote("comment: up to 120 characters"), status_code=303
-        )
+        problem = "comment: up to 120 characters"
+    elif len(country) > 40:
+        problem = "country: up to 40 characters"
+    if problem:
+        return RedirectResponse(f"/exits/{eid}?err=" + quote(problem), status_code=303)
     with db() as conn:
         row = conn.execute("SELECT * FROM exits WHERE id = ?", (eid,)).fetchone()
         if not row:
             raise HTTPException(status_code=404)
-        conn.execute("UPDATE exits SET comment = ? WHERE id = ?", (comment, eid))
-    audit("exit_comment", f"{row['name']}: {comment}")
-    return RedirectResponse(f"/exits/{eid}?ok=comment+saved", status_code=303)
+        conn.execute(
+            "UPDATE exits SET comment = ?, country = ? WHERE id = ?",
+            (comment, country, eid),
+        )
+    audit("exit_details", f"{row['name']}: {country or '—'} / {comment or '—'}")
+    return RedirectResponse(f"/exits/{eid}?ok=details+saved", status_code=303)
 
 
 @app.post("/exits/{eid}/nat")
@@ -2794,6 +2842,7 @@ def account_page(
         request, "account_detail.html", "accounts",
         csrf=csrf(token), err=err, ok=ok, account=account,
         configs=configs, routed=routed, granted=granted,
+        checks=account_check_rows(aid),
         internet_exits=internet_exits_rows(),
         order=account_exits(aid, "internet"),
         limit=max_configs_for(account),
@@ -3055,6 +3104,7 @@ def account_delete(request: Request, aid: int, csrf_token: str = Form(...)):
                 )
                 drop_traffic(conn, cid)
             conn.execute("DELETE FROM account_exits WHERE account_id = ?", (aid,))
+            conn.execute("DELETE FROM account_checks WHERE account_id = ?", (aid,))
             conn.execute("DELETE FROM accounts WHERE id = ?", (aid,))
             apply_conf(cfg(), conn)
     except RuntimeError as exc:
@@ -3075,6 +3125,75 @@ def account_first_config(account):
     return configs[0] if configs else None
 
 
+CHECK_KINDS = ("http", "icmp")
+
+
+def check_target_error(kind: str, target: str) -> str | None:
+    """Why this probe target is rejected, or None when it is allowed.
+
+    The server fetches the target through an exit, so private, loopback and
+    link-local addresses are refused: a user's check must not become a
+    request into the server's own network.
+    """
+    if kind not in CHECK_KINDS:
+        return "unknown check type"
+    target = target.strip()
+    if not target:
+        return "target is required"
+    if len(target) > 300:
+        return "target is too long"
+    if kind == "http":
+        try:
+            parsed = urlparse(target)
+            host = parsed.hostname or ""
+        except ValueError:
+            return "invalid URL"
+        if parsed.scheme not in ("http", "https") or not host:
+            return "http:// or https:// URL expected"
+        if parsed.username or parsed.password:
+            return "credentials in the URL are not allowed"
+    else:
+        host = target
+        if "/" in host or " " in host:
+            return "an address or host name expected"
+    if host.lower() == "localhost" or host.lower().endswith(".local"):
+        return "only public addresses are allowed"
+    try:
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            infos = pool.submit(
+                socket.getaddrinfo, host, None
+            ).result(timeout=RESOLVE_TIMEOUT)
+    except (OSError, TimeoutError):
+        return "the host does not resolve"
+    addresses = {info[4][0] for info in infos}
+    if not addresses:
+        return "the host does not resolve"
+    for address in addresses:
+        try:
+            ip = ipaddress.ip_address(address.split("%", 1)[0])
+        except ValueError:
+            return "the host does not resolve"
+        if not ip.is_global:
+            return "only public addresses are allowed"
+    return None
+
+
+def account_check_rows(aid: int):
+    with db() as conn:
+        return conn.execute(
+            "SELECT * FROM account_checks WHERE account_id = ? ORDER BY id",
+            (aid,),
+        ).fetchall()
+
+
+def account_check_row(aid: int, cid: int):
+    with db() as conn:
+        return conn.execute(
+            "SELECT * FROM account_checks WHERE id = ? AND account_id = ?",
+            (cid, aid),
+        ).fetchone()
+
+
 def user_config(account, cid: int):
     """A configuration of this account, or 404 — never another account's."""
     cl = config_row(cid)
@@ -3088,20 +3207,127 @@ def me_page(request: Request, err: str | None = None, ok: str | None = None):
     token, account = require_user(request)
     live = iface_dump(cfg()["iface"])["peers"]
     configs = [config_view(cl, live) for cl in account_configs(int(account["id"]))]
+    status, fresh = routing_status()
     return render_page(
         request, "me.html", "me", role="user",
         csrf=csrf(token), err=err, ok=ok, configs=configs,
         email=account["email"], last_login=human_ts(account["last_login"]),
         limit=max_configs_for(account),
         has_app=ANDROID_APK.exists(),
+        # Which exit each configuration rides right now, plus the state the
+        # failover reported for it: the cabinet must show it without a click.
+        current_exit_of=status.get("clients") or {},
+        exit_states=status.get("exits") or {},
+        exits_by_iface={e["iface"]: e for e in exits_rows()},
+        status_fresh=fresh,
     )
 
 
 @app.get("/me/account", response_class=HTMLResponse)
 def me_account(request: Request, err: str | None = None, ok: str | None = None):
     token, account = require_user(request)
-    return render_page(request, "me_account.html", "account", role="user",
-                       csrf=csrf(token), email=account["email"], err=err, ok=ok)
+    status, fresh = routing_status()
+    return render_page(
+        request, "me_account.html", "account", role="user",
+        csrf=csrf(token), email=account["email"], err=err, ok=ok,
+        # The account's own order: what a new configuration starts with.
+        order=account_exits(int(account["id"]), "internet"),
+        exit_states=status.get("exits") or {},
+        status_fresh=fresh,
+    )
+
+
+@app.get("/me/checks", response_class=HTMLResponse)
+def me_checks(request: Request, err: str | None = None, ok: str | None = None):
+    token, account = require_user(request)
+    status = read_status()
+    fresh = fresh_routing_status(status, int(time.time()))
+    results = (status.get("checks") or {}).get(str(account["id"]), {}) if fresh else {}
+    # Clients read a place, not an interface: awg3 means nothing to them.
+    label_of = {
+        e["iface"]: (e["country"] or e["comment"] or e["name"])
+        for e in exits_rows()
+    }
+    checks = []
+    for ch in account_check_rows(int(account["id"])):
+        item = dict(ch)
+        item["known"] = str(ch["id"]) in results
+        item["failing"] = [
+            label_of.get(iface, iface)
+            for iface in results.get(str(ch["id"]), {}).get("failing", [])
+        ]
+        checks.append(item)
+    return render_page(
+        request, "me_checks.html", "checks", role="user",
+        csrf=csrf(token), email=account["email"], err=err, ok=ok,
+        checks=checks, limit=MAX_ACCOUNT_CHECKS, status_fresh=fresh,
+    )
+
+
+@app.post("/me/checks")
+def me_check_add(
+    request: Request,
+    kind: str = Form(...),
+    target: str = Form(""),
+    label: str = Form(""),
+    csrf_token: str = Form(...),
+):
+    token, account = require_user(request)
+    if not hmac.compare_digest(csrf_token, csrf(token)):
+        raise HTTPException(status_code=400, detail="csrf")
+    problem = check_target_error(kind, target)
+    label = label.strip()
+    if not problem and len(label) > 40:
+        problem = "label is too long"
+    if problem:
+        return RedirectResponse("/me/checks?err=" + quote(problem), status_code=303)
+    # The cap is enforced inside the insert: two parallel requests must not
+    # slip a fourth check past a separate count.
+    with db() as conn:
+        added = conn.execute(
+            "INSERT INTO account_checks "
+            "(account_id, kind, target, label, enabled, created_at) "
+            "SELECT ?, ?, ?, ?, 1, ? WHERE ("
+            "SELECT count(*) FROM account_checks WHERE account_id = ?) < ?",
+            (int(account["id"]), kind, target.strip(), label, _now_iso(),
+             int(account["id"]), MAX_ACCOUNT_CHECKS),
+        ).rowcount
+    if not added:
+        problem = f"at most {MAX_ACCOUNT_CHECKS} checks per account"
+        return RedirectResponse("/me/checks?err=" + quote(problem), status_code=303)
+    audit("user_check_added", f"{account['email']} {kind} {target.strip()}")
+    return RedirectResponse("/me/checks?ok=check+added", status_code=303)
+
+
+@app.post("/me/checks/{cid}/toggle")
+def me_check_toggle(request: Request, cid: int, csrf_token: str = Form(...)):
+    token, account = require_user(request)
+    if not hmac.compare_digest(csrf_token, csrf(token)):
+        raise HTTPException(status_code=400, detail="csrf")
+    ch = account_check_row(int(account["id"]), cid)
+    if not ch:
+        raise HTTPException(status_code=404)
+    with db() as conn:
+        conn.execute(
+            "UPDATE account_checks SET enabled = ? WHERE id = ?",
+            (0 if ch["enabled"] else 1, cid),
+        )
+    audit("user_check_toggled", f"{account['email']} {ch['kind']} {ch['target']}")
+    return RedirectResponse("/me/checks?ok=check+updated", status_code=303)
+
+
+@app.post("/me/checks/{cid}/delete")
+def me_check_delete(request: Request, cid: int, csrf_token: str = Form(...)):
+    token, account = require_user(request)
+    if not hmac.compare_digest(csrf_token, csrf(token)):
+        raise HTTPException(status_code=400, detail="csrf")
+    ch = account_check_row(int(account["id"]), cid)
+    if not ch:
+        raise HTTPException(status_code=404)
+    with db() as conn:
+        conn.execute("DELETE FROM account_checks WHERE id = ?", (cid,))
+    audit("user_check_deleted", f"{account['email']} {ch['kind']} {ch['target']}")
+    return RedirectResponse("/me/checks?ok=check+deleted", status_code=303)
 
 
 @app.get("/me/configs/new", response_class=HTMLResponse)
@@ -3721,6 +3947,7 @@ def api_exits(request: Request, config_id: int | None = None):
     cl = api_config(account, config_id)
     status, fresh = routing_status()
     known = status.get("exits", {})
+    active = status.get("active")
     return [
         {
             "id": e["id"],
@@ -3731,6 +3958,10 @@ def api_exits(request: Request, config_id: int | None = None):
             "alive": bool(known.get(e["iface"], {}).get("alive")) if fresh else None,
             "degraded": bool(known.get(e["iface"], {}).get("degraded")) if fresh else None,
             "rtt_ms": known.get(e["iface"], {}).get("rtt_ms") if fresh else None,
+            # The exit the default route currently points at, which is not
+            # necessarily this configuration's first choice: an account with
+            # its own checks can ride another one.
+            "active": (e["iface"] == active) if fresh and active else None,
             "status_fresh": fresh,
         }
         for e in config_internet_exits(cl)
@@ -3854,6 +4085,8 @@ def status_json(request: Request, overview: bool = False):
     exits = {
         e["iface"]: {
             "name": e["name"],
+            "comment": e["comment"],
+            "country": e["country"],
             "enabled": bool(e["enabled"]),
             "mode": e["mode"],
             "alive": (status.get("exits") or {}).get(e["iface"], {}).get("alive"),

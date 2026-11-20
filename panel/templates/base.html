@@ -237,6 +237,9 @@
           put(el, item && item.enabled ? 'enabled' : 'disabled');
         } else if (kind === 'exit') {
           badge(el, exits[key]);
+        } else if (kind === 'current-state') {
+          item = configs[key];
+          badge(el, item && exits[item.iface]);
         } else if (kind === 'ping') {
           ping(el, exits[key]);
         } else if (kind === 'pingparts') {
@@ -247,6 +250,10 @@
         } else if (kind === 'current') {
           item = configs[key];
           put(el, (item && item.iface) || 'none');
+        } else if (kind === 'current-label') {
+          item = configs[key];
+          var current = item && exits[item.iface];
+          put(el, current ? (current.country || current.comment || current.name) : 'none');
         } else if (kind === 'online') {
           put(el, String(data.online));
         } else if (kind === 'rx-total') {
@@ -330,7 +337,7 @@
   {% endif %}
   <main class="main">
     {% if role == 'user' %}
-    <nav class="cab-nav" aria-label="Cabinet"><a href="/me" {% if nav != 'account' %}aria-current="page"{% endif %}>My configurations</a><a href="/me/account" {% if nav == 'account' %}aria-current="page"{% endif %}>Account</a></nav>
+    <nav class="cab-nav" aria-label="Cabinet"><a href="/me" {% if nav == 'me' %}aria-current="page"{% endif %}>My configurations</a><a href="/me/checks" {% if nav == 'checks' %}aria-current="page"{% endif %}>Checks</a><a href="/me/account" {% if nav == 'account' %}aria-current="page"{% endif %}>Account</a></nav>
     {% endif %}
     {% if not hide_nav and nav != 'overview' %}
     <div id="live-stale" class="oc-muted" role="status"></div>

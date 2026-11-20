@@ -31,7 +31,7 @@
     <tbody>
     {% for e in exits %}
       <tr data-href="/exits/{{ e.id }}" tabindex="0">
-        <td><span class="name-cell">{{ e.name }}{% if e.comment %}<span class="oc-muted" style="margin-left:8px">{{ e.comment }}</span>{% endif %}{% if e.active %}<span class="oc-badge oc-badge--accent">active</span>{% endif %}
+        <td><span class="name-cell">{{ e.name }}{% if e.country or e.comment %}<span class="oc-muted" style="margin-left:8px">{{ e.country }}{% if e.country and e.comment %} · {% endif %}{{ e.comment }}</span>{% endif %}{% if e.active %}<span class="oc-badge oc-badge--accent">active</span>{% endif %}
                 {% if e.pinned %}<span class="oc-badge oc-badge--warning">pinned</span>{% endif %}</span></td>
         <td>
           <span class="oc-badge {% if not e.enabled %}oc-badge--subtle{% elif e.degraded %}oc-badge--warning{% elif e.alive %}oc-badge--success{% elif e.alive is none %}{% else %}oc-badge--danger{% endif %}" data-live="exit|{{ e.iface }}">{% if not e.enabled %}disabled{% elif e.degraded %}degraded{% elif e.alive %}up{% elif e.alive is none %}no data{% else %}down{% endif %}</span>

@@ -1,0 +1,105 @@
+{% extends "base.html" %}
+{% block title %}checks — deeps kaskad{% endblock %}
+{% block topbar %}<a class="oc-mono topbar-link" href="/me">{{ email }}</a>{% endblock %}
+{% block body %}
+<div class="page-head">
+  <div class="name-cell">
+    <h1 style="margin:0">Checks</h1>
+    <span class="oc-badge oc-badge--subtle">{{ checks | length }} of {{ limit }}</span>
+  </div>
+  <p class="oc-muted" style="margin-top:6px">
+    Destinations that matter to you. They are tested through every exit your
+    account may use; an exit that fails them is skipped for your
+    configurations while another exit works.
+  </p>
+</div>
+
+{% if err %}<div class="oc-alert oc-alert--danger" style="margin-bottom:16px"><span class="oc-dot" style="margin-top:7px"></span><div class="oc-alert__body">{{ err }}</div></div>{% endif %}
+{% if ok %}<div class="oc-alert oc-alert--success" style="margin-bottom:16px"><span class="oc-dot" style="margin-top:7px"></span><div class="oc-alert__body">{{ ok }}</div></div>{% endif %}
+
+<div class="stack">
+  <section>
+    <h2 class="oc-section__title">your checks</h2>
+    {% if checks %}
+    <div class="oc-panel">
+      <div class="table-scroll">
+      <table class="oc-table">
+        <thead><tr><th>Check</th><th style="width:1%">Type</th><th style="width:1%">Result</th><th style="width:1%"></th></tr></thead>
+        <tbody>
+        {% for c in checks %}
+          <tr>
+            <td>
+              {{ c.label or c.target }}
+              {% if not c.enabled %}<span class="oc-badge oc-badge--subtle">disabled</span>{% endif %}
+              <div class="cell-sub oc-mono" style="word-break:break-all">{{ c.target }}</div>
+            </td>
+            <td><span class="oc-badge oc-badge--subtle">{{ c.kind }}</span></td>
+            <td>
+              {% if not c.enabled %}<span class="oc-muted">—</span>
+              {% elif not status_fresh or not c.known %}<span class="oc-muted">unknown</span>
+              {% elif c.failing %}<span class="oc-badge oc-badge--warning">failing via {{ c.failing | join(', ') }}</span>
+              {% else %}<span class="oc-badge oc-badge--success">passing</span>{% endif %}
+            </td>
+            <td>
+              <div class="actions" style="flex-wrap:nowrap">
+                <form method="post" action="/me/checks/{{ c.id }}/toggle">
+                  <input type="hidden" name="csrf_token" value="{{ csrf }}">
+                  <button class="oc-btn oc-btn--neutral oc-btn--sm">{{ 'disable' if c.enabled else 'enable' }}</button>
+                </form>
+                <form method="post" action="/me/checks/{{ c.id }}/delete"
+                      data-confirm="Delete this check? It stops affecting your failover immediately.">
+                  <input type="hidden" name="csrf_token" value="{{ csrf }}">
+                  <button class="oc-btn oc-btn--ghost-danger oc-btn--sm">delete</button>
+                </form>
+              </div>
+            </td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+      </div>
+    </div>
+    {% else %}
+    <div class="oc-empty">no checks yet — add a destination you depend on.</div>
+    {% endif %}
+  </section>
+
+  {% if checks | length < limit %}
+  <section>
+    <h2 class="oc-section__title">add a check</h2>
+    <div class="oc-panel" style="padding:16px">
+      <form method="post" action="/me/checks" class="form-grid" style="max-width:640px">
+        <input type="hidden" name="csrf_token" value="{{ csrf }}">
+        <label class="oc-field">
+          <span class="oc-field__label">type</span>
+          <select class="oc-input" name="kind" aria-label="check type">
+            <option value="http">HTTP</option>
+            <option value="icmp">ICMP</option>
+          </select>
+        </label>
+        <label class="oc-field" style="grid-column: span 2">
+          <span class="oc-field__label">target</span>
+          <input class="oc-input" type="text" name="target" required
+                 placeholder="https://example.com/health or 1.1.1.1"
+                 spellcheck="false" autocapitalize="none">
+        </label>
+        <label class="oc-field" style="grid-column: 1 / -1">
+          <span class="oc-field__label">label (optional)</span>
+          <input class="oc-input" type="text" name="label" maxlength="40"
+                 placeholder="work portal">
+        </label>
+        <div style="grid-column: 1 / -1">
+          <button class="oc-btn oc-btn--contrast oc-btn--sm">add check</button>
+        </div>
+      </form>
+      <p class="oc-hint" style="margin-top:10px">
+        HTTP expects a 2xx or 3xx answer. Only public addresses: private,
+        loopback and link-local targets are refused.
+      </p>
+    </div>
+  </section>
+  {% else %}
+  <p class="oc-muted">Limit reached: {{ limit }} checks. Delete one to add another.</p>
+  {% endif %}
+</div>
+{% endblock %}

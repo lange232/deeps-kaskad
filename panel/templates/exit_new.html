@@ -32,10 +32,15 @@
                placeholder="10" inputmode="numeric">
         <span class="oc-hint">lower is more important</span>
       </label>
+      <label class="oc-field">
+        <span class="oc-field__label">country</span>
+        <input class="oc-input" type="text" name="country" maxlength="40"
+               value="{{ form.country or '' }}" placeholder="Netherlands">
+      </label>
       <label class="oc-field full">
         <span class="oc-field__label">comment</span>
         <input class="oc-input" type="text" name="comment" maxlength="120"
-               value="{{ form.comment or '' }}" placeholder="Finland, Helsinki">
+               value="{{ form.comment or '' }}" placeholder="Amsterdam, 2 Gbit/s">
       </label>
       <label class="oc-field" id="exit-routes-row">
         <span class="oc-field__label">subnets</span>
