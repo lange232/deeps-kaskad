@@ -1,0 +1,565 @@
+# Panel HTTP API
+
+Reference for the HTTP interface of a deployed kaskad panel. It covers the
+bearer-token API used by the Android client, the public monitoring endpoints
+and the internal endpoint the panel's own pages poll. The HTML administration
+and cabinet pages are not part of this API: they use a session cookie, HTML
+forms and a CSRF token.
+
+- Base URL: `https://<host>:8080` (TLS with a Let's Encrypt or self-signed
+  certificate).
+- API prefix: `/api/`.
+- Panel version at the time of writing: `0.4.x`.
+
+## Conventions
+
+- Requests with a body are `application/x-www-form-urlencoded`. The API does
+  not accept JSON request bodies.
+- Responses are JSON (`application/json; charset=utf-8`) unless an endpoint
+  says otherwise. The `.conf` endpoints return `text/plain; charset=utf-8`.
+- Authentication is `Authorization: Bearer <token>`.
+- There is no CSRF token on API calls: the bearer token is the only proof.
+- API errors are `{"detail": "<message>"}`. Validation errors are
+  `{"detail": [{"type": ..., "loc": [...], "msg": ...}]}` with status `422`.
+- Browser (non-API) errors carry an empty body. Do not rely on a JSON `detail`
+  outside `/api/`.
+- Field names and status codes are stable. New fields may be added; clients
+  must ignore unknown keys and must not assume an exact key set.
+
+## Authentication
+
+`POST /api/login` exchanges an account email and password for a bearer token.
+Only regular accounts can sign in: the administrator login (`admin`) is
+rejected, and a disabled account is rejected like a wrong password.
+
+- Token lifetime: **30 days**.
+- `expires_at` is a Unix timestamp in seconds.
+- The token is opaque and signed; it is stored server-side and can be revoked.
+- `POST /api/logout` revokes the presented token.
+- Changing the password, resetting it, or "sign out everywhere" revokes every
+  token of the account.
+- Disabling the account invalidates its tokens.
+- A revoked, expired or malformed token gets `401` with `sign in again`.
+
+### Sign-in limits
+
+Failed sign-ins are counted per address and per address + email for 5 minutes:
+
+- 5 failures for the same address and email block that pair with `429`;
+- 20 failures from one address block that address with `429`;
+- after 3 failures for one email each further attempt is delayed by up to 3
+  seconds;
+- a successful sign-in clears the counters for that account.
+
+Failures are logged as `KASKAD_AUTH_FAIL ... via=api` and written to the
+journal. The response is always `401 wrong email or password`, so it does not
+reveal whether the account exists or is disabled.
+
+## Endpoints
+
+| Method | Path | Purpose |
+|---|---|---|
+| POST | `/api/login` | Exchange email and password for a token |
+| GET | `/api/me` | Account and its configurations |
+| POST | `/api/logout` | Revoke the presented token |
+| POST | `/api/me/configs` | Create a configuration, or return this device's |
+| POST | `/api/me/configs/{id}/toggle` | Enable or disable a configuration |
+| DELETE | `/api/me/configs/{id}` | Delete a configuration, its keys and history |
+| GET | `/api/me/conf` | Download a `.conf` (first configuration by default) |
+| GET | `/api/me/configs/{id}/conf` | Download the `.conf` of one configuration |
+| GET | `/api/me/configs/{id}/traffic` | Traffic history of one configuration |
+| GET | `/api/me/exits` | Internet exits available to a configuration |
+| POST | `/api/me/exits/order` | Set the configuration's exit order |
+| GET | `/api/me/subnets` | Subnets granted to the account and their choice |
+| POST | `/api/me/subnets` | Switch subnets on or off for a configuration |
+
+Object shapes are collected in [Data objects](#data-objects).
+
+---
+
+### POST /api/login
+
+Form fields:
+
+| Field | Required | Notes |
+|---|---|---|
+| `email` | yes | Account email, case-insensitive |
+| `password` | yes | 12 characters or more |
+
+Response `200`:
+
+```json
+{
+  "token": "eyJyb2xlIjogInVzZXIi...",
+  "expires_at": 1797393600,
+  "email": "user@example.com",
+  "client": { "id": 4, "name": "pixel-8", "...": "..." },
+  "configs": [ { "id": 4, "name": "pixel-8", "...": "..." } ]
+}
+```
+
+- `client` is a compatibility field: the account's first configuration by id,
+  or `null` when the account has none. New code should use `configs`.
+- `configs` contains full [configuration objects](#configuration).
+
+Errors: `401 wrong email or password`, `401` for a disabled account,
+`429 too many attempts, wait 5 minutes`, `422` for a missing password.
+
+---
+
+### GET /api/me
+
+Requires a bearer token. Returns the same account view without a token:
+
+```json
+{
+  "email": "user@example.com",
+  "client": null,
+  "configs": []
+}
+```
+
+---
+
+### POST /api/logout
+
+Revokes the token from the `Authorization` header. Calling it without a token
+is not an error.
+
+```json
+{"ok": true}
+```
+
+---
+
+### POST /api/me/configs
+
+Creates a configuration with server-generated keys. Also acts as an idempotent
+"get or create" for a device.
+
+Form fields:
+
+| Field | Required | Notes |
+|---|---|---|
+| `name` | no | Latin letters, digits, `.`, `-`, up to 32 characters, starts with a letter or digit. If omitted, the server derives a name from the email |
+| `device_id` | no | Latin letters, digits, `-`, 8 to 64 characters. The app sends its stable device identifier |
+
+Behaviour:
+
+- With a `device_id` that the account already has, the existing configuration
+  is returned and no second one is created.
+- If `name` is already taken and the call creates a new configuration, the
+  server appends `-2`, `-3`, and so on. The response carries the name actually
+  used.
+- The account configuration limit applies. The default is 5; the
+  administrator can override it per account and in the settings.
+
+Response `200` (not `201`):
+
+```json
+{
+  "config": {
+    "id": 7,
+    "name": "pixel-8",
+    "device_id": "a1b2c3d4e5f60718",
+    "ip": "10.80.0.7",
+    "internet": true,
+    "enabled": true
+  },
+  "configs": [ { "id": 7, "name": "pixel-8", "...": "..." } ]
+}
+```
+
+`config` is the created or reused configuration (a shorter shape);
+`configs` is the full current list.
+
+Errors:
+
+| Status | Detail |
+|---|---|
+| 400 | `device_id: latin letters, digits, dash; 8 to 64 characters` |
+| 400 | `name: latin letters, digits, dot, dash; up to 32 characters` |
+| 409 | `this account already has N of M allowed configurations` |
+| 409 | `configuration already exists` (a raced request without a known device) |
+| 500 | `the WireGuard config could not be applied; not saved` |
+
+If applying the new configuration to the live interface fails, the row is
+rolled back and the error is returned.
+
+---
+
+### POST /api/me/configs/{id}/toggle
+
+Enables a disabled configuration or disables an enabled one. No body.
+
+```json
+{"ok": true, "enabled": false}
+```
+
+Errors: `404 configuration not found`, `500` when the generated `awg0`
+configuration cannot be applied.
+
+---
+
+### DELETE /api/me/configs/{id}
+
+Deletes the configuration, its keys, its routing table allocation and its
+traffic history. This cannot be undone; the device loses access immediately.
+
+```json
+{"ok": true}
+```
+
+Errors: `404 configuration not found`, `500` when the live interface cannot be
+updated.
+
+---
+
+### GET /api/me/conf?config_id=N
+
+Returns the WireGuard/AmneziaWG configuration as plain text, ready to import.
+`config_id` is optional; `0` or an omitted value means the account's first
+configuration.
+
+- Content type: `text/plain; charset=utf-8`.
+- No `Content-Disposition`: the app reads the body directly.
+- The browser download (`/me/configs/{id}/conf`) is different: it is sent as
+  `application/octet-stream` with a `.conf` filename, so Android Chrome does
+  not rename it to `.txt`.
+
+Errors: `409 no configuration yet; create one first`, `404 configuration not
+found`, `400 configuration has neither internet nor subnets assigned`.
+
+---
+
+### GET /api/me/configs/{id}/conf
+
+The same body as above, addressed by configuration id.
+
+---
+
+### GET /api/me/configs/{id}/traffic?hours=24
+
+Traffic deltas recorded by the five-minute sampler.
+
+| Query | Default | Notes |
+|---|---|---|
+| `hours` | 24 | Clamped to 1..2160 (90 days) |
+
+Resolution: 300-second points for `hours <= 168`, hourly points above that.
+The response says which one it used.
+
+```json
+{
+  "config_id": 7,
+  "step_seconds": 300,
+  "points": [
+    {"ts": 1797393000, "rx": 1024, "tx": 20480},
+    {"ts": 1797393300, "rx": 0, "tx": 0}
+  ]
+}
+```
+
+- `rx`: bytes the peer sent, i.e. the client's upload.
+- `tx`: bytes the server sent, i.e. the client's download.
+- Points are deltas for their bucket, in ascending order.
+- A missing bucket means the sampler was not running; it is not a zero.
+- `points: []` means there is no history yet (for example, a new
+  configuration).
+- History older than a week is only kept hourly; older than 90 days is
+  dropped.
+
+---
+
+### GET /api/me/exits?config_id=N
+
+Internet exits granted to the account, in this configuration's order.
+Optional `config_id`; omitted or `0` means the first configuration.
+
+```json
+[
+  {
+    "id": 2,
+    "name": "nl-1",
+    "comment": "Amsterdam",
+    "alive": true,
+    "rtt_ms": 42,
+    "status_fresh": true
+  }
+]
+```
+
+- An empty list means the administrator granted no internet exit. The
+  configuration then has no internet access.
+- `alive` is `true` or `false`. It is `null` when the failover daemon has not
+  reported for more than 60 seconds; `rtt_ms` is also `null` then and
+  `status_fresh` is `false`. Do not treat `null` as "down".
+- `rtt_ms` is the panel-to-exit round trip, not the device's latency.
+- The order is the configuration's own order, which the user can change with
+  `/api/me/exits/order`.
+
+Errors: `409 no configuration yet; create one first`, `404 configuration not
+found`.
+
+---
+
+### POST /api/me/exits/order
+
+Replaces the configuration's exit order.
+
+| Field | Required | Notes |
+|---|---|---|
+| `exit_id` | yes | Repeated field. Must list **every** granted exit exactly once |
+| `config_id` | no | Default `0`: the account's first configuration |
+
+```json
+{"ok": true}
+```
+
+Errors: `400 the order must list every granted exit once`, `404 configuration
+not found`, `409 no configuration yet; create one first`.
+
+---
+
+### GET /api/me/subnets?config_id=N
+
+Subnet exits granted to the account, with the choice of the given
+configuration. Optional `config_id`; omitted or `0` means the first.
+
+```json
+[
+  {
+    "id": 5,
+    "name": "office",
+    "comment": "Office LAN",
+    "routes": "10.20.0.0/16, 10.21.0.0/16",
+    "enabled": true
+  }
+]
+```
+
+- `routes` is a comma-separated list of CIDRs.
+- `enabled` says whether this configuration currently uses the subnet.
+- Only enabled, granted routed exits are listed. Internet exits are separate
+  and come from `/api/me/exits`.
+
+---
+
+### POST /api/me/subnets
+
+Switches subnets on or off for one configuration.
+
+| Field | Required | Notes |
+|---|---|---|
+| `subnet_id` | no | Repeated field. Any subset of the account's grants; an empty list turns all off |
+| `config_id` | no | Default `0`: the account's first configuration |
+
+```json
+{
+  "ok": true,
+  "subnets": [
+    {"id": 5, "name": "office", "enabled": true},
+    {"id": 6, "name": "lab", "enabled": false}
+  ]
+}
+```
+
+Errors: `400 the account does not grant all of these subnets`, `404
+configuration not found`, `409 no configuration yet; create one first`.
+
+Changing subnets changes `AllowedIPs` and `DNS` in the generated `.conf`. The
+keys stay the same, but the device must import the new file.
+
+---
+
+## Data objects
+
+### Configuration
+
+Returned by `/api/login`, `/api/me` and `/api/me/configs`.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `id` | int | Configuration id |
+| `account_id` | int | Owning account |
+| `name` | string | Human name, unique across the panel |
+| `device_id` | string | Device identifier from the app; empty for old rows |
+| `ip` | string | Tunnel address without the prefix length |
+| `enabled` | bool | Peer enabled on the server |
+| `internet` | bool | The account grants at least one internet exit |
+| `exits` | string[] | Names of the routed subnets this configuration uses |
+| `remote_ip` | string | Peer address as the host sees it; empty until first connect |
+| `handshake` | int | Unix time of the last handshake; `0` for never |
+| `rx` | int | Bytes received from the peer since the interface came up |
+| `tx` | int | Bytes sent to the peer since the interface came up |
+
+`rx`/`tx` are live counters, not deltas. Use `/api/me/configs/{id}/traffic`
+for history.
+
+### Created configuration
+
+Returned as `config` by `POST /api/me/configs`:
+
+| Field | Type |
+|---|---|
+| `id` | int |
+| `name` | string |
+| `device_id` | string |
+| `ip` | string |
+| `internet` | bool |
+| `enabled` | bool |
+
+### Exit
+
+| Field | Type |
+|---|---|
+| `id` | int |
+| `name` | string |
+| `comment` | string, may be empty |
+| `alive` | `true`, `false` or `null` |
+| `rtt_ms` | int or `null` |
+| `status_fresh` | bool |
+
+### Subnet
+
+| Field | Type |
+|---|---|
+| `id` | int |
+| `name` | string |
+| `comment` | string, may be empty |
+| `routes` | string, comma-separated CIDRs |
+| `enabled` | bool |
+
+The `subnets` array returned by `POST /api/me/subnets` has only `id`, `name`
+and `enabled`.
+
+### Traffic point
+
+| Field | Type |
+|---|---|
+| `ts` | int, Unix time of the bucket start |
+| `rx` | int, bytes uploaded in the bucket |
+| `tx` | int, bytes downloaded in the bucket |
+
+---
+
+## Status codes
+
+| Code | When |
+|---|---|
+| 200 | Success, including create and toggle |
+| 400 | Invalid field value, invalid order or a foreign subnet |
+| 401 | Missing, expired or revoked token; wrong password |
+| 404 | Unknown configuration id |
+| 409 | No configuration yet, or the account is at its configuration limit |
+| 422 | Malformed form (missing required field, wrong type) |
+| 429 | Too many failed sign-ins |
+| 500 | The live interface could not be applied to; the database was rolled back |
+
+`500` bodies describe the failure generically. If the live device could not be
+rolled back after a failed apply, the message says so and asks to inspect
+`awg0` before continuing.
+
+---
+
+## Examples
+
+Sign in and keep the token:
+
+```sh
+TOKEN=$(curl -s https://panel.example.com:8080/api/login \
+  --data-urlencode email=user@example.com \
+  --data-urlencode 'password=correct horse battery staple' \
+  | python3 -c 'import json,sys; print(json.load(sys.stdin)["token"])')
+```
+
+List configurations:
+
+```sh
+curl -s https://panel.example.com:8080/api/me \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+Create or reuse this device's configuration:
+
+```sh
+curl -s https://panel.example.com:8080/api/me/configs \
+  -H "Authorization: Bearer $TOKEN" \
+  --data-urlencode name=pixel-8 \
+  --data-urlencode device_id=a1b2c3d4e5f60718
+```
+
+Download the configuration:
+
+```sh
+curl -s https://panel.example.com:8080/api/me/configs/7/conf \
+  -H "Authorization: Bearer $TOKEN" -o phone.conf
+```
+
+Set the exit order (the ids must match `/api/me/exits`):
+
+```sh
+curl -s https://panel.example.com:8080/api/me/exits/order \
+  -H "Authorization: Bearer $TOKEN" \
+  -d config_id=7 -d exit_id=2 -d exit_id=1
+```
+
+Switch one subnet on and another off:
+
+```sh
+curl -s https://panel.example.com:8080/api/me/subnets \
+  -H "Authorization: Bearer $TOKEN" \
+  -d config_id=7 -d subnet_id=5
+```
+
+Sign out:
+
+```sh
+curl -s -X POST https://panel.example.com:8080/api/logout \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+---
+
+## Public and internal endpoints
+
+These are not part of the mobile API and need no token.
+
+### GET /healthz
+
+Liveness probe for monitoring. It deliberately says nothing about the product
+or the release.
+
+```json
+{"ok": true, "failover_age": 7}
+```
+
+- `200` when the database responds and the failover status is younger than 60
+  seconds.
+- `503` when the database cannot be read or the status is stale; the body then
+  also carries `"error": "database"` in the database case.
+- `failover_age` is seconds since the failover daemon last wrote its status,
+  or `null` when it never did.
+
+### GET /ping
+
+Tiny target the panel's pages use to measure their round trip to the server.
+Returns `pong` as `text/plain` with `Cache-Control: no-store`.
+
+### GET /status.json
+
+Internal endpoint for the panel's own live page updates. It uses the session
+cookie, not a bearer token: an administrator sees all configurations, an
+account sees only its own. `?overview=true` adds the `overview` block for the
+administrator.
+
+The shape is an implementation detail of the web UI and may change without
+notice; the mobile client must not call it.
+
+---
+
+## Change policy
+
+The API has no version prefix. Changes are additive: new fields appear, and
+clients must ignore unknown keys. Removing a field or changing its type is a
+breaking change and gets a new panel release with a note in `CHANGELOG.md`.

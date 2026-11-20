@@ -387,6 +387,9 @@ uses the same accounts as `/me`; the administrator login is not accepted.
 Form-encoded requests, JSON responses, the same sign-in limits and fail2ban
 logging as the web login (`via=api` in the journal line).
 
+The full reference, with request and response bodies, the error catalogue and
+examples, is in [`docs/API.md`](docs/API.md). The list below is a quick index.
+
 ```
 POST /api/login                   email, password -> {token, expires_at, email, client, configs}
 GET  /api/me                      -> account and its configurations
