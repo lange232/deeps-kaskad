@@ -6,8 +6,9 @@ and the internal endpoint the panel's own pages poll. The HTML administration
 and cabinet pages are not part of this API: they use a session cookie, HTML
 forms and a CSRF token.
 
-- Base URL: `https://<host>:8080` (TLS with a Let's Encrypt or self-signed
-  certificate).
+- Base URL: `https://<host>:<port>` (TLS with a Let's Encrypt or self-signed
+  certificate). The port comes from the host inventory (`kaskad_panel_port`);
+  `8080` is the default and `443` is common. Examples below use `:8080`.
 - API prefix: `/api/`.
 - Panel version at the time of writing: `0.4.x`.
 
