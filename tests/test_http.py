@@ -602,6 +602,30 @@ class AccountCheckTests(PanelTestCase):
             page = self.client.get("/me/checks").text
         self.assertIn("failing via awg1", page)
 
+    def test_the_cabinet_names_the_exit_country(self):
+        aid, _ = self.start()
+        self.add()
+        self.seed_exit(name="nl-1", iface="awg1")
+        with app.db() as conn:
+            conn.execute("UPDATE exits SET country = 'Netherlands' WHERE iface = 'awg1'")
+            cid = conn.execute(
+                "SELECT id FROM account_checks WHERE account_id = ?", (aid,)
+            ).fetchone()[0]
+        status = {"ts": int(time.time()),
+                  "checks": {str(aid): {str(cid): {"failing": ["awg1"]}}}}
+        with mock.patch.object(app, "read_status", return_value=status):
+            page = self.client.get("/me/checks").text
+        self.assertIn("failing via Netherlands", page)
+        self.assertNotIn("failing via awg1", page)
+
+    def test_an_unreported_check_reads_unknown(self):
+        aid, _ = self.start()
+        self.add()
+        status = {"ts": int(time.time()), "checks": {str(aid): {}}}
+        with mock.patch.object(app, "read_status", return_value=status):
+            page = self.client.get("/me/checks").text
+        self.assertIn("unknown", page)
+
     def test_target_validation(self):
         self.assertIsNone(app.check_target_error("http", "http://1.1.1.1/"))
         self.assertIsNone(app.check_target_error("icmp", "1.1.1.1"))

@@ -208,7 +208,14 @@ An account can keep up to three of its own destinations — an HTTP URL or a
 host for ICMP — in the cabinet (`/me/checks`). They are probed through every
 exit the account may use; an exit that fails them for that account is skipped
 for that account's configurations only, and only while another allowed exit
-works. Other accounts and the global active exit are not affected.
+works. Other accounts and the global active exit are not affected. Checks are
+probed for at most four accounts per cycle, rotating, so many accounts cannot
+stretch the ten-second interval; a host with more accounts sees each of them
+every few cycles.
+
+An exit can carry a `country` next to its comment. The cabinet names the exit
+a configuration rides by that country, falling back to the comment and then
+the name, so a client reads a place instead of an internal interface.
 
 Manual switching is a button in the panel: the chosen interface is stored in
 the `manual_exit` setting and stays pinned while that exit is alive; "return

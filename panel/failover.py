@@ -19,9 +19,11 @@ none of them is alive the route is removed and that client has no internet.
 """
 from __future__ import annotations
 
+import ipaddress
 import json
 import os
 import re
+import socket
 import sqlite3
 import subprocess
 import sys
@@ -30,6 +32,7 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import closing
 from datetime import datetime, timezone
 from pathlib import Path
+from urllib.parse import urlparse
 
 import routing
 
@@ -62,10 +65,17 @@ HTTP_TIMEOUT = 4
 CHECK_DEAD_AFTER = 3
 CHECK_RECOVER = 3
 CHECK_TIMEOUT = 5
+# Account checks are advisory: they tune per-account routing but must never
+# push the global failover cycle past its ten-second interval. Each tick
+# probes a few accounts in turn, so every account is still covered, just not
+# on every round when many accounts keep checks.
+CHECK_ACCOUNTS_PER_TICK = 4
 RTT_RE = re.compile(r"time=([0-9.]+)\s*ms")
 
 state: dict[str, dict] = {}
 check_state: dict[tuple[int, str], dict] = {}
+# Round-robin position over the accounts that keep checks.
+check_cursor = 0
 # Tunnels that were present on the previous tick. A change means old routes
 # may be stale and new ones were never created: routing is re-applied then,
 # because kaskad-routing.service only runs once at boot and cannot know that
@@ -374,7 +384,41 @@ def account_grants() -> list[dict]:
         conn.close()
 
 
+def target_host(kind: str, target: str) -> str:
+    """The host part of a check target: an address, or the URL's host."""
+    if kind == "http":
+        return urlparse(target).hostname or ""
+    return target
+
+
+def public_target(kind: str, target: str) -> bool:
+    """False when the target resolves into private space.
+
+    A name can point at a private address long after it was added, so the
+    address is checked at probe time too, not only when the check is saved.
+    """
+    host = target_host(kind, target)
+    if not host:
+        return False
+    try:
+        infos = socket.getaddrinfo(host, None)
+    except OSError:
+        return False
+    if not infos:
+        return False
+    for info in infos:
+        try:
+            ip = ipaddress.ip_address(info[4][0].split("%", 1)[0])
+        except ValueError:
+            return False
+        if not ip.is_global:
+            return False
+    return True
+
+
 def check_ok(kind: str, target: str, iface: str) -> bool:
+    if not public_target(kind, target):
+        return False
     try:
         if kind == "http":
             res = run(
@@ -412,22 +456,58 @@ def update_check_state(
             log(f"check {target}: failing via {iface}")
 
 
-def run_account_checks() -> tuple[dict[int, set[str]], dict]:
+def run_account_checks(alive=None) -> tuple[dict[int, set[str]], dict]:
     """Probes the accounts' targets through their exits.
 
+    ``alive``, when given, limits the probes to exits the failover currently
+    considers alive: probing a dead tunnel only burns the HTTP timeout. A
+    rotating slice of accounts is probed per tick, so a host with many
+    accounts still keeps its cycle short.
+
     Returns the exits each account should avoid and a compact report for the
-    panel: account -> check -> failing interfaces.
+    panel: account -> check -> failing interfaces. A check is reported only
+    when the account has at least one exit to try it through; otherwise the
+    panel shows it as unknown rather than as passing.
     """
+    global check_cursor
     checks = account_checks()
-    by_account: dict[int, list[str]] = {}
+    granted: dict[int, list[str]] = {}
     for grant in account_grants():
-        ifaces = by_account.setdefault(grant["account_id"], [])
+        ifaces = granted.setdefault(grant["account_id"], [])
         if grant["iface"] not in ifaces:
             ifaces.append(grant["iface"])
+
+    # Drop state for checks, exits or accounts that no longer exist. This is
+    # the full set, not the probed slice: a check skipped this tick keeps its
+    # last known result instead of flapping back to unknown.
+    known = {
+        (ch["id"], iface)
+        for ch in checks
+        for iface in granted.get(ch["account_id"], [])
+    }
+    for key in list(check_state):
+        if key not in known:
+            check_state.pop(key, None)
+
+    accounts = sorted({ch["account_id"] for ch in checks})
+    if len(accounts) <= CHECK_ACCOUNTS_PER_TICK:
+        selected = accounts
+    else:
+        start = check_cursor % len(accounts)
+        selected = [
+            accounts[(start + i) % len(accounts)]
+            for i in range(CHECK_ACCOUNTS_PER_TICK)
+        ]
+        check_cursor = start + CHECK_ACCOUNTS_PER_TICK
+    chosen = set(selected)
+
+    live = set(alive) if alive is not None else None
     tasks = [
         (ch, iface)
         for ch in checks
-        for iface in by_account.get(ch["account_id"], [])
+        if ch["account_id"] in chosen
+        for iface in granted.get(ch["account_id"], [])
+        if live is None or iface in live
     ]
     if tasks:
         with ThreadPoolExecutor(max_workers=min(8, len(tasks))) as pool:
@@ -438,20 +518,16 @@ def run_account_checks() -> tuple[dict[int, set[str]], dict]:
         for (ch, iface), ok in zip(tasks, results):
             update_check_state(ch["id"], ch["target"], iface, ok)
 
-    active = {
-        (ch["id"], iface)
-        for ch in checks
-        for iface in by_account.get(ch["account_id"], [])
-    }
-    for key in list(check_state):
-        if key not in active:
-            check_state.pop(key, None)
-
     avoid: dict[int, set[str]] = {}
     report: dict = {}
     for ch in checks:
+        ifaces = granted.get(ch["account_id"], [])
+        # A check nobody has probed yet stays out of the report: the panel
+        # then shows it as unknown, not as passing.
+        if not any((ch["id"], iface) in check_state for iface in ifaces):
+            continue
         failing = []
-        for iface in by_account.get(ch["account_id"], []):
+        for iface in ifaces:
             if check_state.get((ch["id"], iface), {}).get("bad"):
                 failing.append(iface)
                 avoid.setdefault(ch["account_id"], set()).add(iface)
@@ -720,7 +796,7 @@ def tick(c: dict) -> None:
         log(f"no alive internet exit: {active} is no longer active")
 
     record_exit_transition(active, read_active(), manual, alive, degraded)
-    avoid, check_report = run_account_checks()
+    avoid, check_report = run_account_checks(alive)
     choices: dict[tuple[int, str], list[str]] = {}
     avoid_by_client: dict[tuple[int, str], set[str]] = {}
     for grant in client_grants():

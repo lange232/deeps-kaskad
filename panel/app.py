@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 import hmac
 import ipaddress
@@ -70,6 +71,9 @@ DEFAULT_MAX_CONFIGS = 5
 # describe the destinations that matter without turning the failover loop
 # into a scanner.
 MAX_ACCOUNT_CHECKS = 3
+# A name that does not resolve quickly is treated as invalid: the request
+# handler must not hang on a slow resolver.
+RESOLVE_TIMEOUT = 3
 
 def human_ts(value) -> str:
     if not value:
@@ -347,6 +351,9 @@ def migrate(conn: sqlite3.Connection, existing: set[str]) -> None:
     conn.execute(
         "DELETE FROM account_exits WHERE account_id NOT IN (SELECT id FROM accounts) "
         "OR exit_id NOT IN (SELECT id FROM exits)"
+    )
+    conn.execute(
+        "DELETE FROM account_checks WHERE account_id NOT IN (SELECT id FROM accounts)"
     )
     # The subnets a configuration uses are now an explicit choice. The first
     # start on an older database writes the old default — everything the
@@ -3152,8 +3159,11 @@ def check_target_error(kind: str, target: str) -> str | None:
     if host.lower() == "localhost" or host.lower().endswith(".local"):
         return "only public addresses are allowed"
     try:
-        infos = socket.getaddrinfo(host, None)
-    except OSError:
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            infos = pool.submit(
+                socket.getaddrinfo, host, None
+            ).result(timeout=RESOLVE_TIMEOUT)
+    except (OSError, TimeoutError):
         return "the host does not resolve"
     addresses = {info[4][0] for info in infos}
     if not addresses:
@@ -3233,11 +3243,19 @@ def me_checks(request: Request, err: str | None = None, ok: str | None = None):
     status = read_status()
     fresh = fresh_routing_status(status, int(time.time()))
     results = (status.get("checks") or {}).get(str(account["id"]), {}) if fresh else {}
+    # Clients read a place, not an interface: awg3 means nothing to them.
+    label_of = {
+        e["iface"]: (e["country"] or e["comment"] or e["name"])
+        for e in exits_rows()
+    }
     checks = []
     for ch in account_check_rows(int(account["id"])):
         item = dict(ch)
         item["known"] = str(ch["id"]) in results
-        item["failing"] = results.get(str(ch["id"]), {}).get("failing", [])
+        item["failing"] = [
+            label_of.get(iface, iface)
+            for iface in results.get(str(ch["id"]), {}).get("failing", [])
+        ]
         checks.append(item)
     return render_page(
         request, "me_checks.html", "checks", role="user",
@@ -3257,21 +3275,26 @@ def me_check_add(
     token, account = require_user(request)
     if not hmac.compare_digest(csrf_token, csrf(token)):
         raise HTTPException(status_code=400, detail="csrf")
-    if len(account_check_rows(int(account["id"]))) >= MAX_ACCOUNT_CHECKS:
-        problem = f"at most {MAX_ACCOUNT_CHECKS} checks per account"
-    else:
-        problem = check_target_error(kind, target)
+    problem = check_target_error(kind, target)
     label = label.strip()
     if not problem and len(label) > 40:
         problem = "label is too long"
     if problem:
         return RedirectResponse("/me/checks?err=" + quote(problem), status_code=303)
+    # The cap is enforced inside the insert: two parallel requests must not
+    # slip a fourth check past a separate count.
     with db() as conn:
-        conn.execute(
-            "INSERT INTO account_checks (account_id, kind, target, label, enabled, created_at) "
-            "VALUES (?, ?, ?, ?, 1, ?)",
-            (int(account["id"]), kind, target.strip(), label, _now_iso()),
-        )
+        added = conn.execute(
+            "INSERT INTO account_checks "
+            "(account_id, kind, target, label, enabled, created_at) "
+            "SELECT ?, ?, ?, ?, 1, ? WHERE ("
+            "SELECT count(*) FROM account_checks WHERE account_id = ?) < ?",
+            (int(account["id"]), kind, target.strip(), label, _now_iso(),
+             int(account["id"]), MAX_ACCOUNT_CHECKS),
+        ).rowcount
+    if not added:
+        problem = f"at most {MAX_ACCOUNT_CHECKS} checks per account"
+        return RedirectResponse("/me/checks?err=" + quote(problem), status_code=303)
     audit("user_check_added", f"{account['email']} {kind} {target.strip()}")
     return RedirectResponse("/me/checks?ok=check+added", status_code=303)
 
