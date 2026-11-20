@@ -112,6 +112,32 @@ exit's CIDRs.
 On the provider side, the subnets must be allowed in the peer and routed back
 to us. That part is outside this project.
 
+## Own exit nodes
+
+An exit does not have to come from a provider. `roles/exit` turns a plain
+Ubuntu host into one: it installs AmneziaWG, enables forwarding, generates the
+interface key on the host itself, writes `awg0` with the obfuscation
+parameters from the inventory and NATs the transit range to the uplink.
+
+```bash
+cp inventory.exit.example.yml inventory.exit.yml   # gitignored
+ansible-playbook -i inventory.exit.yml playbooks/exit.yml --check
+ansible-playbook -i inventory.exit.yml playbooks/exit.yml
+```
+
+The run prints the node's public key. The S1 side is built from it: transit
+`10.9.0.2/32`, `Endpoint = <name>:51820`, the same `Jc/S*/H*`, `AllowedIPs =
+0.0.0.0/0`; then it is pasted into `/exits/new` with mode `internet`. The
+private key of S1 stays in `state/` on the control machine and never reaches
+the node.
+
+Both ends must carry the same obfuscation values - they are per tunnel, not
+per server - and changing them means changing both and restarting both
+interfaces. The magic headers `H1..H4` must be distinct and below 2^31; an
+out-of-range value makes `awg setconf` fail with a bare `configuration parsing
+error`. The panel does not edit an exit config, so point the endpoint at a
+DNS name: moving the node to another address later means recreating the exit.
+
 ## Client configs
 
 Every generated `.conf` carries `PersistentKeepalive`, 25 seconds by default
@@ -543,6 +569,8 @@ IP will still see the self-signed warning; use the domain name.
 - `kaskad-routing.service`: runs `routing.py apply` at boot.
 - `kaskad-failover.service`: selects the active internet exit.
 - `kaskad-firewall.service`: iptables, MSS clamp, NAT.
+- Own exit nodes run `playbooks/exit.yml` and nothing else from this
+  repository; the panel on S1 owns their client config.
 - `kaskad-panel.service`: the panel. Runs as root (netlink is required) with
   `ProtectSystem=strict` and `ReadWritePaths` limited to two directories.
 - `/run/kaskad` is created by `tmpfiles.d`; the units do not remove it.

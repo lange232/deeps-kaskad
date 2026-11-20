@@ -1,0 +1,5 @@
+---
+- name: Restart the exit interface
+  ansible.builtin.systemd:
+    name: "awg-quick@{{ kaskad_exit_iface }}"
+    state: restarted

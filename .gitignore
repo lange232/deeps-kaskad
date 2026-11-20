@@ -24,3 +24,4 @@ host_vars/*.yml
 internal/
 files/awg/*.deb
 files/app/
+inventory.exit.yml

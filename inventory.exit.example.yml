@@ -1,0 +1,30 @@
+# Exit nodes: hosts that terminate AmneziaWG tunnels for S1. Copy this file
+# to inventory.exit.yml (gitignored) and fill in real values.
+#
+#   ansible-playbook -i inventory.exit.yml playbooks/exit.yml --check
+#   ansible-playbook -i inventory.exit.yml playbooks/exit.yml
+#
+# The panel database is not touched: the matching client config is pasted
+# into /exits/new on S1 after the node is up.
+all:
+  vars:
+    ansible_user: ubuntu
+    ansible_ssh_private_key_file: ~/.ssh/id_ed25519
+  hosts:
+    koit:
+      ansible_host: koit.example.com
+      # UDP port S1 dials; keep it out of the ephemeral range.
+      kaskad_exit_port: 51820
+      # Private transit range: distinct from the provider upstreams (10.8.1.x)
+      # and the client segment (10.80.0.0/24).
+      kaskad_exit_address: 10.9.0.1/32
+      kaskad_exit_net: 10.9.0.0/24
+      kaskad_exit_peer_address: 10.9.0.2/32
+      # Public key of S1 (the private half stays in state/ on the control
+      # machine). Generate it with: awg genkey | tee s1.key | awg pubkey
+      kaskad_exit_peer_public_key: "<public key of S1>"
+      # Override only when the default route is not the uplink to use.
+      # kaskad_exit_wan: eth0
+      # Launchpad is often blocked on the stands: build from files/awg/*.deb
+      # instead of ppa:amnezia/ppa.
+      # kaskad_awg_packages_mode: local

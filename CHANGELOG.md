@@ -5,6 +5,16 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- `roles/exit` and `playbooks/exit.yml` turn an Ubuntu host into an exit node:
+  AmneziaWG with the obfuscation values from the inventory, forwarding, NAT to
+  the uplink and a key generated on the host. The matching client config is
+  still pasted into the panel by hand, so the panel stays the only source of
+  truth for exits.
+
 ## [0.4.9] - 2026-11-20
 
 ### Added

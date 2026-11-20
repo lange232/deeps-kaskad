@@ -1,0 +1,34 @@
+---
+# An exit node terminates AmneziaWG tunnels and NATs them to the internet.
+# S1 connects to it as a client; the matching config lives in the panel, not
+# here. Addresses are a private transit range, separate from the provider
+# upstreams (10.8.1.x) and the client segment (10.80.0.0/24).
+kaskad_exit_iface: awg0
+kaskad_exit_port: 51820
+kaskad_exit_address: 10.9.0.1/32
+kaskad_exit_net: 10.9.0.0/24
+kaskad_exit_peer_address: 10.9.0.2/32
+# Public key of S1. The private half stays in state/ on the control machine
+# and is never written here.
+kaskad_exit_peer_public_key: ""
+kaskad_exit_mtu: 1420
+kaskad_exit_keepalive: 25
+# Where the tunnel traffic leaves this host. Defaults to the interface of the
+# default route; override when the host has several uplinks.
+kaskad_exit_wan: "{{ ansible_default_ipv4.interface }}"
+# Obfuscation is per tunnel, not per server: both ends must carry the same
+# values or the handshake never completes. The H values are magic headers:
+# distinct, at least 5 and below 2^31 (2147483647), or `awg setconf` rejects
+# the file with a bare "configuration parsing error".
+kaskad_exit_params:
+  Jc: 4
+  Jmin: 40
+  Jmax: 70
+  S1: 50
+  S2: 100
+  S3: 30
+  S4: 10
+  H1: 111111111
+  H2: 222222222
+  H3: 333333333
+  H4: 444444444
