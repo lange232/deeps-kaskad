@@ -1544,6 +1544,7 @@ def exit_view(e, status: dict, active, manual: str = "") -> dict:
         "nat": bool(e["nat"]) if "nat" in e.keys() else True,
         "endpoint": awgconf.endpoint(e["conf"]),
         "alive": st.get("alive"),
+        "degraded": bool(st.get("degraded")),
         "last_ok": st.get("last_ok", 0),
         "rtt_ms": st.get("rtt_ms"),
         "rtt_ts": st.get("rtt_ts", 0),
@@ -1751,6 +1752,9 @@ def overview_health(exits: list[dict], status_fresh: bool) -> dict:
         issues.append({"url": "/settings#services", "text": "Exit status unavailable → System"})
     elif not active or not active["alive"]:
         issues.append({"url": "/exits", "text": "No healthy active internet exit → Exits"})
+    elif active.get("degraded"):
+        issues.append({"url": f"/exits/{active['id']}",
+                       "text": f"{active['name']} is degraded → Exit details"})
     for e in exits:
         if e["enabled"] and e["alive"] is False:
             issues.append({"url": f"/exits/{e['id']}", "text": f"{e['name']} is down → Exit details"})
@@ -2374,6 +2378,10 @@ def config_page(
         e["iface"]: (bool(states.get(e["iface"], {}).get("alive")) if routing_fresh else None)
         for e in known
     }
+    degraded = {
+        e["iface"]: (bool(states.get(e["iface"], {}).get("degraded")) if routing_fresh else False)
+        for e in known
+    }
     try:
         conf = mask_conf(config_conf(c, cl))
     except ValueError:
@@ -2391,8 +2399,8 @@ def config_page(
         diagnosis=configuration_diagnosis(view, status, int(time.time()),
                                            not cl["account_id"] and not config_internet_exits(cl)),
         internet_exits=config_internet_exits(cl),
-        latency=latency, alive=alive, client_rtt=client_rtt, conf=conf,
-        routing_fresh=routing_fresh,
+        latency=latency, alive=alive, degraded=degraded, client_rtt=client_rtt,
+        conf=conf, routing_fresh=routing_fresh,
         accounts=accounts,
         routed_choices=[
             {"id": r["id"], "name": r["comment"] or r["name"], "routes": r["routes"],
@@ -3192,6 +3200,10 @@ def me_config_page(
         e["iface"]: (bool(states.get(e["iface"], {}).get("alive")) if routing_fresh else None)
         for e in known
     }
+    degraded = {
+        e["iface"]: (bool(states.get(e["iface"], {}).get("degraded")) if routing_fresh else False)
+        for e in known
+    }
     latency = {
         e["iface"]: (states.get(e["iface"], {}).get("rtt_ms") if routing_fresh else None)
         for e in known
@@ -3207,7 +3219,7 @@ def me_config_page(
         csrf=csrf(token), err=err, ok=ok, email=account["email"],
         cl=view, diagnosis=configuration_diagnosis(view, status, int(time.time())),
         conf=conf, internet_exits=granted, current_exit=current,
-        alive=alive, latency=latency, has_app=ANDROID_APK.exists(),
+        alive=alive, degraded=degraded, latency=latency, has_app=ANDROID_APK.exists(),
         routing_fresh=routing_fresh,
         **traffic_context(cid, period),
         routed_choices=[
@@ -3717,6 +3729,7 @@ def api_exits(request: Request, config_id: int | None = None):
             # null while the failover daemon has not reported: the panel has
             # not observed this exit and must not claim that it is up.
             "alive": bool(known.get(e["iface"], {}).get("alive")) if fresh else None,
+            "degraded": bool(known.get(e["iface"], {}).get("degraded")) if fresh else None,
             "rtt_ms": known.get(e["iface"], {}).get("rtt_ms") if fresh else None,
             "status_fresh": fresh,
         }
@@ -3844,6 +3857,7 @@ def status_json(request: Request, overview: bool = False):
             "enabled": bool(e["enabled"]),
             "mode": e["mode"],
             "alive": (status.get("exits") or {}).get(e["iface"], {}).get("alive"),
+            "degraded": bool((status.get("exits") or {}).get(e["iface"], {}).get("degraded")),
             "rtt_ms": (status.get("exits") or {}).get(e["iface"], {}).get("rtt_ms"),
             "last_ok": (status.get("exits") or {}).get(e["iface"], {}).get("last_ok", 0),
         }

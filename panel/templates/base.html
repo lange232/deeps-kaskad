@@ -178,6 +178,7 @@
       var text;
       if (exit && !exit.enabled) { cls += 'oc-badge--subtle'; text = 'disabled'; }
       else if (!exit || exit.alive == null) { cls += 'oc-badge--subtle'; text = 'no data'; }
+      else if (exit.degraded) { cls += 'oc-badge--warning'; text = 'degraded'; }
       else if (exit.alive) { cls += 'oc-badge--success'; text = 'up'; }
       else { cls += 'oc-badge--danger'; text = 'down'; }
       if (el.className !== cls) el.className = cls;

@@ -16,6 +16,7 @@
       - qrencode
       - openssl
       - conntrack
+      - curl
 
 - name: Fail2ban
   ansible.builtin.apt:

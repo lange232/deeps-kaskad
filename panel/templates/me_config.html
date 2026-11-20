@@ -82,7 +82,7 @@
               <div class="actions" style="margin-top:4px; gap:8px">
                 {% if current_exit and current_exit.id == e.id %}<span class="oc-badge oc-badge--accent">in use</span>{% endif %}
                 {% set exit_state = alive.get(e.iface) %}
-                <span class="oc-badge {% if exit_state is none %}oc-badge--subtle{% elif exit_state %}oc-badge--success{% else %}oc-badge--subtle{% endif %}" data-live="exit|{{ e.iface }}">{% if exit_state is none %}no data{% elif exit_state %}up{% else %}down{% endif %}</span>
+                <span class="oc-badge {% if exit_state is none %}oc-badge--subtle{% elif degraded.get(e.iface) %}oc-badge--warning{% elif exit_state %}oc-badge--success{% else %}oc-badge--subtle{% endif %}" data-live="exit|{{ e.iface }}">{% if exit_state is none %}no data{% elif degraded.get(e.iface) %}degraded{% elif exit_state %}up{% else %}down{% endif %}</span>
                 <span class="ping">
                   <span class="oc-mono ping__total" data-live="ping|{{ e.iface }}">—</span>
                   <span class="cell-sub oc-mono" data-live="pingparts|{{ e.iface }}">&nbsp;</span>
