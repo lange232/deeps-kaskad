@@ -339,6 +339,12 @@ cabinet under `/me`, `/me/configs/new`, `/me/configs/{id}` and `/me/account`
 (`?range=`), with the downloaded and uploaded totals and the peak rate; the
 chart uses paired SVG bars, leaving missing time buckets blank.
 
+`/settings` has a `Sign-in page` switch: it removes the brand, footer, version
+and favicon from the signed-out page, leaving only the form and a `Sign in`
+heading. It applies to the whole panel, not to one account, and does not
+change the authenticated pages. The domain and the TLS certificate stay
+visible, as does the static favicon if requested by its full URL.
+
 Sign-in limits: five failed attempts for the same email from the same address
 block that pair for five minutes, twenty failures from one address block the
 address, and repeated guesses against one email only add a growing delay — so
@@ -357,8 +363,10 @@ panel trusts it for sixty seconds; after that every page, `/status.json` and
 the last known state.
 
 `/healthz` answers without authentication and returns
-`{"ok": true, "version": ..., "active": ...}`; it is meant for monitoring and
-returns 503 when the database cannot be read or the failover status is stale.
+`{"ok": true, "failover_age": 10}`; it is meant for monitoring and returns 503
+when the database cannot be read or the failover status is stale. It says
+nothing about the product or the release, so a host with an anonymous sign-in
+page does not describe itself through this endpoint either.
 
 Internet exits are granted per account: the administrator ticks the exits an
 account may use, and every configuration puts them in its own order on `/me`

@@ -5,6 +5,20 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- `Sign-in page` on `/settings`: one switch removes the brand, footer, version
+  and favicon from the signed-out page, leaving a neutral `Sign in` heading
+  and the form. It applies to the whole panel.
+
+### Changed
+
+- `/healthz` no longer reports the version, commit or active exit: it answers
+  `{"ok": ..., "failover_age": ...}` so an anonymous host does not describe
+  itself through the monitoring endpoint.
+
 ## [0.4.6] - 2026-11-20
 
 ### Interface

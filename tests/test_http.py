@@ -350,6 +350,8 @@ class SessionTests(PanelTestCase):
             response = self.client.get("/healthz")
         self.assertEqual(response.status_code, 200)
         self.assertTrue(response.json()["ok"])
+        # A public endpoint must not describe the product or its release.
+        self.assertEqual(set(response.json()), {"ok", "failover_age"})
 
     def test_ping_is_a_tiny_public_target(self):
         response = self.client.get("/ping")
@@ -363,11 +365,75 @@ class SessionTests(PanelTestCase):
             response = self.client.get("/healthz")
         self.assertEqual(response.status_code, 503)
         self.assertFalse(response.json()["ok"])
+        self.assertEqual(set(response.json()), {"ok", "failover_age"})
 
     def test_healthz_fails_without_a_database(self):
         with mock.patch.object(app, "db", side_effect=RuntimeError("boom")):
             response = self.client.get("/healthz")
         self.assertEqual(response.status_code, 503)
+
+
+class AnonymousLoginTests(PanelTestCase):
+    def set_anonymous(self, enabled):
+        self.login_admin()
+        data = {"csrf_token": self.csrf("/settings")}
+        if enabled:
+            data["enabled"] = "1"
+        response = self.client.post("/settings/login-anonymous", data=data)
+        self.assertEqual(response.status_code, 303)
+
+    def test_the_signed_out_page_can_hide_the_project(self):
+        self.assertIn("deeps", self.client.get("/login").text)
+        self.set_anonymous(True)
+        with app.db() as conn:
+            self.assertEqual(conn.execute(
+                "SELECT value FROM settings WHERE key = 'login_anonymous'"
+            ).fetchone()[0], "1")
+            self.assertEqual(conn.execute(
+                "SELECT count(*) FROM audit "
+                "WHERE action = 'settings_login_anonymous'"
+            ).fetchone()[0], 1)
+        self.client.post("/logout")
+        page = self.client.get("/login").text
+        self.assertIn("<title>Sign in</title>", page)
+        self.assertIn(">Sign in</h1>", page)
+        self.assertIn('action="/login"', page)
+        self.assertNotIn('class="oc-brand"', page)
+        self.assertNotIn("manage clients and exits", page)
+        self.assertNotIn('class="site-footer"', page)
+        self.assertNotIn("deffhost", page)
+        self.assertNotIn("github.com/lange232", page)
+        self.assertNotIn("/static/favicon.svg", page)
+        self.assertNotIn("vtest", page)
+
+    def test_turning_it_off_restores_the_brand(self):
+        self.set_anonymous(True)
+        self.client.post("/logout")
+        self.assertNotIn('class="oc-brand"', self.client.get("/login").text)
+        self.set_anonymous(False)
+        self.client.post("/logout")
+        page = self.client.get("/login").text
+        self.assertIn('class="oc-brand"', page)
+        self.assertIn('class="site-footer"', page)
+        self.assertIn("deeps", page)
+
+    def test_authenticated_pages_keep_the_brand(self):
+        self.set_anonymous(True)
+        page = self.client.get("/configs").text
+        self.assertIn('class="oc-brand"', page)
+        self.assertIn('class="site-footer"', page)
+
+    def test_the_setting_rejects_a_bad_csrf_token(self):
+        self.login_admin()
+        response = self.client.post(
+            "/settings/login-anonymous",
+            data={"csrf_token": "nope", "enabled": "1"},
+        )
+        self.assertEqual(response.status_code, 400)
+        with app.db() as conn:
+            self.assertIsNone(conn.execute(
+                "SELECT value FROM settings WHERE key = 'login_anonymous'"
+            ).fetchone())
 
 
 class RollbackMessageTests(PanelTestCase):

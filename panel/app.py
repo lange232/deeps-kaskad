@@ -1525,6 +1525,7 @@ def login_context(error=None, email=""):
         "error": error,
         "email": email,
         "hide_nav": True,
+        "anonymous": setting("login_anonymous") == "1",
         "version": c.get("version", "dev"),
         "commit": c.get("commit", ""),
     }
@@ -1625,11 +1626,14 @@ def ping():
 
 @app.get("/healthz")
 def healthz():
-    """Liveness for monitoring: database readable and failover reporting."""
+    """Liveness for monitoring: database readable and failover reporting.
+
+    Deliberately says nothing about the product or its version: this endpoint
+    is public, and the signed-out page can be configured to stay anonymous.
+    """
     try:
         with db() as conn:
             conn.execute("SELECT 1").fetchone()
-        c = cfg()
     except Exception as exc:
         print(f"healthz: {exc}", flush=True)
         return JSONResponse({"ok": False, "error": "database"}, status_code=503)
@@ -1638,14 +1642,10 @@ def healthz():
     now = int(time.time())
     age = now - ts if ts else None
     fresh = fresh_routing_status(status, now)
-    active = run_dir("active-exit") if fresh else None
-    return JSONResponse({
-        "ok": fresh,
-        "version": c.get("version", ""),
-        "commit": c.get("commit", ""),
-        "active": None if active in ("", "none") else active,
-        "failover_age": age,
-    }, status_code=200 if fresh else 503)
+    return JSONResponse(
+        {"ok": fresh, "failover_age": age},
+        status_code=200 if fresh else 503,
+    )
 
 
 # ---------------------------------------------------------------- overview
@@ -3864,6 +3864,7 @@ def settings_page(request: Request, ok: str | None = None, err: str | None = Non
         cfg=c, csrf=csrf(token), ok=ok, err=err,
         accounts_n=accounts_n, configs_n=configs_n, exits_n=exits_n,
         audits_n=audits_n, default_max_configs=setting("default_max_configs"),
+        login_anonymous=setting("login_anonymous") == "1",
         db_size=db_size, status=services(),
     )
 
@@ -3889,6 +3890,21 @@ def settings_max_configs(
     set_setting("default_max_configs", str(value))
     audit("settings_max_configs", str(value))
     return RedirectResponse("/settings?ok=default+limit+updated", status_code=303)
+
+
+@app.post("/settings/login-anonymous")
+def settings_login_anonymous(
+    request: Request,
+    csrf_token: str = Form(...),
+    enabled: str = Form(""),
+):
+    token = require_admin(request)
+    if not hmac.compare_digest(csrf_token, csrf(token)):
+        raise HTTPException(status_code=400, detail="csrf")
+    value = "1" if enabled else "0"
+    set_setting("login_anonymous", value)
+    audit("settings_login_anonymous", value)
+    return RedirectResponse("/settings?ok=sign-in+page+updated", status_code=303)
 
 
 # ---------------------------------------------------------------- cli
