@@ -6,6 +6,17 @@ all:
     s1:
       ansible_host: vpn.example.com
       kaskad_role: entry
+      # The panel's public HTTPS port. Addresses and ports belong here, in the
+      # inventory, not in group_vars: this file is copied from the example and
+      # is never committed. 8080 is the default when the variable is not set;
+      # 443 is the normal HTTPS port. Firewall and fail2ban follow it.
+      kaskad_panel_port: 443
+      # What clients use as Endpoint; defaults to ansible_host.
+      # kaskad_endpoint: vpn.example.com
+      # lan — reachable from the network; clients — only through awg0.
+      # kaskad_panel_expose: lan
+      # A production host also sets kaskad_production: true; site.yml then
+      # refuses to deploy from anything but a clean main on a release tag.
       # Public certificate instead of the built-in self-signed one.
       # Requires a DNS A record pointing here and port 80 open.
       # kaskad_tls_mode: letsencrypt

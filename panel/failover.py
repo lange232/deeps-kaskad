@@ -45,7 +45,18 @@ INTERVAL = 10
 DEAD_AFTER = 3
 ALIVE_AFTER = 2
 FAILBACK_STABLE = 60
+# An exit can answer ICMP and still be unusable for some destinations. The
+# probes below cover several networks and both ICMP and TCP; a few bad rounds
+# make the exit "degraded", so clients move to a healthy one without waiting
+# for it to go completely dead.
+DEGRADED_AFTER = 3
+RECOVER_AFTER = 3
 PROBE_TARGET = "1.1.1.1"
+PROBE_HTTP = (
+    ("http://connectivitycheck.gstatic.com/generate_204", 204),
+    ("http://example.com/", 200),
+)
+HTTP_TIMEOUT = 4
 RTT_RE = re.compile(r"time=([0-9.]+)\s*ms")
 
 state: dict[str, dict] = {}
@@ -247,31 +258,66 @@ def ping_rtt(stdout: str) -> float | None:
     return float(match.group(1)) if match else None
 
 
-def probe(exit: dict) -> tuple[bool, float | None]:
-    """(alive, rtt_ms); routed exits have no ICMP latency."""
+def http_probe(iface: str) -> bool:
+    """Every HTTP target must answer through this exit.
+
+    A provider can blackhole a destination while ICMP and other sites still
+    work; one failed target after another makes the exit degraded.
+    """
+    for url, expected in PROBE_HTTP:
+        try:
+            res = run(
+                ["curl", "-4", "-s", "-o", "/dev/null", "-w", "%{http_code}",
+                 "--max-time", str(HTTP_TIMEOUT), "--interface", iface, url],
+                timeout=HTTP_TIMEOUT + 2,
+            )
+        except (subprocess.TimeoutExpired, OSError):
+            return False
+        code = (res.stdout or "").strip()
+        if res.returncode != 0 or code != str(expected):
+            return False
+    return True
+
+
+def probe(exit: dict) -> tuple[bool, float | None, bool]:
+    """(alive, rtt_ms, healthy).
+
+    ``alive`` is transport-level: the interface answers ICMP (or, for routed
+    exits, has a fresh handshake). ``healthy`` additionally means the HTTP
+    targets are reachable through the exit; a live but degraded exit is not
+    offered to clients while a healthy one exists.
+    """
     iface = exit["iface"]
     if not iface_exists(iface):
-        return False, None
+        return False, None, False
     if exit.get("mode") == "routes":
         # A routed exit only allows its own subnets in AllowedIPs, so pinging
         # 1.1.1.1 is pointless: it is alive as long as its handshake is fresh.
         res = run(["awg", "show", iface, "latest-handshakes"])
         if res.returncode != 0:
-            return False, None
+            return False, None, False
         now = time.time()
         for line in res.stdout.splitlines():
             parts = line.split()
             if len(parts) >= 2 and parts[-1].isdigit():
                 if now - int(parts[-1]) < 180:
-                    return True, None
-        return False, None
+                    return True, None, True
+        return False, None, False
     try:
-        res = run(["ping", "-c1", "-W2", "-I", iface, PROBE_TARGET], timeout=4)
+        res = run(["ping", "-c1", "-W1", "-I", iface, PROBE_TARGET], timeout=3)
     except subprocess.TimeoutExpired:
-        return False, None
+        return False, None, False
     if res.returncode != 0:
-        return False, None
-    return True, ping_rtt(res.stdout)
+        return False, None, False
+    return True, ping_rtt(res.stdout), http_probe(iface)
+
+
+def probe_safe(exit: dict) -> tuple[bool, float | None, bool]:
+    try:
+        return probe(exit)
+    except Exception as exc:  # a probe must never kill the daemon
+        log(f"probe {exit['iface']}: {exc}")
+        return False, None, False
 
 
 def client_rows() -> list[dict]:
@@ -325,7 +371,7 @@ def should_clear_active(desired, active) -> bool:
     return desired is None and bool(active) and active != "none"
 
 
-def record_exit_transition(previous, current, manual, alive) -> None:
+def record_exit_transition(previous, current, manual, alive, degraded=()) -> None:
     if previous == current:
         return
     if not current:
@@ -334,6 +380,8 @@ def record_exit_transition(previous, current, manual, alive) -> None:
         reason = "Manual selection"
     elif not previous:
         reason = "Internet exit available"
+    elif previous in degraded:
+        reason = "Previous exit degraded"
     elif previous not in alive:
         reason = "Previous exit unavailable"
     else:
@@ -368,29 +416,57 @@ def switch(iface: str, c: dict) -> None:
     log(f"active exit: {iface}")
 
 
-def update_state(exit: dict, ok: bool, rtt: float | None = None) -> None:
+def update_state(
+    exit: dict, ok: bool, rtt: float | None = None, healthy: bool | None = None
+) -> None:
+    if healthy is None:
+        healthy = ok
     iface = exit["iface"]
+    now = int(time.time())
     st = state.setdefault(
         iface,
         {"fails": 0, "oks": 0, "alive": False, "alive_since": 0,
-         "last_ok": 0, "rtt_ms": None, "rtt_ts": 0},
+         "last_ok": 0, "rtt_ms": None, "rtt_ts": 0,
+         "degraded": False, "bad": 0, "good": 0, "healthy_since": 0},
     )
     if ok:
         st["fails"] = 0
         st["oks"] += 1
-        st["last_ok"] = int(time.time())
+        st["last_ok"] = now
         if rtt is not None:
             st["rtt_ms"] = round(rtt)
-            st["rtt_ts"] = int(time.time())
+            st["rtt_ts"] = now
         if not st["alive"] and st["oks"] >= ALIVE_AFTER:
             st["alive"] = True
-            st["alive_since"] = int(time.time())
+            st["alive_since"] = now
+            st["healthy_since"] = 0
+        if healthy:
+            st["bad"] = 0
+            st["good"] += 1
+            if st["degraded"] and st["good"] >= RECOVER_AFTER:
+                st["degraded"] = False
+                st["healthy_since"] = now
+                log(f"exit {iface}: healthy again")
+            elif not st["degraded"] and not st["healthy_since"]:
+                st["healthy_since"] = now
+        else:
+            st["good"] = 0
+            if not st["degraded"]:
+                st["healthy_since"] = 0
+                st["bad"] += 1
+                if st["bad"] >= DEGRADED_AFTER:
+                    st["degraded"] = True
+                    st["bad"] = 0
+                    log(f"exit {iface}: degraded")
     else:
         st["oks"] = 0
+        st["good"] = 0
+        st["healthy_since"] = 0
         st["fails"] += 1
         if st["alive"] and st["fails"] >= DEAD_AFTER:
             st["alive"] = False
             st["alive_since"] = 0
+            st["degraded"] = False
 
 
 def write_status(active, rows: list[dict], manual: str = "", clients=None,
@@ -408,6 +484,9 @@ def write_status(active, rows: list[dict], manual: str = "", clients=None,
                 "mode": e.get("mode", "internet"),
                 "priority": e["priority"],
                 "alive": state.get(e["iface"], {}).get("alive", False),
+                "degraded": bool(state.get(e["iface"], {}).get("degraded", False)),
+                "healthy": bool(state.get(e["iface"], {}).get("alive")
+                                and not state.get(e["iface"], {}).get("degraded", False)),
                 "last_ok": state.get(e["iface"], {}).get("last_ok", 0),
                 "alive_since": state.get(e["iface"], {}).get("alive_since", 0),
                 "rtt_ms": state.get(e["iface"], {}).get("rtt_ms"),
@@ -450,10 +529,12 @@ def _auto(active, alive, alive_since, now, stable):
 
 def tick(c: dict) -> None:
     rows = exits()
-    for e in rows:
-        if e["enabled"]:
-            ok, rtt = probe(e)
-            update_state(e, ok, rtt)
+    enabled = [e for e in rows if e["enabled"]]
+    if enabled:
+        with ThreadPoolExecutor(max_workers=min(8, len(enabled))) as pool:
+            results = list(pool.map(probe_safe, enabled))
+        for e, (ok, rtt, healthy) in zip(enabled, results):
+            update_state(e, ok, rtt, healthy)
 
     # Exits can come up after kaskad-routing.service already ran; only this
     # loop notices, so it re-applies the tables and rules.
@@ -464,18 +545,26 @@ def tick(c: dict) -> None:
         if e["enabled"] and e.get("mode") == "internet" and state.get(e["iface"], {}).get("alive")
     ]
     alive = [e["iface"] for e in alive_rows]
+    degraded = {
+        e["iface"] for e in rows if state.get(e["iface"], {}).get("degraded")
+    }
+    usable_rows = [e for e in alive_rows if e["iface"] not in degraded]
+    usable = [e["iface"] for e in usable_rows]
     active = read_active()
     manual = get_setting(MANUAL_KEY)
-    alive_since = {
-        e["iface"]: state.get(e["iface"], {}).get("alive_since", 0) for e in alive_rows
+    # If every exit is degraded, keep the current one: moving between two bad
+    # links buys nothing and cuts existing connections.
+    pool = usable or ([active] if active in alive else [])
+    healthy_since = {
+        iface: state.get(iface, {}).get("healthy_since", 0) for iface in pool
     }
 
     desired, clear_manual = choose(
-        active, alive, manual, alive_since, int(time.time()), FAILBACK_STABLE
+        active, pool, manual, healthy_since, int(time.time()), FAILBACK_STABLE
     )
     if clear_manual:
         set_setting(MANUAL_KEY, "")
-        log(f"manual exit {manual} is down, back to automatic")
+        log(f"manual exit {manual} is down or degraded, back to automatic")
         manual = ""
     # The active-exit file outlives a service restart, so repairing the route
     # is not optional: after a reboot or a manual flush the table can be
@@ -488,12 +577,12 @@ def tick(c: dict) -> None:
         write_atomic(ACTIVE_FILE, "none\n")
         log(f"no alive internet exit: {active} is no longer active")
 
-    record_exit_transition(active, read_active(), manual, alive)
+    record_exit_transition(active, read_active(), manual, alive, degraded)
     choices: dict[tuple[int, str], list[str]] = {}
     for grant in client_grants():
         key = (grant["client_table"], grant["ip"])
         choices.setdefault(key, []).append(grant["iface"])
-    client_routes = apply_client_routes(choices, alive)
+    client_routes = apply_client_routes(choices, usable)
 
     pings = client_pings()
     write_status(read_active(), rows, manual, client_routes, client_ping=pings)

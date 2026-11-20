@@ -29,10 +29,22 @@ class ChooseTests(unittest.TestCase):
                 failover.record_exit_transition("awg1", "awg1", "", ["awg1"])
                 failover.record_exit_transition("awg1", "awg2", "", ["awg2"])
                 failover.record_exit_transition("awg2", None, "", [])
+                failover.record_exit_transition(
+                    "awg3", "awg2", "", ["awg2", "awg3"], {"awg3"})
                 self.assertEqual(conn.execute("SELECT action, detail FROM audit").fetchall(), [
                     ("exit_failover", "awg1 → awg2 · Previous exit unavailable"),
                     ("exit_failover", "awg2 → none · No healthy internet exit"),
+                    ("exit_failover", "awg3 → awg2 · Previous exit degraded"),
                 ])
+
+    def test_switching_away_from_a_degraded_exit_is_immediate(self):
+        # tick() removes a degraded exit from the pool; the active one is then
+        # no longer in the list, so choose() returns the healthy exit at once.
+        desired, clear = failover.choose(
+            "awg1", ["awg2"], "", {"awg2": 0}, now=1000, stable=60
+        )
+        self.assertEqual(desired, "awg2")
+        self.assertFalse(clear)
 
     def test_manual_pins_lower_priority(self):
         desired, clear = failover.choose(
@@ -380,19 +392,31 @@ class ProbeTests(unittest.TestCase):
         self.assertIsNone(failover.ping_rtt("Request timeout for icmp_seq 0"))
         self.assertIsNone(failover.ping_rtt(""))
 
-    def test_internet_probe_returns_the_latency(self):
-        answered = subprocess.CompletedProcess([], 0, "time=7.9 ms", "")
+    def probe_with(self, codes):
+        def fake(cmd, **kw):
+            if cmd[0] == "ping":
+                return subprocess.CompletedProcess(cmd, 0, "time=7.9 ms", "")
+            return subprocess.CompletedProcess(cmd, 0, codes.get(cmd[-1], "000"), "")
+
         with mock.patch.object(failover, "iface_exists", return_value=True), \
-             mock.patch.object(failover, "run", return_value=answered):
-            self.assertEqual(failover.probe({"iface": "awg1", "mode": "internet"}),
-                             (True, 7.9))
+             mock.patch.object(failover, "run", side_effect=fake):
+            return failover.probe({"iface": "awg1", "mode": "internet"})
+
+    def test_internet_probe_returns_the_latency_and_health(self):
+        codes = {url: str(expected) for url, expected in failover.PROBE_HTTP}
+        self.assertEqual(self.probe_with(codes), (True, 7.9, True))
+
+    def test_http_failure_marks_a_live_exit_unhealthy(self):
+        codes = {url: str(expected) for url, expected in failover.PROBE_HTTP}
+        codes["http://example.com/"] = "000"
+        self.assertEqual(self.probe_with(codes), (True, 7.9, False))
 
     def test_failed_probe_has_no_latency(self):
         failed = subprocess.CompletedProcess([], 1, "", "timeout")
         with mock.patch.object(failover, "iface_exists", return_value=True), \
              mock.patch.object(failover, "run", return_value=failed):
             self.assertEqual(failover.probe({"iface": "awg1", "mode": "internet"}),
-                             (False, None))
+                             (False, None, False))
 
     def test_routed_probe_has_no_icmp_latency(self):
         handshake = subprocess.CompletedProcess(
@@ -400,12 +424,30 @@ class ProbeTests(unittest.TestCase):
         with mock.patch.object(failover, "iface_exists", return_value=True), \
              mock.patch.object(failover, "run", return_value=handshake):
             self.assertEqual(failover.probe({"iface": "awg2", "mode": "routes"}),
-                             (True, None))
+                             (True, None, True))
 
     def test_missing_interface_has_no_latency(self):
         with mock.patch.object(failover, "iface_exists", return_value=False):
             self.assertEqual(failover.probe({"iface": "awg9", "mode": "internet"}),
-                             (False, None))
+                             (False, None, False))
+
+    def test_a_live_exit_degrades_after_bad_rounds(self):
+        old = failover.state.copy()
+        try:
+            failover.state.clear()
+            exit_ = {"iface": "awg1"}
+            for _ in range(failover.DEGRADED_AFTER):
+                failover.update_state(exit_, True, 10.0, healthy=False)
+            st = failover.state["awg1"]
+            self.assertTrue(st["alive"])
+            self.assertTrue(st["degraded"])
+            for _ in range(failover.RECOVER_AFTER):
+                failover.update_state(exit_, True, 10.0, healthy=True)
+            self.assertFalse(st["degraded"])
+            self.assertGreater(st["healthy_since"], 0)
+        finally:
+            failover.state.clear()
+            failover.state.update(old)
 
     def test_state_keeps_the_last_latency(self):
         old = failover.state.copy()

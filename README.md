@@ -244,13 +244,17 @@ untouched.
 ## Deployment
 
 ```bash
-cp inventory.example.yml inventory.yml   # edit hosts and the SSH key
+cp inventory.example.yml inventory.yml   # hosts, SSH key, panel port
 ansible-playbook playbooks/site.yml --check
 ansible-playbook playbooks/site.yml
 scripts/check.sh demo
 ```
 
 Tags: `base`, `amneziawg`, `panel`, `entry`.
+
+Addresses, the panel port and TLS belong in the inventory, which is
+gitignored; `group_vars/all.yml` holds only shared defaults and is the same
+for every host. `inventory.example.yml` is the template.
 
 A production inventory sets `kaskad_production: true`, and then `site.yml`
 refuses to run unless the repository is a clean `main` on a release tag: a
@@ -309,8 +313,9 @@ changes, so a deploy from an unclean tree is visible.
 
 ## Panel
 
-`https://<host>:8080`, FastAPI + SQLite. The certificate is self-signed by
-default; see [TLS](#tls) to use Let's Encrypt.
+`https://<host>:<port>`, FastAPI + SQLite. The port is `kaskad_panel_port`
+from the inventory (`8080` when it is not set). The certificate is
+self-signed by default; see [TLS](#tls) to use Let's Encrypt.
 
 The panel has two kinds of sign-in:
 
@@ -378,7 +383,7 @@ created before accounts existed stay on the automatic active exit selected by
 the failover daemon.
 
 Access mode is controlled by `kaskad_panel_expose`: `lan` keeps the port open,
-`clients` exposes it only through the tunnel at `https://10.80.0.1:8080`.
+`clients` exposes it only through the tunnel at `https://10.80.0.1:<port>`.
 
 ### Mobile API
 
