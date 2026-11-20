@@ -250,6 +250,10 @@
         } else if (kind === 'current') {
           item = configs[key];
           put(el, (item && item.iface) || 'none');
+        } else if (kind === 'current-label') {
+          item = configs[key];
+          var current = item && exits[item.iface];
+          put(el, current ? (current.comment || current.name) : 'none');
         } else if (kind === 'online') {
           put(el, String(data.online));
         } else if (kind === 'rx-total') {

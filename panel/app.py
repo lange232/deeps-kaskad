@@ -3183,6 +3183,7 @@ def me_page(request: Request, err: str | None = None, ok: str | None = None):
         # failover reported for it: the cabinet must show it without a click.
         current_exit_of=status.get("clients") or {},
         exit_states=status.get("exits") or {},
+        exits_by_iface={e["iface"]: e for e in exits_rows()},
         status_fresh=fresh,
     )
 
@@ -4031,6 +4032,7 @@ def status_json(request: Request, overview: bool = False):
     exits = {
         e["iface"]: {
             "name": e["name"],
+            "comment": e["comment"],
             "enabled": bool(e["enabled"]),
             "mode": e["mode"],
             "alive": (status.get("exits") or {}).get(e["iface"], {}).get("alive"),

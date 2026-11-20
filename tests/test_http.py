@@ -628,9 +628,26 @@ class CabinetExitStateTests(PanelTestCase):
         }
         with mock.patch.object(app, "read_status", return_value=status):
             page = self.client.get("/me").text
-        self.assertIn("in use", page)
-        self.assertIn("awg1", page)
+        self.assertIn("nl-1", page)
         self.assertIn("degraded", page)
+
+    def test_me_prefers_the_exit_comment_over_its_name(self):
+        aid, cid = self.seed_client()
+        eid = self.seed_exit(name="nl-1", iface="awg1")
+        with app.db() as conn:
+            conn.execute(
+                "UPDATE exits SET comment = 'Amsterdam' WHERE id = ?", (eid,))
+        self.grant(aid, cid, eid)
+        self.login("c1@example.com", USER_PASSWORD)
+        status = {
+            "ts": int(time.time()),
+            "clients": {"10.80.0.2": "awg1"},
+            "exits": {"awg1": {"alive": True, "degraded": False, "rtt_ms": 30}},
+        }
+        with mock.patch.object(app, "read_status", return_value=status):
+            page = self.client.get("/me").text
+        self.assertIn("Amsterdam", page)
+        self.assertNotIn(">nl-1<", page)
 
     def test_me_claims_no_state_when_the_failover_is_silent(self):
         aid, cid = self.seed_client()
@@ -644,9 +661,9 @@ class CabinetExitStateTests(PanelTestCase):
         }
         with mock.patch.object(app, "read_status", return_value=status):
             page = self.client.get("/me").text
-        # A stale status is dropped entirely: the cabinet must not claim an
-        # exit is in use when the failover stopped reporting.
-        self.assertNotIn("in use", page)
+        # A stale status is dropped entirely: the cabinet must not name an
+        # exit as the one in use when the failover stopped reporting.
+        self.assertNotIn("nl-1", page)
 
     def test_account_shows_the_default_exit_order(self):
         aid, cid = self.seed_client()
