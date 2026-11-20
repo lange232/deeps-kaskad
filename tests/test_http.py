@@ -2008,11 +2008,12 @@ class MobileApiTests(PanelTestCase):
         aid, cid = self.seed_client()
         self.grant(aid, cid, self.seed_exit("first", "awg1"))
         headers, _ = self.api_login()
-        fresh = {"ts": int(time.time()),
+        fresh = {"ts": int(time.time()), "active": "awg1",
                  "exits": {"awg1": {"alive": True, "rtt_ms": 12}}}
         with mock.patch.object(app, "read_status", return_value=fresh):
             live = self.client.get("/api/me/exits", headers=headers).json()[0]
         self.assertTrue(live["alive"])
+        self.assertTrue(live["active"])
         self.assertTrue(live["status_fresh"])
         old = {"ts": int(time.time()) - 300,
                "exits": {"awg1": {"alive": True, "rtt_ms": 12}}}
@@ -2020,7 +2021,20 @@ class MobileApiTests(PanelTestCase):
             silent = self.client.get("/api/me/exits", headers=headers).json()[0]
         self.assertIsNone(silent["alive"])
         self.assertIsNone(silent["rtt_ms"])
+        self.assertIsNone(silent["active"])
         self.assertFalse(silent["status_fresh"])
+
+    def test_exits_api_marks_only_the_active_exit(self):
+        aid, cid = self.seed_client()
+        self.grant(aid, cid, self.seed_exit("first", "awg1"), 10)
+        self.grant(aid, cid, self.seed_exit("second", "awg2", priority=20), 20)
+        headers, _ = self.api_login()
+        status = {"ts": int(time.time()), "active": "awg2",
+                  "exits": {"awg1": {"alive": True, "rtt_ms": 10},
+                            "awg2": {"alive": True, "rtt_ms": 90}}}
+        with mock.patch.object(app, "read_status", return_value=status):
+            exits = self.client.get("/api/me/exits", headers=headers).json()
+        self.assertEqual([e["active"] for e in exits], [False, True])
 
     def test_create_conf_order_and_delete(self):
         aid, cid = self.seed_client(max_configs=5)

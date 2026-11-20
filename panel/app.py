@@ -3924,6 +3924,7 @@ def api_exits(request: Request, config_id: int | None = None):
     cl = api_config(account, config_id)
     status, fresh = routing_status()
     known = status.get("exits", {})
+    active = status.get("active")
     return [
         {
             "id": e["id"],
@@ -3934,6 +3935,10 @@ def api_exits(request: Request, config_id: int | None = None):
             "alive": bool(known.get(e["iface"], {}).get("alive")) if fresh else None,
             "degraded": bool(known.get(e["iface"], {}).get("degraded")) if fresh else None,
             "rtt_ms": known.get(e["iface"], {}).get("rtt_ms") if fresh else None,
+            # The exit the default route currently points at, which is not
+            # necessarily this configuration's first choice: an account with
+            # its own checks can ride another one.
+            "active": (e["iface"] == active) if fresh and active else None,
             "status_fresh": fresh,
         }
         for e in config_internet_exits(cl)

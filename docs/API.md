@@ -284,7 +284,9 @@ Optional `config_id`; omitted or `0` means the first configuration.
     "name": "nl-1",
     "comment": "Amsterdam",
     "alive": true,
+    "degraded": false,
     "rtt_ms": 42,
+    "active": true,
     "status_fresh": true
   }
 ]
@@ -293,8 +295,13 @@ Optional `config_id`; omitted or `0` means the first configuration.
 - An empty list means the administrator granted no internet exit. The
   configuration then has no internet access.
 - `alive` is `true` or `false`. It is `null` when the failover daemon has not
-  reported for more than 60 seconds; `rtt_ms` is also `null` then and
-  `status_fresh` is `false`. Do not treat `null` as "down".
+  reported for more than 60 seconds; `rtt_ms`, `degraded` and `active` are also
+  `null` then and `status_fresh` is `false`. Do not treat `null` as "down".
+- `degraded` means the exit answers ICMP but cannot reach every HTTP probe
+  target. Clients and the active exit prefer a healthy one.
+- `active` is `true` for the exit the default route (`table 100`) points at
+  right now. It is not necessarily the configuration's first choice: the
+  account's own checks or the failover may have picked another one.
 - `rtt_ms` is the panel-to-exit round trip, not the device's latency.
 - The order is the configuration's own order, which the user can change with
   `/api/me/exits/order`.
