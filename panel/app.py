@@ -31,6 +31,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -51,6 +52,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+import apkmeta
 import auth
 import awgconf
 import routing
@@ -82,8 +84,66 @@ def human_ts(value) -> str:
     return text[:16] + " UTC"
 
 
+AUDIT_LABELS = {
+    "login": "Panel sign-in",
+    "login_failed": "Panel sign-in failed",
+    "api_login": "App sign-in",
+    "api_login_failed": "App sign-in failed",
+    "exit_added": "Exit added",
+    "exit_details": "Exit details updated",
+    "exit_nat": "Exit NAT updated",
+    "exit_toggle": "Exit availability changed",
+    "exit_deleted": "Exit deleted",
+    "exit_pinned": "Global exit pinned",
+    "exit_auto": "Automatic global routing restored",
+    "exit_failover": "Global exit switched automatically",
+    "exit_imported": "Exit imported",
+    "client_imported": "Configuration imported",
+    "config_added": "Configuration added",
+    "config_renamed": "Configuration renamed",
+    "config_routed": "Configuration subnet access changed",
+    "config_toggle": "Configuration availability changed",
+    "config_assigned": "Configuration assigned to account",
+    "config_deleted": "Configuration deleted",
+    "config_downloaded": "Configuration downloaded",
+    "config_key_reissued": "Configuration key reissued",
+    "config_exit_order": "Configuration exit order changed",
+    "config_exit_order_reset": "Configuration exit order reset",
+    "account_created": "Account created",
+    "account_exits": "Account exit access changed",
+    "account_exit_order": "Account default exit order changed",
+    "account_exit_order_applied": "Account exit order applied to configurations",
+    "account_password_reset": "Account password reset",
+    "account_toggle": "Account sign-in access changed",
+    "account_deleted": "Account deleted",
+    "user_check_added": "Personal check added",
+    "user_check_toggled": "Personal check availability changed",
+    "user_check_deleted": "Personal check deleted",
+    "user_config_added": "Configuration added by user",
+    "user_config_renamed": "Configuration renamed by user",
+    "user_config_routed": "Configuration subnet access changed by user",
+    "user_config_reused": "Existing configuration reused by app",
+    "user_config_toggle": "Configuration availability changed by user",
+    "user_config_deleted": "Configuration deleted by user",
+    "user_key_reissued": "Configuration key reissued by user",
+    "user_exit_order": "Configuration exit order changed by user",
+    "user_exit_order_reset": "Configuration exit order reset by user",
+    "user_exit_pin": "Configuration exit pinned by user",
+    "user_exit_pin_cleared": "Configuration exit pin cleared by user",
+    "user_password_changed": "Password changed by user",
+    "user_sessions_revoked": "Sessions revoked by user",
+    "settings_max_configs": "Default configuration limit changed",
+    "settings_login_anonymous": "Sign-in page visibility changed",
+}
+
+
+def audit_label(action: str) -> str:
+    return AUDIT_LABELS.get(action, action.replace("_", " ").capitalize())
+
+
 templates = Jinja2Templates(directory=str(BASE / "templates"))
 templates.env.filters["ts"] = human_ts
+templates.env.filters["audit_label"] = audit_label
 app = FastAPI(title="panel", docs_url=None, redoc_url=None, openapi_url=None)
 app.mount("/static", StaticFiles(directory=str(BASE / "static")), name="static")
 # Trailing-slash redirects are a framework fingerprint and buy nothing: the
@@ -1543,6 +1603,57 @@ def selected_internet_iface(view: dict, status: dict, shared: bool = False) -> s
             or "")
 
 
+def exit_usage(configs, status: dict, shared: set[int]) -> Counter:
+    """Count enabled configurations with a reported internet route."""
+    return Counter(
+        iface for cl in configs if cl["enabled"]
+        if (iface := selected_internet_iface(cl, status, cl["id"] in shared))
+    )
+
+
+def shared_internet_configs(rows) -> set[int]:
+    return {cl["id"] for cl in rows if not cl["account_id"] and cl["internet"]
+            and not config_internet_exits(cl)}
+
+
+def exit_configurations(exit_row, configs, status, fresh):
+    """Separate reported users from eligible alternatives for one exit."""
+    current, reserve = [], []
+    for cl in configs:
+        if not cl["enabled"]:
+            continue
+        if exit_row["mode"] == "routes":
+            if exit_row["enabled"] and any(e["id"] == exit_row["id"] for e in config_routed_exits(cl)):
+                current.append(cl)
+            continue
+        choices = config_internet_exits(cl)
+        shared = not cl["account_id"] and bool(cl["internet"]) and not choices
+        if fresh and selected_internet_iface(cl, status, shared) == exit_row["iface"]:
+            current.append(cl)
+        elif (exit_row["enabled"] and (cl["account_id"] or cl["internet"])
+              and (shared or any(e["id"] == exit_row["id"] for e in choices))):
+            reserve.append(cl)
+    return current, reserve
+
+
+def admin_config_route(cl, view, status, fresh, exits, shared=False):
+    def link(iface):
+        row = exits.get(iface)
+        return {"id": row["id"], "name": row["name"]} if row else None
+
+    if not view["enabled"]:
+        note = "Disabled"
+    elif not view["internet"]:
+        note = "No internet access"
+    elif not fresh:
+        note = "No data"
+    else:
+        note = "No reported exit"
+    current = (link(selected_internet_iface(cl, status, shared))
+               if view["enabled"] and fresh else None)
+    return {"current": current, "note": note, "pinned": link(cl["pinned_iface"])}
+
+
 def configuration_diagnosis(view: dict, status: dict, now: int, shared: bool = False) -> dict:
     if not view["enabled"]:
         return {"state": "Disabled", "warning": ""}
@@ -1590,13 +1701,28 @@ def exit_view(e, status: dict, active, manual: str = "") -> dict:
     }
 
 
+SYSTEM_SERVICES = {
+    "awg0": ("Entry tunnel", "awg-quick@awg0"),
+    "routing": ("Routing", "kaskad-routing"),
+    "firewall": ("Firewall", "kaskad-firewall"),
+    "failover": ("Exit failover", "kaskad-failover"),
+}
+
+
 def services() -> dict:
-    return {
-        "awg0": unit_active("awg-quick@awg0"),
-        "routing": unit_active("kaskad-routing"),
-        "firewall": unit_active("kaskad-firewall"),
-        "failover": unit_active("kaskad-failover"),
-    }
+    return {key: unit_active(unit) for key, (_, unit) in SYSTEM_SERVICES.items()}
+
+
+def service_state(state: str | None) -> dict:
+    label, tone = {
+        "active": ("Active", "success"),
+        "failed": ("Failed", "danger"),
+        "inactive": ("Inactive", "danger"),
+        "activating": ("Starting", "warning"),
+        "deactivating": ("Stopping", "warning"),
+        "reloading": ("Reloading", "warning"),
+    }.get(state, ("Unknown", "subtle"))
+    return {"label": label, "tone": tone}
 
 
 def render_page(request: Request, template: str, nav: str, **ctx):
@@ -1758,7 +1884,8 @@ def overview(request: Request, err: str | None = None, ok: str | None = None):
     token = require_admin(request)
     c = cfg()
     live = iface_dump(c["iface"])["peers"]
-    configs = [config_view(cl, live) for cl in config_rows()]
+    rows = config_rows()
+    configs = [config_view(cl, live) for cl in rows]
     status, fresh = routing_status()
     active = run_dir("active-exit") if fresh else None
     manual = setting("manual_exit") or ""
@@ -1771,7 +1898,8 @@ def overview(request: Request, err: str | None = None, ok: str | None = None):
     online = sum(1 for cl in configs if cl["handshake"] and now - cl["handshake"] < 180)
     rx = sum(cl["rx"] for cl in configs)
     tx = sum(cl["tx"] for cl in configs)
-    health = overview_health(exits, fresh)
+    usage = exit_usage(rows, status, shared_internet_configs(rows)) if fresh else {}
+    health = overview_health(exits, fresh, usage)
     return render_page(
         request, "overview.html", "overview",
         csrf=csrf(token), err=err, ok=ok,
@@ -1781,25 +1909,42 @@ def overview(request: Request, err: str | None = None, ok: str | None = None):
     )
 
 
-def overview_health(exits: list[dict], status_fresh: bool) -> dict:
+def overview_health(exits: list[dict], status_fresh: bool, usage: dict) -> dict:
     active = next((e for e in exits if e["active"] and e["enabled"]
                    and e["mode"] == "internet"), None)
     issues = []
     if not status_fresh:
         issues.append({"url": "/settings#services", "text": "Exit status unavailable → System"})
     elif not active or not active["alive"]:
-        issues.append({"url": "/exits", "text": "No healthy active internet exit → Exits"})
-    elif active.get("degraded"):
-        issues.append({"url": f"/exits/{active['id']}",
-                       "text": f"{active['name']} is degraded → Exit details"})
-    for e in exits:
-        if e["enabled"] and e["alive"] is False:
-            issues.append({"url": f"/exits/{e['id']}", "text": f"{e['name']} is down → Exit details"})
-    for name, state in services().items():
+        issues.append({"url": "/exits", "text": "No working global internet exit"})
+    if status_fresh:
+        for e in exits:
+            if not e["enabled"]:
+                continue
+            if e["alive"] is False:
+                problem = "is down"
+            elif e["alive"] is None:
+                problem = "has no status"
+            elif e["degraded"]:
+                problem = "is degraded"
+            elif any(not ok for ok in e["targets"].values()):
+                problem = "has a failed check"
+            else:
+                continue
+            issue = {"url": f"/exits/{e['id']}", "text": f"{e['name']} {problem}"}
+            count = usage.get(e["iface"], 0)
+            if count and e["mode"] == "internet":
+                issue.update(usage_url=f"/exits/{e['id']}#exit-configurations",
+                             usage_text=f"{count} using this exit")
+            issues.append(issue)
+    states = services()
+    for key, state in states.items():
         if state != "active":
-            issues.append({"url": "/settings#services", "text": f"{name}: {state} → System"})
+            label, _ = SYSTEM_SERVICES[key]
+            issues.append({"url": "/settings#services",
+                           "text": f"{label}: {service_state(state)['label']}"})
     return {"active": {key: active[key] for key in ("id", "name", "iface")} if active else None,
-            "issues": issues}
+            "issues": issues, "services": {key: service_state(state) for key, state in states.items()}}
 
 
 # ---------------------------------------------------------------- exits
@@ -1817,16 +1962,17 @@ def exits_page(request: Request, mode: str | None = None):
     active = run_dir("active-exit") if fresh else None
     manual = setting("manual_exit") or ""
     items = [exit_view(e, status, active, manual) for e in exits_rows()]
-    if mode in ("internet", "routes"):
-        items = [e for e in items if e["mode"] == mode]
+    rows = config_rows() if fresh else []
+    usage = exit_usage(rows, status, shared_internet_configs(rows))
+    mode = mode if mode in ("internet", "routes") else ""
     return render_page(
         request, "exits.html", "exits",
-        csrf=csrf(token), exits=items, mode=mode or "", manual_exit=manual,
-        routing_fresh=fresh,
+        csrf=csrf(token), exits=[e for e in items if not mode or e["mode"] == mode],
+        mode=mode, routing_fresh=fresh, usage=usage,
         counts={
-            "all": len(exits_rows()),
-            "internet": sum(1 for e in exits_rows() if e["mode"] == "internet"),
-            "routes": sum(1 for e in exits_rows() if e["mode"] == "routes"),
+            "all": len(items),
+            "internet": sum(1 for e in items if e["mode"] == "internet"),
+            "routes": sum(1 for e in items if e["mode"] == "routes"),
         },
     )
 
@@ -1852,23 +1998,7 @@ def exit_page(request: Request, eid: int, err: str | None = None, ok: str | None
     status, fresh = routing_status()
     active = run_dir("active-exit") if fresh else None
     manual = setting("manual_exit") or ""
-    current, reserve = [], []
-    if row["enabled"]:
-        for cl in configs:
-            if row["mode"] == "routes":
-                if any(e["id"] == eid for e in config_routed_exits(cl)):
-                    current.append(cl)
-                continue
-            choices = config_internet_exits(cl)
-            shared = not cl["account_id"] and bool(cl["internet"]) and not choices
-            if not cl["account_id"] and not cl["internet"]:
-                continue
-            if not shared and not any(e["id"] == eid for e in choices):
-                continue
-            if fresh and selected_internet_iface(cl, status, shared) == row["iface"]:
-                current.append(cl)
-            else:
-                reserve.append(cl)
+    current, reserve = exit_configurations(row, configs, status, fresh)
     return render_page(
         request, "exit_detail.html", "exits",
         csrf=csrf(token), err=err, ok=ok,
@@ -2292,7 +2422,8 @@ def configs_page(request: Request, q: str | None = None, state: str = ""):
             r["id"]: r
             for r in conn.execute("SELECT id, email, enabled FROM accounts")
         }
-    items = [config_view(cl, live) for cl in config_rows()]
+    rows = config_rows()
+    items = [config_view(cl, live) for cl in rows]
     for c in items:
         account = accounts.get(c["account_id"])
         c["account_email"] = account["email"] if account else ""
@@ -2317,9 +2448,18 @@ def configs_page(request: Request, q: str | None = None, state: str = ""):
         items = [c for c in items if not c["enabled"]]
     elif state == "unassigned":
         items = [c for c in items if not c["account_email"]]
+    status, fresh = routing_status()
+    known = {e["iface"]: e for e in exits_rows()}
+    by_id = {cl["id"]: cl for cl in rows}
+    shared = shared_internet_configs(rows) if fresh else set()
+    for item in items:
+        item["admin_route"] = admin_config_route(
+            by_id[item["id"]], item, status, fresh, known, item["id"] in shared
+        )
     return render_page(
         request, "configs.html", "configs",
         csrf=csrf(token), configs=items, q=q or "", state=state, filters=filters,
+        routing_fresh=fresh,
     )
 
 
@@ -2428,16 +2568,13 @@ def config_page(
     client_rtt = (status.get("client_ping") or {}).get(cl["ip"])
     states = status.get("exits") or {}
     known = exits_rows()
+    internet_exits = config_internet_exits(cl)
+    shared = not cl["account_id"] and bool(cl["internet"]) and not internet_exits
+    route = admin_config_route(
+        cl, view, status, routing_fresh, {e["iface"]: e for e in known}, shared
+    )
     latency = {
         e["iface"]: (states.get(e["iface"], {}).get("rtt_ms") if routing_fresh else None)
-        for e in known
-    }
-    alive = {
-        e["iface"]: (bool(states.get(e["iface"], {}).get("alive")) if routing_fresh else None)
-        for e in known
-    }
-    degraded = {
-        e["iface"]: (bool(states.get(e["iface"], {}).get("degraded")) if routing_fresh else False)
         for e in known
     }
     try:
@@ -2454,10 +2591,10 @@ def config_page(
         request, "config_detail.html", "configs",
         csrf=csrf(token), err=err, ok=ok, config=view, **traffic_context(cid, period),
         account=account, routed=config_routed_exits(cl),
-        diagnosis=configuration_diagnosis(view, status, int(time.time()),
-                                           not cl["account_id"] and not config_internet_exits(cl)),
-        internet_exits=config_internet_exits(cl),
-        latency=latency, alive=alive, degraded=degraded, client_rtt=client_rtt,
+        diagnosis=configuration_diagnosis(view, status, int(time.time()), shared),
+        internet_exits=internet_exits, route=route,
+        exit_states={e["iface"]: exit_view(e, status, None) for e in internet_exits},
+        latency=latency, client_rtt=client_rtt,
         conf=conf, routing_fresh=routing_fresh,
         accounts=accounts,
         routed_choices=[
@@ -2843,18 +2980,24 @@ def account_page(
     if not account:
         raise HTTPException(status_code=404)
     live = iface_dump(cfg()["iface"])["peers"]
-    configs = [config_view(cl, live) for cl in account_configs(aid)]
-    routed = [
-        e for e in exits_rows() if e["mode"] == "routes" and e["enabled"]
-    ]
+    rows = account_configs(aid)
+    configs = [config_view(cl, live) for cl in rows]
+    exits = exits_rows()
+    status, fresh = routing_status()
+    known = {e["iface"]: e for e in exits}
+    for cl, view in zip(rows, configs):
+        view["admin_route"] = admin_config_route(cl, view, status, fresh, known)
+    routed = [e for e in exits if e["mode"] == "routes" and e["enabled"]]
     granted = {e["id"] for e in account_exits(aid)}
+    order = account_exits(aid, "internet")
     return render_page(
         request, "account_detail.html", "accounts",
         csrf=csrf(token), err=err, ok=ok, account=account,
         configs=configs, routed=routed, granted=granted,
         checks=account_check_rows(aid),
-        internet_exits=internet_exits_rows(),
-        order=account_exits(aid, "internet"),
+        internet_exits=[e for e in exits if e["enabled"] and e["mode"] == "internet"],
+        order=order, routing_fresh=fresh,
+        exit_states={e["iface"]: exit_view(e, status, None) for e in order},
         limit=max_configs_for(account),
         default_limit=setting("default_max_configs"),
         newpw=pop_secret(newpw),
@@ -3683,6 +3826,63 @@ def download_android():
     )
 
 
+_apk_meta: tuple[tuple[int, ...], dict] | None = None
+
+
+def android_apk_meta(path: Path) -> dict:
+    """Package metadata of the APK, cached until the file changes.
+
+    The file itself is the only source of truth: it can be replaced on the
+    host without a deploy, and the next request picks up the new version.
+    """
+    global _apk_meta
+    def identity(stat):
+        return (stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns)
+
+    with path.open("rb") as handle:
+        stat = os.fstat(handle.fileno())
+        key = identity(stat)
+        if _apk_meta and _apk_meta[0] == key:
+            return _apk_meta[1]
+        meta = apkmeta.read_meta_stream(handle)
+        if identity(os.fstat(handle.fileno())) != key or identity(path.stat()) != key:
+            raise apkmeta.ApkError("APK changed while being read")
+    meta["published"] = datetime.fromtimestamp(
+        stat.st_mtime, timezone.utc
+    ).strftime("%Y-%m-%dT%H:%M:%SZ")
+    _apk_meta = (key, meta)
+    return meta
+
+
+@app.get("/api/android")
+def android_info(request: Request):
+    """Public version and digest of the APK served at /download/android.
+
+    The Android client checks this before signing in, so it needs no token.
+    Everything here describes the file on disk: the version comes from its
+    manifest and the digest from its bytes, so the answer cannot drift from
+    what a download would actually deliver.
+    """
+    if not ANDROID_APK.exists():
+        raise HTTPException(status_code=404, detail="no app published")
+    try:
+        meta = android_apk_meta(ANDROID_APK)
+    except (OSError, apkmeta.ApkError):
+        raise HTTPException(status_code=503, detail="app metadata is unreadable")
+    payload = {
+        "package": meta["package"],
+        "versionCode": meta["versionCode"],
+        "versionName": meta["versionName"],
+        "url": str(request.base_url).rstrip("/") + "/download/android",
+        "sha256": meta["sha256"],
+        "size": meta["size"],
+        "published": meta["published"],
+    }
+    if "minSdk" in meta:
+        payload["minSdk"] = meta["minSdk"]
+    return JSONResponse(payload, headers={"Cache-Control": "public, max-age=300"})
+
+
 @app.get("/me/conf")
 def me_conf(request: Request):
     """Compatibility: the first configuration, for the released app."""
@@ -4209,8 +4409,8 @@ def status_json(request: Request, overview: bool = False):
     now = int(time.time())
     rows = account_configs(int(account["id"])) if account else config_rows()
     views = [config_view(cl, live) for cl in rows]
-    shared = {cl["id"] for cl in rows if not cl["account_id"] and cl["internet"]
-              and not config_internet_exits(cl)}
+    shared = shared_internet_configs(rows)
+    exit_rows_all = exits_rows()
     exits = {
         e["iface"]: {
             "name": e["name"],
@@ -4223,14 +4423,43 @@ def status_json(request: Request, overview: bool = False):
             "rtt_ms": (status.get("exits") or {}).get(e["iface"], {}).get("rtt_ms"),
             "last_ok": (status.get("exits") or {}).get(e["iface"], {}).get("last_ok", 0),
         }
-        for e in exits_rows()
+        for e in exit_rows_all
     }
     current = status.get("clients") or {}
     health = {}
-    if overview and role == "admin":
+    if role == "admin":
+        health["exit_usage"] = exit_usage(rows, status, shared) if status_fresh else {}
         active = run_dir("active-exit") if status_fresh else None
+        health["global_exit"] = active
+        health["global_pin"] = setting("manual_exit") or ""
+        health["exit_targets"] = {
+            iface: entry.get("targets") or {}
+            for iface, entry in (status.get("exits") or {}).items()
+        }
+        known = {e["iface"]: e for e in exit_rows_all}
+        admin_routes = {
+            cl["ip"]: admin_config_route(cl, view, status, status_fresh, known, cl["id"] in shared)
+            for cl, view in zip(rows, views)
+        }
+        if request.query_params.get("exit_configurations"):
+            health["exit_configurations"] = {}
+            wanted = request.query_params["exit_configurations"]
+            for e in exit_rows_all:
+                if e["iface"] == wanted and e["mode"] == "internet":
+                    current_rows, reserve_rows = exit_configurations(
+                        e, sorted(rows, key=lambda cl: cl["name"]), status, status_fresh
+                    )
+                    def compact(items):
+                        return [{"id": cl["id"], "name": cl["name"], "ip": cl["ip"]}
+                                for cl in items]
+                    health["exit_configurations"] = {
+                        "current": compact(current_rows), "reserve": compact(reserve_rows),
+                    }
+                    break
+    if overview and role == "admin":
         health["overview"] = overview_health(
-            [exit_view(e, status, active) for e in exits_rows()], status_fresh
+            [exit_view(e, status, active) for e in exit_rows_all], status_fresh,
+            health["exit_usage"],
         )
     return {
         **health,
@@ -4252,6 +4481,7 @@ def status_json(request: Request, overview: bool = False):
                 "rx": v["rx"],
                 "tx": v["tx"],
                 "iface": current.get(v["ip"], ""),
+                **({"admin_route": admin_routes[v["ip"]]} if role == "admin" else {}),
                 "diagnosis": configuration_diagnosis(
                     v, status, now, v["id"] in shared
                 ),
@@ -4265,7 +4495,7 @@ def status_json(request: Request, overview: bool = False):
 
 @app.get("/journal", response_class=HTMLResponse)
 def journal_page(request: Request, action: str | None = None, page: int = 1):
-    token = require_admin(request)
+    require_admin(request)
     per = 50
     page = max(1, page)
     where, params = "", []
@@ -4273,17 +4503,19 @@ def journal_page(request: Request, action: str | None = None, page: int = 1):
         where, params = "WHERE action = ?", [action]
     with db() as conn:
         total = conn.execute(f"SELECT count(*) FROM audit {where}", params).fetchone()[0]
+        pages = max(1, (total + per - 1) // per)
+        page = min(page, pages)
         events = conn.execute(
             f"SELECT ts, action, detail FROM audit {where} ORDER BY id DESC LIMIT ? OFFSET ?",
             params + [per, (page - 1) * per],
         ).fetchall()
-        actions = [r[0] for r in conn.execute(
-            "SELECT action, count(*) c FROM audit GROUP BY action ORDER BY c DESC"
-        ).fetchall()]
-    pages = max(1, (total + per - 1) // per)
+        actions = {r[0] for r in conn.execute("SELECT DISTINCT action FROM audit")}
+    if action:
+        actions.add(action)
     return render_page(
         request, "journal.html", "journal",
-        events=events, actions=actions, action=action or "",
+        events=events, actions=sorted(actions, key=lambda code: (audit_label(code).casefold(), code)),
+        action=action or "",
         page=page, pages=pages, total=total,
     )
 
@@ -4300,13 +4532,15 @@ def settings_page(request: Request, ok: str | None = None, err: str | None = Non
         exits_n = conn.execute("SELECT count(*) FROM exits").fetchone()[0]
         audits_n = conn.execute("SELECT count(*) FROM audit").fetchone()[0]
     db_size = DB_PATH.stat().st_size if DB_PATH.exists() else 0
+    states = services()
     return render_page(
         request, "settings.html", "settings",
         cfg=c, csrf=csrf(token), ok=ok, err=err,
         accounts_n=accounts_n, configs_n=configs_n, exits_n=exits_n,
         audits_n=audits_n, default_max_configs=setting("default_max_configs"),
         login_anonymous=setting("login_anonymous") == "1",
-        db_size=db_size, status=services(),
+        db_size=db_size, system_services=SYSTEM_SERVICES,
+        service_states={key: service_state(states.get(key)) for key in SYSTEM_SERVICES},
     )
 
 

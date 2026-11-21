@@ -1,91 +1,66 @@
 {% extends "base.html" %}
+{% from "_admin_ui.html" import exit_state, exit_roles %}
 {% block title %}exits — deeps kaskad{% endblock %}
 {% block body %}
-<div class="page-head">
+<div class="page-head toolbar">
   <h1>Exits</h1>
+  <a class="oc-btn oc-btn--contrast oc-btn--sm" href="/exits/new">Add exit</a>
 </div>
 
 <div class="toolbar">
-  <div class="oc-tabs" role="tablist">
-    <a class="oc-tabs__item" role="tab" aria-selected="{{ 'true' if not mode else 'false' }}" href="/exits">all · {{ counts.all }}</a>
-    <a class="oc-tabs__item" role="tab" aria-selected="{{ 'true' if mode == 'internet' else 'false' }}" href="/exits?mode=internet">internet · {{ counts.internet }}</a>
-    <a class="oc-tabs__item" role="tab" aria-selected="{{ 'true' if mode == 'routes' else 'false' }}" href="/exits?mode=routes">subnets · {{ counts.routes }}</a>
-  </div>
-  <a class="oc-btn oc-btn--contrast oc-btn--sm" href="/exits/new">add exit</a>
+  <nav class="oc-tabs" aria-label="Filter exits">
+    <a class="oc-tabs__item{{ ' is-active' if not mode }}" {% if not mode %}aria-current="page"{% endif %} href="/exits">All · {{ counts.all }}</a>
+    <a class="oc-tabs__item{{ ' is-active' if mode == 'internet' }}" {% if mode == 'internet' %}aria-current="page"{% endif %} href="/exits?mode=internet">Internet · {{ counts.internet }}</a>
+    <a class="oc-tabs__item{{ ' is-active' if mode == 'routes' }}" {% if mode == 'routes' %}aria-current="page"{% endif %} href="/exits?mode=routes">Subnets · {{ counts.routes }}</a>
+  </nav>
+  <span class="oc-muted exits-count">{{ exits | selectattr('enabled') | list | length }} of {{ exits | length }} shown enabled</span>
 </div>
 
 {% if exits %}
 <div class="oc-panel">
-  <div class="oc-panel__head">
-    <span>health-check every 10 s</span>
-    {% if not routing_fresh %}<span class="oc-badge oc-badge--warning" data-live="status">status unavailable</span>{% else %}<span class="oc-badge oc-badge--warning" data-live="status" hidden>status unavailable</span>{% endif %}
-    <span>your device to panel: <span class="oc-mono" id="client-rtt">measuring…</span></span>
-    <span style="flex:1"></span>
-    <span class="oc-badge oc-badge--subtle">{{ exits | selectattr('enabled') | list | length }} of {{ exits | length }} enabled</span>
-  </div>
-  <div class="table-scroll">
-  <table class="oc-table">
+  <table class="oc-table exits-table">
     <thead>
-      <tr><th>Name</th><th>State</th><th>Latency</th><th>Mode</th></tr>
+      <tr><th scope="col">Exit</th><th scope="col">State</th><th scope="col">In use</th><th scope="col">Latency</th><th scope="col">Priority</th></tr>
     </thead>
     <tbody>
     {% for e in exits %}
-      <tr data-href="/exits/{{ e.id }}" tabindex="0">
-        <td><span class="name-cell">{{ e.name }}{% if e.country or e.comment %}<span class="oc-muted" style="margin-left:8px">{{ e.country }}{% if e.country and e.comment %} · {% endif %}{{ e.comment }}</span>{% endif %}{% if e.active %}<span class="oc-badge oc-badge--accent">active</span>{% endif %}
-                {% if e.pinned %}<span class="oc-badge oc-badge--warning">pinned</span>{% endif %}</span></td>
-        <td>
-          <span class="oc-badge {% if not e.enabled %}oc-badge--subtle{% elif e.degraded %}oc-badge--warning{% elif e.alive %}oc-badge--success{% elif e.alive is none %}{% else %}oc-badge--danger{% endif %}" data-live="exit|{{ e.iface }}">{% if not e.enabled %}disabled{% elif e.degraded %}degraded{% elif e.alive %}up{% elif e.alive is none %}no data{% else %}down{% endif %}</span>
-          <div class="cell-sub" data-live="lastok|{{ e.iface }}"></div>
-        </td>
-        <td class="oc-mono oc-muted">
-          <span class="ping-cell" data-live="ping|{{ e.iface }}">{% if e.alive and e.rtt_ms %}{{ e.rtt_ms }} ms{% else %}—{% endif %}</span>
-        </td>
-        <td>
-          {% if e.mode == 'routes' %}
-            <span class="oc-badge oc-badge--subtle">subnets</span>
-            {% if not e.nat %}<span class="oc-badge oc-badge--warning">no NAT</span>{% endif %}
-            <div class="cell-sub oc-mono">{{ e.routes }}</div>
-          {% else %}
-            <span class="oc-badge oc-badge--subtle">internet</span>
+      <tr data-href="/exits/{{ e.id }}">
+        <td class="exits-table__name">
+          <div class="exits-identity">
+          <a class="oc-link" href="/exits/{{ e.id }}">{{ e.name }}</a>
+          {% if e.country %}<span class="oc-muted">{{ e.country }}</span>{% endif %}
+          {% if e.mode == 'internet' %}{{ exit_roles(e) }}{% else %}
+          <span class="oc-badge oc-badge--subtle">Subnets</span>
+          {% if not e.nat %}<span class="oc-badge oc-badge--warning">No NAT</span>{% endif %}
           {% endif %}
+          </div>
         </td>
+        <td class="exits-table__state">
+          {{ exit_state(e) }}
+        </td>
+        <td class="oc-num exits-table__usage">
+          <span class="exits-mobile-label">In use </span>
+          {% if e.mode == 'internet' %}
+          <span data-live="exit-usage|{{ e.iface }}">{{ usage.get(e.iface, 0) if routing_fresh else '—' }}</span>
+          {% else %}<span aria-label="Not applicable">—</span>{% endif %}
+        </td>
+        <td class="oc-num exits-table__latency">
+          <span class="exits-mobile-label">Latency </span>
+          {% if e.mode == 'internet' %}<span data-live="exit-rtt|{{ e.iface }}">{{ (e.rtt_ms ~ ' ms') if e.enabled and e.alive and e.rtt_ms is not none else '—' }}</span>
+          {% else %}<span aria-label="Handshake only">—</span>{% endif %}
+        </td>
+        <td class="oc-num exits-table__priority"><span class="exits-mobile-label">Priority </span>{{ e.priority if e.mode == 'internet' else '—' }}</td>
       </tr>
     {% endfor %}
     </tbody>
   </table>
-  </div>
 </div>
 {% else %}
 <div class="oc-card oc-card--warning">
-  <div class="oc-card__title">No exits</div>
-  <div class="oc-card__desc">Add at least one internet exit, otherwise clients will have no access.</div>
+  <div class="oc-card__title">{{ 'No matching exits' if mode else 'No exits' }}</div>
+  {% if mode %}<a class="oc-link" href="/exits">Show all exits</a>{% endif %}
 </div>
 {% endif %}
 
-<script>
-(function () {
-  function sample(left, values) {
-    if (left <= 0) {
-      const label = document.getElementById('client-rtt');
-      if (!values.length) {
-        if (label) label.textContent = 'unavailable';
-        kaskadLive(20, null);
-        return;
-      }
-      values.sort((a, b) => a - b);
-      const ms = Math.round(values[Math.floor(values.length / 2)]);
-      if (label) label.textContent = ms + ' ms';
-      kaskadLive(20, ms);
-      return;
-    }
-    const started = performance.now();
-    fetch('/ping', {cache: 'no-store'})
-      .then((r) => r.text())
-      .then(() => values.push(performance.now() - started))
-      .catch(() => {})
-      .finally(() => sample(left - 1, values));
-  }
-  sample(4, []);
-})();
-</script>
+<script>kaskadLive(20);</script>
 {% endblock %}

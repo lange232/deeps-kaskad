@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "_admin_ui.html" import notices, exit_state, exit_roles %}
 {% block title %}{{ exit.name }} — deeps kaskad{% endblock %}
 {% block topbar %}<a class="oc-mono topbar-link" href="/exits/{{ exit.id }}">{{ exit.iface }}</a>{% endblock %}
 {% block body %}
@@ -6,23 +7,76 @@
 <div class="page-head">
   <div class="name-cell">
     <h1 style="margin:0">{{ exit.name }}</h1>
-    {% if exit.active %}<span class="oc-badge oc-badge--accent">active</span>{% endif %}
-    {% if exit.pinned %}<span class="oc-badge oc-badge--warning">pinned</span>{% endif %}
-    {% if not exit.enabled %}<span class="oc-badge oc-badge--subtle">disabled</span>
-    {% elif exit.degraded %}<span class="oc-badge oc-badge--warning">degraded</span>
-    {% elif exit.alive %}<span class="oc-badge oc-badge--success"><span class="oc-dot"></span>up</span>
-    {% elif exit.alive is none %}<span class="oc-badge">no data</span>
-    {% else %}<span class="oc-badge oc-badge--danger"><span class="oc-dot"></span>down</span>{% endif %}
+    {{ exit_state(exit) }}
   </div>
-  <p class="oc-muted" style="margin-top:6px">{{ exit.endpoint }}</p>
-  <p class="oc-muted" style="margin-top:4px">your device to panel: <span class="oc-mono" id="client-rtt">measuring…</span></p>
+  {% if exit.country %}<p class="oc-muted">{{ exit.country }}</p>{% endif %}
+  {% if exit.mode == 'internet' %}<div class="actions exit-markers">{{ exit_roles(exit) }}</div>{% endif %}
 </div>
 
-{% if err %}<div class="oc-alert oc-alert--danger" style="margin-bottom:16px"><span class="oc-dot" style="margin-top:7px"></span><div class="oc-alert__body">{{ err }}</div></div>{% endif %}
-{% if ok %}<div class="oc-alert oc-alert--success" style="margin-bottom:16px"><span class="oc-dot" style="margin-top:7px"></span><div class="oc-alert__body">{{ ok }}</div></div>{% endif %}
+{{ notices(err, ok) }}
 
 <div class="stack">
-  <div class="oc-panel" style="padding:16px">
+  <section>
+    <h2 class="oc-section__title">Health checks</h2>
+    <div class="oc-panel exit-section">
+      <div class="kv-grid">
+        <div><div class="k">Last successful check</div><div class="v" data-live="lastok|{{ exit.iface }}">—</div></div>
+        <div><div class="k">Panel to exit</div><div class="v oc-num">{% if exit.mode == 'routes' %}Handshake only{% else %}<span data-live="exit-rtt|{{ exit.iface }}">{{ (exit.rtt_ms ~ ' ms') if exit.alive and exit.rtt_ms is not none else '—' }}</span>{% endif %}</div></div>
+      </div>
+      {% if exit.mode == 'internet' %}
+      <ul class="probe-list" data-live="exit-targets|{{ exit.iface }}">
+        {% for url, ok in exit.targets.items() %}
+        <li><span class="oc-badge oc-badge--{{ 'success' if ok else 'danger' }}">{{ 'Pass' if ok else 'Fail' }}</span><span class="oc-mono">{{ url }}</span></li>
+        {% else %}
+        <li class="oc-muted">No probe results</li>
+        {% endfor %}
+      </ul>
+      {% endif %}
+    </div>
+  </section>
+
+  <section id="exit-configurations" tabindex="-1">
+    {% if exit.mode == 'routes' %}
+    <h2 class="oc-section__title">Selected for subnets</h2>
+    {% with clients = current_configs %}{% include '_exit_configurations.html' %}{% endwith %}
+    {% else %}
+    <h2 class="oc-section__title">Uses this exit</h2>
+    <div data-live="exit-config-current|{{ exit.iface }}">
+      {% if routing_fresh %}
+      {% with clients = current_configs %}{% include '_exit_configurations.html' %}{% endwith %}
+      {% else %}
+      <p class="oc-muted">Current routing status unavailable</p>
+      {% endif %}
+    </div>
+    <details class="manage-block exit-alternatives">
+      <summary data-live="exit-config-summary|{{ exit.iface }}">{{ 'Available as an alternative' if routing_fresh else 'Eligible configurations' }} ({{ reserve_configs | length }})</summary>
+      <div data-live="exit-config-reserve|{{ exit.iface }}">{% with clients = reserve_configs %}{% include '_exit_configurations.html' %}{% endwith %}</div>
+    </details>
+    {% endif %}
+  </section>
+
+  {% if exit.mode == 'internet' %}
+  <section>
+    <h2 class="oc-section__title">Global routing</h2>
+    <div class="oc-panel exit-section">
+      <p class="oc-muted">Controls the server default, not individual configuration pins.</p>
+      <div class="actions">
+        <form method="post" action="/exits/{{ exit.id }}/activate">
+          <input type="hidden" name="csrf_token" value="{{ csrf }}">
+          <button class="oc-btn oc-btn--outline oc-btn--sm" data-live="global-pin-button|{{ exit.iface }}" {{ 'disabled' if (exit.active and exit.pinned) or not exit.enabled }}>Make global exit</button>
+        </form>
+        <form method="post" action="/exits/auto" data-live="global-auto-button|{{ exit.iface }}"{% if not exit.pinned %} hidden{% endif %}>
+          <input type="hidden" name="csrf_token" value="{{ csrf }}">
+          <button class="oc-btn oc-btn--neutral oc-btn--sm">Return to auto</button>
+        </form>
+      </div>
+    </div>
+  </section>
+  {% endif %}
+
+  <section>
+    <h2 class="oc-section__title">Settings</h2>
+    <div class="oc-panel exit-section">
     <div class="kv-grid">
       <div><div class="k">mode</div><div class="v">
         {% if exit.mode == 'routes' %}<span class="oc-badge oc-badge--subtle">subnets only</span>{% else %}<span class="oc-badge oc-badge--subtle">internet</span>{% endif %}
@@ -31,10 +85,6 @@
       <div><div class="k">country</div><div class="v">{{ exit.country or '—' }}</div></div>
       <div><div class="k">comment</div><div class="v">{{ exit.comment or '—' }}</div></div>
       <div><div class="k">priority</div><div class="v oc-num">{{ exit.priority }}</div></div>
-      <div><div class="k">ping</div><div class="v">
-        {% if exit.mode == 'routes' %}<span class="oc-muted" data-live="ping|{{ exit.iface }}">n/a (handshake only)</span>
-        {% else %}<span class="ping-cell" data-live="ping|{{ exit.iface }}">{% if exit.alive and exit.rtt_ms %}{{ exit.rtt_ms }} ms{% else %}—{% endif %}</span>{% endif %}
-      </div></div>
       <div><div class="k">NAT</div><div class="v">
         {% if exit.mode == 'internet' %}
           on <span class="oc-muted">(required for internet exits)</span>
@@ -58,17 +108,6 @@
       <div><div class="k">subnets</div><div class="v oc-mono">{{ exit.routes }}</div></div>
       <div><div class="k">DNS</div><div class="v oc-mono">{{ exit.dns or '—' }}</div></div>
       {% endif %}
-      <div><div class="k">last check</div><div class="v" data-live="lastok|{{ exit.iface }}">—</div></div>
-      {% if exit.targets %}
-      <div><div class="k">targets</div><div class="v">
-        {% for url, ok in exit.targets.items() %}
-        <div class="cell-sub">
-          {% if ok %}<span class="oc-badge oc-badge--success">ok</span>{% else %}<span class="oc-badge oc-badge--danger">fail</span>{% endif %}
-          <span class="oc-mono">{{ url }}</span>
-        </div>
-        {% endfor %}
-      </div></div>
-      {% endif %}
     </div>
 
     <form method="post" action="/exits/{{ exit.id }}/details" style="margin-top:18px; max-width:420px">
@@ -87,19 +126,12 @@
       <button class="oc-btn oc-btn--outline oc-btn--sm" style="margin-top:10px">save</button>
     </form>
 
-    <div class="actions" style="margin-top:18px">
-      {% if exit.mode == 'internet' %}
-      <form method="post" action="/exits/{{ exit.id }}/activate">
-        <input type="hidden" name="csrf_token" value="{{ csrf }}">
-        <button class="oc-btn oc-btn--outline oc-btn--sm" {{ 'disabled' if (exit.active and exit.pinned) or not exit.enabled }}>make active</button>
-      </form>
-      {% endif %}
-      {% if exit.pinned %}
-      <form method="post" action="/exits/auto">
-        <input type="hidden" name="csrf_token" value="{{ csrf }}">
-        <button class="oc-btn oc-btn--neutral oc-btn--sm">return to auto</button>
-      </form>
-      {% endif %}
+    </div>
+  </section>
+
+  <details class="manage-block">
+    <summary>Manage exit</summary>
+    <div class="actions">
       <form method="post" action="/exits/{{ exit.id }}/toggle">
         <input type="hidden" name="csrf_token" value="{{ csrf }}">
         <button class="oc-btn oc-btn--neutral oc-btn--sm">{{ 'disable' if exit.enabled else 'enable' }}</button>
@@ -109,9 +141,8 @@
         <input type="hidden" name="csrf_token" value="{{ csrf }}">
         <button class="oc-btn oc-btn--ghost-danger oc-btn--sm">delete</button>
       </form>
-      <a class="oc-btn oc-btn--ghost-muted oc-btn--sm" href="/exits">back</a>
     </div>
-  </div>
+  </details>
 
   <section>
     <h2 class="oc-section__title">config</h2>
@@ -123,50 +154,7 @@
     </div>
   </section>
 
-  {% if exit.mode == 'internet' and not routing_fresh and exit.enabled %}
-  <p class="oc-muted">Current routing status unavailable</p>
-  {% endif %}
-  {% if exit.mode == 'routes' %}
-  <section>
-    <h2 class="oc-section__title">Selected for subnets</h2>
-    {% with clients = current_configs %}{% include '_exit_configurations.html' %}{% endwith %}
-  </section>
-  {% else %}
-  {% for heading, clients in [('Uses this exit', current_configs), ('Available as an alternative', reserve_configs)] %}
-  {% if routing_fresh or not loop.first %}
-  <section>
-    <h2 class="oc-section__title">{{ 'Eligible configurations' if not routing_fresh else heading }}</h2>
-    {% include '_exit_configurations.html' %}
-  </section>
-  {% endif %}
-  {% endfor %}
-  {% endif %}
 </div>
 
-<script>
-(function () {
-  function sample(left, values) {
-    if (left <= 0) {
-      const label = document.getElementById('client-rtt');
-      if (!values.length) {
-        if (label) label.textContent = 'unavailable';
-        kaskadLive(20, null);
-        return;
-      }
-      values.sort((a, b) => a - b);
-      const ms = Math.round(values[Math.floor(values.length / 2)]);
-      if (label) label.textContent = ms + ' ms';
-      kaskadLive(20, ms);
-      return;
-    }
-    const started = performance.now();
-    fetch('/ping', {cache: 'no-store'})
-      .then((r) => r.text())
-      .then(() => values.push(performance.now() - started))
-      .catch(() => {})
-      .finally(() => sample(left - 1, values));
-  }
-  sample(4, []);
-})();
-</script>
+<script>kaskadLive(20);</script>
 {% endblock %}

@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "_admin_ui.html" import config_route, exit_state, notices %}
 {% block title %}{{ config.name }} — deeps kaskad{% endblock %}
 {% block topbar %}<a class="oc-mono topbar-link" href="/configs/{{ config.id }}">{{ config.ip }}</a>{% endblock %}
 {% block body %}
@@ -19,12 +20,9 @@
     {% for e in routed %}<span class="oc-badge oc-badge--subtle">{{ e.name }}</span>{% endfor %}
     {% if not config.internet and not routed %}<span class="oc-badge oc-badge--danger">no access</span>{% endif %}
   </p>
-  {% set diagnosis_ip = config.ip %}
-  {% include '_config_diagnosis.html' %}
 </div>
 
-{% if err %}<div class="oc-alert oc-alert--danger" style="margin-bottom:16px"><span class="oc-dot" style="margin-top:7px"></span><div class="oc-alert__body">{{ err }}</div></div>{% endif %}
-{% if ok %}<div class="oc-alert oc-alert--success" style="margin-bottom:16px"><span class="oc-dot" style="margin-top:7px"></span><div class="oc-alert__body">{{ ok }}</div></div>{% endif %}
+{{ notices(err, ok) }}
 
 {% if not account %}
 <div class="oc-alert oc-alert--warning" style="margin-bottom:16px">
@@ -47,20 +45,25 @@
 {% endif %}
 
 <div class="stack">
-  <div class="oc-panel" style="padding:16px">
-    <div class="kv-grid">
-      <div><div class="k">handshake</div><div class="v" data-live="hs|{{ config.ip }}">—</div></div>
-      <div><div class="k">received</div><div class="v oc-num"><span data-live="rx|{{ config.ip }}">{{ (config.rx / 1048576) | round(1) }}</span> MiB</div></div>
-      <div><div class="k">sent</div><div class="v oc-num"><span data-live="tx|{{ config.ip }}">{{ (config.tx / 1048576) | round(1) }}</span> MiB</div></div>
-      <div><div class="k">address</div><div class="v oc-mono">{{ config.ip }}</div></div>
-      {% if config.device_id %}<div><div class="k">device id</div><div class="v oc-mono">{{ config.device_id }}</div></div>{% endif %}
+  <section>
+    <h2 class="oc-section__title">Connection</h2>
+    <div class="oc-panel exit-section">
+      {{ config_route(route, config.ip, show_labels=true) }}
+      {% set diagnosis_ip = config.ip %}
+      {% include '_config_diagnosis.html' %}
+      <div class="kv-grid" style="margin-top:16px">
+        <div><div class="k">Received</div><div class="v oc-num"><span data-live="rx|{{ config.ip }}">{{ (config.rx / 1048576) | round(1) }}</span> MiB</div></div>
+        <div><div class="k">Sent</div><div class="v oc-num"><span data-live="tx|{{ config.ip }}">{{ (config.tx / 1048576) | round(1) }}</span> MiB</div></div>
+        {% if config.device_id %}<div><div class="k">Device ID</div><div class="v oc-mono">{{ config.device_id }}</div></div>{% endif %}
+      </div>
     </div>
-  </div>
+  </section>
 
   <section>
-    <h2 class="oc-section__title">exits</h2>
+    <h2 class="oc-section__title">Routing</h2>
     <div class="oc-panel" style="padding:16px">
       {% if internet_exits %}
+      <p class="oc-muted">Automatic exit order</p>
       <div class="table-scroll">
       <table class="oc-table">
         <thead><tr><th style="width:1%">#</th><th>exit</th><th style="width:1%"></th></tr></thead>
@@ -69,13 +72,10 @@
           <tr>
             <td class="oc-num">{{ loop.index }}</td>
             <td>
-              {{ e.comment or e.name }}
+              <a class="oc-link" href="/exits/{{ e.id }}">{{ e.name }}</a>
+              {% if e.country %}<div class="cell-sub">{{ e.country }}</div>{% endif %}
               <div class="actions" style="margin-top:4px; gap:8px">
-                {% set exit_state = alive.get(e.iface) %}
-                {% if exit_state is none %}<span class="oc-badge oc-badge--subtle" data-live="exit|{{ e.iface }}">no data</span>
-                {% elif degraded.get(e.iface) %}<span class="oc-badge oc-badge--warning" data-live="exit|{{ e.iface }}">degraded</span>
-                {% elif exit_state %}<span class="oc-badge oc-badge--success" data-live="exit|{{ e.iface }}">up</span>
-                {% else %}<span class="oc-badge oc-badge--subtle" data-live="exit|{{ e.iface }}">down</span>{% endif %}
+                {{ exit_state(exit_states[e.iface]) }}
                 {% set exit_ms = latency.get(e.iface) %}
                 <span class="ping">
                   <span class="oc-mono ping__total" data-live="ping|{{ e.iface }}"
@@ -113,7 +113,7 @@
       </form>
       {% endif %}
       {% else %}
-      <p class="oc-muted" style="margin:0">no internet exits granted</p>
+       <p class="oc-muted" style="margin:0">{{ 'Uses the global exit order' if config.internet else 'No internet exits granted' }}</p>
       {% endif %}
 
       {% if account %}
@@ -157,7 +157,7 @@
   {% set chart_url = '/configs/' ~ config.id %}
   {% include '_traffic.html' %}
   <section>
-    <h2 class="oc-section__title">configuration</h2>
+    <h2 class="oc-section__title">Configuration files and keys</h2>
     <div class="oc-panel" style="padding:16px">
       <form method="post" action="/configs/{{ config.id }}/name"
             class="actions" style="margin-bottom:14px">
@@ -189,8 +189,8 @@
     </div>
   </section>
 
-  <section>
-    <h2 class="oc-section__title">danger zone</h2>
+  <details class="manage-block">
+    <summary>Manage configuration</summary>
     <div class="oc-panel" style="padding:16px">
       <div class="actions">
         <form method="post" action="/configs/{{ config.id }}/toggle">
@@ -202,10 +202,9 @@
           <input type="hidden" name="csrf_token" value="{{ csrf }}">
           <button class="oc-btn oc-btn--ghost-danger oc-btn--sm">delete configuration</button>
         </form>
-        <a class="oc-btn oc-btn--ghost-muted oc-btn--sm" href="/configs">back</a>
       </div>
     </div>
-  </section>
+  </details>
 </div>
 
 <script>

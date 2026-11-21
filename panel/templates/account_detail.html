@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "_admin_ui.html" import config_route, exit_state, notices %}
 {% block title %}{{ account.email }} — deeps kaskad{% endblock %}
 {% block topbar %}<a class="oc-mono topbar-link" href="/accounts/{{ account.id }}">{{ account.email }}</a>{% endblock %}
 {% block body %}
@@ -14,8 +15,7 @@
   </p>
 </div>
 
-{% if err %}<div class="oc-alert oc-alert--danger" style="margin-bottom:16px"><span class="oc-dot" style="margin-top:7px"></span><div class="oc-alert__body">{{ err }}</div></div>{% endif %}
-{% if ok %}<div class="oc-alert oc-alert--success" style="margin-bottom:16px"><span class="oc-dot" style="margin-top:7px"></span><div class="oc-alert__body">{{ ok }}</div></div>{% endif %}
+{{ notices(err, ok) }}
 
 {% if newpw %}
 <div class="oc-alert oc-alert--success" style="margin-bottom:16px">
@@ -63,59 +63,7 @@
 {% endif %}
 
 <div class="stack">
-  <section>
-    <div class="toolbar">
-      <h2 class="oc-section__title" style="margin:0">configurations</h2>
-      <span class="oc-muted">{{ configs | length }} of {{ limit }}</span>
-    </div>
-    {% if configs %}
-    <div class="oc-panel">
-      <div class="table-scroll">
-      <table class="oc-table">
-        <thead><tr><th>configuration</th><th style="width:1%">access</th></tr></thead>
-        <tbody>
-        {% for c in configs %}
-          <tr data-href="/configs/{{ c.id }}" tabindex="0">
-            <td>
-              {{ c.name }}
-              {% if not c.enabled %}<span class="oc-badge oc-badge--subtle">disabled</span>{% endif %}
-              <div class="cell-sub oc-mono" style="display:flex; flex-wrap:wrap; gap:4px 10px">
-                <span>{{ c.ip }}</span>
-                <span>handshake <span data-live="hs|{{ c.ip }}">—</span></span>
-              </div>
-            </td>
-            <td>
-              <div class="actions">
-                {% if c.internet %}<span class="oc-badge oc-badge--subtle">internet</span>{% endif %}
-                {% for name in c.exits %}<span class="oc-badge oc-badge--subtle">{{ name }}</span>{% endfor %}
-                {% if not c.internet and not c.exits %}<span class="oc-badge oc-badge--danger">no access</span>{% endif %}
-              </div>
-            </td>
-          </tr>
-        {% endfor %}
-        </tbody>
-      </table>
-      </div>
-    </div>
-    {% else %}
-    <div class="oc-empty">this account has no configurations yet</div>
-    {% endif %}
-
-    {% if configs | length < limit %}
-    <form method="post" action="/accounts/{{ account.id }}/configs" class="actions"
-          style="margin-top:12px; max-width:520px">
-      <input type="hidden" name="csrf_token" value="{{ csrf }}">
-      <input class="oc-input oc-input--sm" type="text" name="name" maxlength="32"
-             placeholder="name (optional)" spellcheck="false" style="flex:1">
-      <button class="oc-btn oc-btn--contrast oc-btn--sm">add configuration</button>
-    </form>
-    {% else %}
-    <p class="oc-hint" style="margin-top:10px">limit reached</p>
-
-    {% endif %}
-  </section>
-
-  <details id="access" class="manage-block" open><summary>Access</summary>
+  <details id="access" class="manage-block" open><summary>Access and checks</summary>
   <section>
     <h2 class="oc-section__title">Exit grants</h2>
     <div class="oc-panel" style="padding:16px">
@@ -159,9 +107,10 @@
   </section>
 
   <section>
-    <h2 class="oc-section__title">internet exit order</h2>
+    <h2 class="oc-section__title">Default internet exit order</h2>
     <div class="oc-panel" style="padding:16px">
       {% if order %}
+      <p class="oc-muted">Changing this order does not change existing configurations. Use “apply to all configurations” to reset their order.</p>
       <div class="table-scroll">
       <table class="oc-table">
         <thead><tr><th style="width:1%">#</th><th>exit</th><th style="width:1%"></th></tr></thead>
@@ -170,8 +119,9 @@
           <tr>
             <td class="oc-num">{{ loop.index }}</td>
             <td>
-              {{ e.comment or e.name }}
-              <div class="cell-sub oc-mono">{{ e.iface }}</div>
+              <a class="oc-link" href="/exits/{{ e.id }}">{{ e.name }}</a>
+              {% if e.country %}<div class="cell-sub">{{ e.country }}</div>{% endif %}
+              <div class="actions exit-markers">{{ exit_state(exit_states[e.iface]) }}</div>
             </td>
             <td>
               <div class="actions" style="flex-wrap:nowrap">
@@ -205,7 +155,6 @@
     </div>
   </section>
 
-  </details>
   <details class="manage-block"><summary>Checks ({{ checks | length }})</summary>
     <section>
       <h2 class="oc-section__title">Destinations this account checks</h2>
@@ -232,6 +181,56 @@
       {% endif %}
     </section>
   </details>
+  </details>
+
+  <section>
+    <div class="toolbar">
+      <h2 class="oc-section__title" style="margin:0">Configurations</h2>
+      <span class="oc-num oc-muted">{{ configs | length }} / {{ limit }}</span>
+    </div>
+    {% if configs %}
+    <div class="oc-panel table-scroll">
+      <table class="oc-table">
+        <thead><tr><th scope="col">Configuration</th><th scope="col">Current exit</th><th scope="col">Access</th></tr></thead>
+        <tbody>
+        {% for c in configs %}
+          <tr data-href="/configs/{{ c.id }}">
+            <td>
+              <a class="oc-link" href="/configs/{{ c.id }}">{{ c.name }}</a>
+              {% if not c.enabled %}<span class="oc-badge oc-badge--subtle">disabled</span>{% endif %}
+              <div class="cell-sub oc-mono">
+                {{ c.ip }} · <span data-live="hs|{{ c.ip }}">—</span>
+              </div>
+            </td>
+            <td>{{ config_route(c.admin_route, c.ip) }}</td>
+            <td>
+              <div class="actions">
+                {% if c.internet %}<span class="oc-badge oc-badge--subtle">internet</span>{% endif %}
+                {% for name in c.exits %}<span class="oc-badge oc-badge--subtle">{{ name }}</span>{% endfor %}
+                {% if not c.internet and not c.exits %}<span class="oc-badge oc-badge--danger">no access</span>{% endif %}
+              </div>
+            </td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+    <div class="oc-empty">No configurations for this account</div>
+    {% endif %}
+    {% if configs | length < limit %}
+    <form method="post" action="/accounts/{{ account.id }}/configs" class="actions"
+          style="margin-top:12px; max-width:520px">
+      <input type="hidden" name="csrf_token" value="{{ csrf }}">
+      <input class="oc-input oc-input--sm" type="text" name="name" maxlength="32"
+             aria-label="Configuration name" placeholder="Name (optional)" spellcheck="false" style="flex:1">
+      <button class="oc-btn oc-btn--contrast oc-btn--sm">Add configuration</button>
+    </form>
+    {% else %}
+    <p class="oc-hint" style="margin-top:10px">Configuration limit reached</p>
+    {% endif %}
+  </section>
+
   <details class="manage-block"><summary>Account settings</summary>
   <section>
     <h2 class="oc-section__title">limit</h2>

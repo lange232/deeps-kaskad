@@ -7,15 +7,18 @@ They need FastAPI and the panel venv:
 The system side (awg, systemctl, ip) is mocked: these tests only check the
 request handling, the database state and the transaction boundaries.
 """
+import hashlib
 import json
 import os
 import re
 import sqlite3
+import struct
 import subprocess
 import sys
 import tempfile
 import time
 import unittest
+import zipfile
 from pathlib import Path
 from unittest import mock
 
@@ -24,9 +27,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "panel"))
 try:
     from fastapi.testclient import TestClient
 
+    import apkmeta
     import app
     import auth
 except ImportError:  # pragma: no cover - local python without fastapi
+    apkmeta = None
     app = None
     TestClient = None
     auth = None
@@ -1009,7 +1014,8 @@ class AdminPingTests(PanelTestCase):
         with mock.patch.object(app, "read_status", return_value=status), \
                 mock.patch.object(app.awgconf, "render", return_value=""):
             text = self.client.get(f"/exits/{eid}").text
-        current, reserve = text.split("Available as an alternative", 1)
+        current, reserve = text.split('<section id="exit-configurations" tabindex="-1">', 1)[1].split(
+            '<summary data-live="exit-config-summary|awg1">', 1)
         self.assertIn("current-peer", current)
         self.assertNotIn("alternative-peer", current)
         self.assertIn("alternative-peer", reserve)
@@ -1264,6 +1270,52 @@ class ConfigLimitTests(PanelTestCase):
         self.assertEqual(app.setting("default_max_configs"), "2")
 
 
+class AdminActivitySystemTests(PanelTestCase):
+    def test_activity_labels_and_filter_survive_pagination(self):
+        self.login_admin()
+        app.audit("login_failed", "unrelated detail")
+        for i in range(51):
+            app.audit("exit_failover", f"Switch #{i}.")
+        app.audit("legacy_event", "<old detail>")
+
+        overview = self.client.get("/").text
+        self.assertIn("Global exit switched automatically", overview)
+        self.assertIn("Legacy event", overview)
+        self.assertIn("&lt;old detail&gt;", overview)
+        first = self.client.get("/journal?action=exit_failover").text
+        self.assertIn('value="exit_failover" selected>Global exit switched automatically', first)
+        self.assertIn('href="/journal?page=2&amp;action=exit_failover"', first)
+        self.assertNotIn("unrelated detail", first)
+        last = self.client.get("/journal?action=exit_failover&page=999").text
+        self.assertIn("Page 2 of 2", last)
+        self.assertIn("Switch #0.", last)
+        self.assertNotIn("Switch #50.", last)
+        empty = self.client.get("/journal?action=unrecorded_event").text
+        self.assertIn("No events match this filter", empty)
+        self.assertIn('value="unrecorded_event" selected', empty)
+
+    def test_system_service_health_is_independent_of_exit_status(self):
+        self.login_admin()
+        states = {"awg0": "active", "routing": "failed", "firewall": "unknown",
+                  "failover": "activating"}
+        with mock.patch.object(app, "services", return_value=states), \
+                mock.patch.object(app, "read_status", return_value={}):
+            page = self.client.get("/settings").text
+            data = self.client.get("/status.json?overview=true").json()
+        self.assertLess(page.index('id="services"'), page.index("Panel and network"))
+        self.assertIn('data-live="service|routing">Failed</span>', page)
+        self.assertIn('data-live="service|firewall">Unknown</span>', page)
+        self.assertFalse(data["status_fresh"])
+        self.assertEqual(data["overview"]["services"]["failover"],
+                         {"label": "Starting", "tone": "warning"})
+        self.seed_account()
+        self.login("c1@example.com", USER_PASSWORD)
+        denied = self.client.get("/settings")
+        self.assertEqual(denied.status_code, 303)
+        self.assertEqual(denied.headers["location"], "/me")
+        self.assertNotIn("overview", self.client.get("/status.json?overview=true").json())
+
+
 class RoutedChoiceTests(PanelTestCase):
     def test_admin_distinguishes_unselected_and_ungranted_subnets(self):
         aid, cid, routed = self.account_with_routed()
@@ -1486,6 +1538,275 @@ class StatusJsonTests(PanelTestCase):
         self.assertEqual(self.client.get("/status.json").status_code, 401)
 
 
+class AdminRouteConsistencyTests(PanelTestCase):
+    def test_reported_route_stays_visible_when_access_or_exit_is_disabled(self):
+        aid, cid = self.seed_client(name="phone")
+        eid = self.seed_exit("stopped", "awg1", enabled=0)
+        status = {"ts": int(time.time()), "clients": {"10.80.0.2": "awg1"}}
+        self.login_admin()
+        with mock.patch.object(app, "read_status", return_value=status), \
+                mock.patch.object(app.awgconf, "render", return_value=""):
+            live = self.client.get("/status.json?exit_configurations=awg1").json()
+            detail = self.client.get(f"/exits/{eid}").text
+        self.assertEqual(live["exit_usage"]["awg1"], 1)
+        self.assertEqual(live["configs"]["10.80.0.2"]["admin_route"]["current"]["id"], eid)
+        self.assertEqual([x["id"] for x in live["exit_configurations"]["current"]], [cid])
+        self.assertIn('data-live="admin-exit|awg1">Disabled</span>', detail)
+
+    def test_global_pin_fallback_and_shared_routes_are_consistent(self):
+        aid, cid = self.seed_client(name="phone")
+        global_id = self.seed_exit("global", "awg1")
+        pinned_id = self.seed_exit("pinned", "awg2")
+        fallback_id = self.seed_exit("fallback", "awg3")
+        self.grant(aid, cid, pinned_id)
+        self.grant(aid, cid, fallback_id, 20)
+        with app.db() as conn:
+            conn.execute("UPDATE clients SET pinned_iface = 'awg2' WHERE id = ?", (cid,))
+            orphan = conn.execute(
+                "INSERT INTO clients (name, ip, public_key, private_key, preshared_key, "
+                "enabled, created_at, internet, table_num) "
+                "VALUES ('shared', '10.80.0.9', 'pub2', 'priv', 'psk', 1, 'now', 1, 0)"
+            ).lastrowid
+        self.login_admin()
+        status = {"ts": int(time.time()), "active": "awg1",
+                  "clients": {"10.80.0.2": "awg3"},
+                  "exits": {"awg1": {"alive": True}, "awg2": {"alive": False},
+                            "awg3": {"alive": True, "degraded": True}}}
+        with mock.patch.object(app, "read_status", return_value=status), \
+                mock.patch.object(app, "run_dir", return_value="awg1"), \
+                mock.patch.object(app, "services", return_value={}), \
+                mock.patch.object(app.awgconf, "render", return_value=""):
+            global_data = self.client.get("/status.json?exit_configurations=awg1").json()
+            fallback_data = self.client.get("/status.json?overview=true&exit_configurations=awg3").json()
+            listing = self.client.get("/exits").text
+            detail = self.client.get(f"/exits/{fallback_id}").text
+            overview = self.client.get("/").text
+        self.assertEqual(global_data["exit_usage"], {"awg1": 1, "awg3": 1})
+        self.assertEqual([x["id"] for x in global_data["exit_configurations"]["current"]], [orphan])
+        self.assertEqual([x["id"] for x in fallback_data["exit_configurations"]["current"]], [cid])
+        route = fallback_data["configs"]["10.80.0.2"]["admin_route"]
+        self.assertEqual((global_data["global_exit"], route["pinned"]["id"], route["current"]["id"]),
+                         ("awg1", pinned_id, fallback_id))
+        self.assertIn('data-live="exit-usage|awg3">1</span>', listing)
+        self.assertIn(f'href="/exits/{fallback_id}#exit-configurations"', overview)
+        self.assertIn("fallback is degraded", overview)
+        self.assertIn(f'href="/configs/{cid}">phone</a>', detail)
+        self.assertEqual(global_id, fallback_data["overview"]["active"]["id"])
+
+        stale = dict(status, ts=int(time.time()) - 300)
+        with mock.patch.object(app, "read_status", return_value=stale):
+            data = self.client.get("/status.json?exit_configurations=awg3").json()
+            listing = self.client.get("/exits").text
+        self.assertFalse(data["status_fresh"])
+        self.assertEqual(data["exit_configurations"]["current"], [])
+        self.assertIn('data-live="exit-usage|awg3">—</span>', listing)
+        self.login("c1@example.com", USER_PASSWORD)
+        user_data = self.client.get("/status.json?exit_configurations=awg3").json()
+        self.assertNotIn("exit_configurations", user_data)
+        self.assertNotIn("exit_usage", user_data)
+        self.assertNotIn("admin_route", user_data["configs"]["10.80.0.2"])
+
+
+def _axml_strings(strings):
+    body = b""
+    offsets = []
+    for text in strings:
+        offsets.append(len(body))
+        raw = text.encode()
+        body += bytes([len(text), len(raw)]) + raw + b"\x00"
+    start = 28 + 4 * len(strings)
+    size = start + len(body)
+    return (struct.pack("<HHI", 0x0001, 28, size)
+            + struct.pack("<IIIII", len(strings), 0, 0x0100, start, 0)
+            + b"".join(struct.pack("<I", offset) for offset in offsets) + body)
+
+
+def _axml_attribute(name_index, value=None, string_index=None):
+    if string_index is None:
+        typed = struct.pack("<HBBI", 8, 0, 0x10, value)
+        raw = 0xFFFFFFFF
+    else:
+        typed = struct.pack("<HBBI", 8, 0, 0x03, string_index)
+        raw = string_index
+    return struct.pack("<III", 0xFFFFFFFF, name_index, raw) + typed
+
+
+def _axml_element(name_index, attributes):
+    body = struct.pack("<II", 0, 0xFFFFFFFF)
+    body += struct.pack("<II", 0xFFFFFFFF, name_index)
+    body += struct.pack("<HHHHHH", 20, 20, len(attributes), 0, 0, 0)
+    body += b"".join(attributes)
+    return struct.pack("<HHI", 0x0102, 16, 8 + len(body)) + body
+
+
+def build_apk(package, version_name, version_code, min_sdk=26):
+    """A minimal APK whose binary manifest carries the fields apkmeta reads."""
+    strings = ["versionName", "versionCode", "manifest", version_name, package,
+               "uses-sdk", "minSdkVersion", "package"]
+    resource_map = [0x0101021C, 0x0101021B, 0, 0, 0, 0, 0x0101020C, 0]
+    manifest = _axml_element(2, [
+        _axml_attribute(7, string_index=4),
+        _axml_attribute(0, string_index=3),
+        _axml_attribute(1, version_code),
+    ])
+    content = manifest
+    if min_sdk is not None:
+        content += _axml_element(5, [_axml_attribute(6, min_sdk)])
+    resources = struct.pack("<HHI", 0x0180, 8, 8 + 4 * len(resource_map))
+    resources += b"".join(struct.pack("<I", item) for item in resource_map)
+    pool = _axml_strings(strings)
+    return struct.pack("<HHI", 0x0003, 8, 8 + len(pool + resources + content)) + pool + resources + content
+
+
+class ApkMetaTests(unittest.TestCase):
+    @unittest.skipUnless(apkmeta, "panel modules are not importable")
+    def test_reads_package_and_versions_from_the_binary_manifest(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "app.apk"
+            with zipfile.ZipFile(path, "w") as apk:
+                apk.writestr("AndroidManifest.xml",
+                             build_apk("ru.deffhost.kaskad", "0.4.11", 411))
+            expected_size = path.stat().st_size
+            expected_digest = hashlib.sha256(path.read_bytes()).hexdigest()
+            meta = apkmeta.read_meta(path)
+        self.assertEqual(meta["package"], "ru.deffhost.kaskad")
+        self.assertEqual(meta["versionName"], "0.4.11")
+        self.assertEqual(meta["versionCode"], 411)
+        self.assertEqual(meta["minSdk"], 26)
+        self.assertEqual(meta["size"], expected_size)
+        self.assertEqual(meta["sha256"], expected_digest)
+
+    @unittest.skipUnless(apkmeta, "panel modules are not importable")
+    def test_rejects_a_file_without_a_manifest(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "app.apk"
+            with zipfile.ZipFile(path, "w") as apk:
+                apk.writestr("classes.dex", b"dex")
+            with self.assertRaises(apkmeta.ApkError):
+                apkmeta.read_meta(path)
+
+    @unittest.skipUnless(apkmeta, "panel modules are not importable")
+    def test_encrypted_or_unsupported_archive_is_an_apk_error(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "app.apk"
+            path.write_bytes(b"PK\x03\x04")
+            for error in (RuntimeError("encrypted"), NotImplementedError("compression")):
+                with self.subTest(error=error), \
+                        mock.patch.object(apkmeta.zipfile, "ZipFile", side_effect=error):
+                    with self.assertRaises(apkmeta.ApkError):
+                        apkmeta.read_meta(path)
+
+    @unittest.skipUnless(apkmeta, "panel modules are not importable")
+    def test_manifest_and_digest_use_same_open_file_during_replacement(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "app.apk"
+            replacement = Path(tmp) / "new.apk"
+            for filename, version in ((path, 411), (replacement, 412)):
+                with zipfile.ZipFile(filename, "w") as apk:
+                    apk.writestr("AndroidManifest.xml",
+                                 build_apk("ru.deffhost.kaskad", str(version), version))
+            old_digest = hashlib.sha256(path.read_bytes()).hexdigest()
+            open_zip = zipfile.ZipFile
+
+            def replace_then_open(handle, *args, **kwargs):
+                replacement.replace(path)
+                return open_zip(handle, *args, **kwargs)
+
+            with mock.patch.object(apkmeta.zipfile, "ZipFile", side_effect=replace_then_open):
+                result = apkmeta.read_meta(path)
+            self.assertEqual(result["versionCode"], 411)
+            self.assertEqual(result["sha256"], old_digest)
+
+
+class AndroidInfoTests(PanelTestCase):
+    def setUp(self):
+        super().setUp()
+        self.apk = Path(self.tmp.name) / "app.apk"
+        self.apk_patch = mock.patch.object(app, "ANDROID_APK", self.apk)
+        self.apk_patch.start()
+        app._apk_meta = None
+
+    def tearDown(self):
+        app._apk_meta = None
+        self.apk_patch.stop()
+        super().tearDown()
+
+    def publish(self, version_name="0.4.11", version_code=411, min_sdk=26):
+        with zipfile.ZipFile(self.apk, "w") as apk:
+            apk.writestr("AndroidManifest.xml", build_apk(
+                "ru.deffhost.kaskad", version_name, version_code, min_sdk))
+        return hashlib.sha256(self.apk.read_bytes()).hexdigest()
+
+    def test_anonymous_client_gets_version_and_digest(self):
+        digest = self.publish()
+        response = self.client.get("/api/android")
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["package"], "ru.deffhost.kaskad")
+        self.assertEqual(body["versionCode"], 411)
+        self.assertEqual(body["versionName"], "0.4.11")
+        self.assertEqual(body["minSdk"], 26)
+        self.assertEqual(body["sha256"], digest)
+        self.assertEqual(body["size"], self.apk.stat().st_size)
+        self.assertEqual(body["url"], "https://testserver/download/android")
+        self.assertRegex(body["published"], r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$")
+        self.assertEqual(response.headers["cache-control"], "public, max-age=300")
+
+    def test_no_apk_is_404_and_min_sdk_is_optional(self):
+        self.assertEqual(self.client.get("/api/android").status_code, 404)
+        self.publish(min_sdk=None)
+        body = self.client.get("/api/android").json()
+        self.assertNotIn("minSdk", body)
+        self.assertEqual(body["versionCode"], 411)
+
+    def test_replacing_the_file_changes_the_answer_without_a_restart(self):
+        self.publish(version_name="0.4.11", version_code=411)
+        self.assertEqual(self.client.get("/api/android").json()["versionCode"], 411)
+        self.publish(version_name="0.4.12", version_code=412)
+        body = self.client.get("/api/android").json()
+        self.assertEqual(body["versionCode"], 412)
+        self.assertEqual(body["versionName"], "0.4.12")
+
+    def test_a_file_that_is_not_an_apk_is_not_advertised(self):
+        self.apk.write_bytes(b"not a zip archive")
+        response = self.client.get("/api/android")
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(response.json()["detail"], "app metadata is unreadable")
+        self.assertNotIn("versionCode", response.text)
+
+    def test_truncated_binary_manifest_returns_503(self):
+        for manifest in (b"", b"\x03\x00", b"\x03\x00\x08\x00\x10\x00\x00\x00\x01\x00"):
+            with self.subTest(manifest=manifest):
+                with zipfile.ZipFile(self.apk, "w") as apk:
+                    apk.writestr("AndroidManifest.xml", manifest)
+                self.assertEqual(self.client.get("/api/android").status_code, 503)
+
+    def test_file_replaced_during_read_is_not_cached(self):
+        self.publish()
+        original = app.apkmeta.read_meta_stream
+
+        def replace_during_read(handle):
+            meta = original(handle)
+            replacement = self.apk.with_name("replacement.apk")
+            with zipfile.ZipFile(replacement, "w") as apk:
+                apk.writestr("AndroidManifest.xml", build_apk("ru.deffhost.kaskad", "0.4.12", 412))
+            replacement.replace(self.apk)
+            return meta
+
+        with mock.patch.object(app.apkmeta, "read_meta_stream", side_effect=replace_during_read):
+            self.assertEqual(self.client.get("/api/android").status_code, 503)
+        self.assertEqual(self.client.get("/api/android").json()["versionCode"], 412)
+
+    def test_download_endpoint_serves_the_same_file_it_describes(self):
+        digest = self.publish()
+        info = self.client.get("/api/android").json()
+        download = self.client.get("/download/android")
+        self.assertEqual(download.status_code, 200)
+        self.assertEqual(hashlib.sha256(download.content).hexdigest(), info["sha256"])
+        self.assertEqual(digest, info["sha256"])
+        self.assertEqual(len(download.content), info["size"])
+
+
 class ConfigPingTests(PanelTestCase):
     def card(self, status):
         aid, cid = self.seed_client()
@@ -1519,9 +1840,32 @@ class ConfigPingTests(PanelTestCase):
             "ts": int(time.time()) - 300,
             "exits": {"awg1": {"alive": True, "rtt_ms": 40}},
         })
-        self.assertIn(">no data</span>", text)
-        self.assertNotIn(">up</span>", text)
+        self.assertIn('data-live="admin-exit|awg1">No data</span>', text)
+        self.assertIn("data-route-current hidden", text)
+        self.assertNotIn(">Up</span>", text)
         self.assertNotIn("40 ms", text)
+
+    def test_admin_pages_distinguish_current_exit_from_saved_pin(self):
+        aid, cid = self.seed_client()
+        pinned = self.seed_exit("preferred", "awg1")
+        current = self.seed_exit("fallback", "awg2")
+        self.grant(aid, cid, pinned)
+        self.grant(aid, cid, current, 20)
+        with app.db() as conn:
+            conn.execute("UPDATE clients SET pinned_iface = ? WHERE id = ?", ("awg1", cid))
+        self.login_admin()
+        status = {"ts": int(time.time()), "active": "awg1",
+                  "clients": {"10.80.0.2": "awg2"}}
+        with mock.patch.object(app, "read_status", return_value=status):
+            routes = self.client.get("/status.json").json()["configs"]
+            for path in ("/configs", f"/configs/{cid}", f"/accounts/{aid}"):
+                with self.subTest(path=path):
+                    page = self.client.get(path)
+                    self.assertEqual(page.status_code, 200)
+                    self.assertIn(f'data-route-current href="/exits/{current}">fallback', page.text)
+                    self.assertIn(f'Pinned · <a class="oc-link" href="/exits/{pinned}">preferred', page.text)
+        self.assertEqual(routes["10.80.0.2"]["admin_route"]["current"]["id"], current)
+        self.assertEqual(routes["10.80.0.2"]["admin_route"]["pinned"]["id"], pinned)
 
 
 class NavigationTests(PanelTestCase):
@@ -1585,10 +1929,60 @@ class NavigationTests(PanelTestCase):
                 mock.patch.object(app, "run_dir", return_value="awg1"):
             page = self.client.get("/exits")
         self.assertEqual(page.status_code, 200)
-        self.assertIn('data-live="status">status unavailable', page.text)
-        self.assertIn(">no data</span>", page.text)
-        self.assertNotIn(">up</span>", page.text)
-        self.assertNotIn('oc-badge--accent">active', page.text)
+        self.assertIn('role="status">Stale · exit status unavailable', page.text)
+        self.assertIn('data-live="admin-exit|awg1">No data</span>', page.text)
+        self.assertIn('data-live="exit-usage|awg1">—</span>', page.text)
+        self.assertIn('data-live="global-exit|awg1" hidden', page.text)
+
+    def test_admin_exit_usage_and_health_follow_the_reported_routes(self):
+        aid, cid = self.seed_client()
+        self.seed_client(name="disabled", ip="10.80.0.9",
+                         email="other@example.com", enabled=0)
+        first = self.seed_exit("first", "awg1")
+        second = self.seed_exit("second", "awg2")
+        self.grant(aid, cid, first)
+        self.grant(aid, cid, second, 20)
+        self.login_admin()
+        probe = "https://example.com/"
+        status = {
+            "ts": int(time.time()), "active": "awg1",
+            "clients": {"10.80.0.2": "awg2", "10.80.0.9": "awg2"},
+            "exits": {"awg1": {"alive": True},
+                      "awg2": {"alive": True, "targets": {probe: False}}},
+        }
+        with mock.patch.object(app, "read_status", return_value=status), \
+                mock.patch.object(app, "run_dir", return_value="awg1"), \
+                mock.patch.object(app, "services", return_value={}):
+            data = self.client.get("/status.json?overview=true").json()
+            exits = self.client.get("/exits").text
+            overview = self.client.get("/").text
+        self.assertEqual(data["global_exit"], "awg1")
+        self.assertEqual(data["exit_usage"], {"awg2": 1})
+        self.assertEqual(data["exit_targets"]["awg2"], {probe: False})
+        self.assertIn('data-live="exit-usage|awg1">0</span>', exits)
+        self.assertIn('data-live="exit-usage|awg2">1</span>', exits)
+        self.assertIn("second has a failed check", overview)
+        self.assertIn(f"/exits/{second}#exit-configurations", overview)
+
+    def test_exit_list_shows_latency_and_subnet_mode_without_internet_badges(self):
+        self.seed_exit("online", "awg1")
+        self.seed_exit("subnet", "awg2", mode="routes", routes="10.1.0.0/24")
+        self.login_admin()
+        status = {"ts": int(time.time()), "exits": {
+            "awg1": {"alive": True, "rtt_ms": 0},
+            "awg2": {"alive": True},
+        }}
+        with mock.patch.object(app, "read_status", return_value=status):
+            all_exits = self.client.get("/exits").text
+            internet = self.client.get("/exits?mode=internet").text
+            subnet = self.client.get("/exits?mode=routes").text
+        self.assertIn('data-live="exit-rtt|awg1">0 ms</span>', all_exits)
+        self.assertIn('aria-label="Handshake only">—</span>', all_exits)
+        self.assertIn(">Subnets</span>", all_exits)
+        self.assertIn("2 of 2 shown enabled", all_exits)
+        self.assertIn("1 of 1 shown enabled", internet)
+        self.assertIn("1 of 1 shown enabled", subnet)
+        self.assertNotIn('>internet</span>', all_exits)
 
     def test_current_page_is_marked_for_screen_readers(self):
         self.login_admin()

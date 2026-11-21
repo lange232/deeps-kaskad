@@ -1,0 +1,52 @@
+{% macro activity_table(events) %}
+<div class="oc-panel table-scroll">
+  <table class="oc-table activity-table">
+    <thead><tr><th scope="col">Time (UTC)</th><th scope="col">Event</th><th scope="col">Details</th></tr></thead>
+    <tbody>
+      {% for e in events %}
+      <tr>
+        <td class="oc-mono oc-muted"><time datetime="{{ e.ts }}">{{ e.ts[:16] | replace('T', ' ') }}</time></td>
+        <td>{{ e.action | audit_label }}</td>
+        <td class="oc-muted">{{ e.detail or '—' }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endmacro %}
+
+{% macro notices(err, ok) %}
+{% for message, kind in [(err, 'danger'), (ok, 'success')] if message %}
+<div class="oc-alert oc-alert--{{ kind }} page-notice" role="status">
+  <div class="oc-alert__body">{{ message }}</div>
+</div>
+{% endfor %}
+{% endmacro %}
+
+{% macro config_route(route, ip, show_labels=false) %}
+<div class="admin-config-route" data-live="admin-route|{{ ip }}">
+  <div>
+    {% if show_labels %}<span class="cell-sub">Current exit</span>{% endif %}
+    <a class="oc-link" data-route-current{% if route.current %} href="/exits/{{ route.current.id }}"{% else %} hidden{% endif %}>{{ route.current.name if route.current else '' }}</a>
+    <span class="oc-muted" data-route-note{% if route.current %} hidden{% endif %}>{{ route.note }}</span>
+  </div>
+  <div class="cell-sub" data-route-pin{% if not route.pinned %} hidden{% endif %}>
+    Pinned · <a class="oc-link" {% if route.pinned %}href="/exits/{{ route.pinned.id }}"{% endif %}>{{ route.pinned.name if route.pinned else '' }}</a>
+  </div>
+</div>
+{% endmacro %}
+
+{% macro exit_state(e) %}
+{% if not e.enabled %}{% set state, tone = 'Disabled', 'subtle' %}
+{% elif e.alive is none %}{% set state, tone = 'No data', 'subtle' %}
+{% elif not e.alive %}{% set state, tone = 'Down', 'danger' %}
+{% elif e.degraded %}{% set state, tone = 'Degraded', 'warning' %}
+{% else %}{% set state, tone = 'Up', 'success' %}
+{% endif %}
+<span class="oc-badge oc-badge--{{ tone }}" data-live="admin-exit|{{ e.iface }}">{{ state }}</span>
+{% endmacro %}
+
+{% macro exit_roles(e) %}
+<span class="oc-badge oc-badge--accent" data-live="global-exit|{{ e.iface }}"{% if not e.active %} hidden{% endif %}>Global exit</span>
+<span class="oc-badge oc-badge--subtle" data-live="global-pin|{{ e.iface }}"{% if not e.pinned %} hidden{% endif %}>Global pin</span>
+{% endmacro %}

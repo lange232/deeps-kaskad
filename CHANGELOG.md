@@ -5,6 +5,39 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- `GET /api/android` gives the Android client its package, version, size and
+  SHA-256 for an update check without signing in. Everything is read from the
+  APK on the host, so replacing the file takes effect without a deploy and the
+  answer cannot drift from what `/download/android` serves.
+
+### Changed
+
+- The admin overview highlights exit problems first. Exit lists distinguish
+  global selection from health and show live configuration counts. Exit
+  details show probe results and configuration usage before settings, with
+  global routing controls separate from disable and delete actions.
+- Exit details update current and alternative configuration lists as routes
+  change, using the same reported routes as the exit usage count.
+- Admin account pages group exit access and checks above configuration and
+  account management. Configuration lists and details distinguish the
+  reported internet exit from a saved pin.
+- Activity and Overview show readable event names. Activity uses a compact
+  event filter and keeps it when paging. System shows live service health
+  before panel settings and stored data.
+- Read Android APK metadata and checksum from the same file; reject a changing
+  or malformed APK. Document atomic publication to avoid partial downloads.
+- Refresh exit configuration lists while retaining keyboard focus when possible.
+- Compact the admin exit list and adapt it to narrow screens; show exit latency
+  alongside health and usage.
+- The deploy no longer ships or replaces the Android client APK, and
+  `scripts/fetch-apk.sh` is gone with the repo copy it produced. The file on
+  the host (`/var/lib/kaskad/app.apk`) is the only source: the panel reads its
+  version and digest on request, so replacing it takes effect immediately.
+
 ## [0.4.10] - 2026-11-21
 
 ### Changed

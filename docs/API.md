@@ -74,6 +74,7 @@ reveal whether the account exists or is disabled.
 | POST | `/api/me/exits/pin` | Pin a configuration to one exit, or back to automatic |
 | GET | `/api/me/subnets` | Subnets granted to the account and their choice |
 | POST | `/api/me/subnets` | Switch subnets on or off for a configuration |
+| GET | `/api/android` | Public: Android client version, digest and download URL |
 
 Object shapes are collected in [Data objects](#data-objects).
 
@@ -504,6 +505,7 @@ and `enabled`.
 | 422 | Malformed form (missing required field, wrong type) |
 | 429 | Too many failed sign-ins |
 | 500 | The live interface could not be applied to; the database was rolled back |
+| 503 | `/api/android` has no metadata that matches the published APK |
 
 `500` bodies describe the failure generically. If the live device could not be
 rolled back after a failed apply, the message says so and asks to inspect
@@ -589,6 +591,39 @@ or the release.
   also carries `"error": "database"` in the database case.
 - `failover_age` is seconds since the failover daemon last wrote its status,
   or `null` when it never did.
+
+### GET /api/android
+
+Update check for the Android client. It needs no token: the client asks before
+it signs in. The answer describes the APK that `/download/android` serves.
+
+```json
+{
+  "package": "ru.deffhost.kaskad",
+  "versionCode": 50804,
+  "versionName": "5.8.2.3",
+  "minSdk": 26,
+  "url": "https://panel.example.com/download/android",
+  "sha256": "7b276974643eee840d165555ef99c31120e6ab1ffa50516e769b16f03d76706a",
+  "size": 18667850,
+  "published": "2026-11-21T10:00:00Z"
+}
+```
+
+- `Cache-Control: public, max-age=300`.
+- `versionCode` grows with every release; update only into a greater value of
+  the same `package`. The client still compares against what it has installed.
+- `versionName` is informational; it is not the panel version.
+- `minSdk` is present when the APK manifest declares it.
+- `sha256` and `size` describe the file at `/download/android` and are checked
+  by the client before it installs anything.
+- `published` is the UTC time the APK was placed on the server.
+- `404` when no APK is published. `503` when the file on the host cannot be
+  read as an Android package: treat it as "no update now" and retry later,
+  never as "current version".
+- Everything is read from the file on the host, with the result cached until
+  the file changes: replacing the APK takes effect on the next request,
+  without a deploy or a restart.
 
 ### GET /ping
 

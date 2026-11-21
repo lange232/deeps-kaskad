@@ -3,7 +3,7 @@
   <table class="oc-table">
     <tbody>
     {% for c in clients %}
-    <tr data-href="/configs/{{ c.id }}" tabindex="0">
+    <tr data-href="/configs/{{ c.id }}">
       <td><a class="oc-link" href="/configs/{{ c.id }}">{{ c.name }}</a></td>
       <td class="oc-mono oc-muted">{{ c.ip }}</td>
     </tr>
