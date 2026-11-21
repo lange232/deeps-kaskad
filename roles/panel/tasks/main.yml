@@ -83,17 +83,45 @@
     state: absent
   notify: Restart panel
 
-- name: Panel code
+# One archive instead of a file-by-file copy: over a slow link the recursive
+# copy spent a round trip per file and could hang for minutes, while a single
+# small transfer takes seconds. The archive excludes bytecode so a stale
+# __pycache__ never lands on the host.
+- name: Panel source archive
+  ansible.builtin.command:
+    cmd: >-
+      tar -czf /tmp/kaskad-panel.tgz --exclude=__pycache__
+      -C {{ kaskad_repo_dir }}/panel .
+  delegate_to: localhost
+  become: false
+  run_once: true
+  changed_when: false
+
+- name: Copy the panel archive
   ansible.builtin.copy:
-    src: "{{ kaskad_repo_dir }}/panel/"
-    dest: /opt/kaskad/app/
-    owner: root
-    group: root
-    mode: "0644"
-    directory_mode: "0755"
+    src: /tmp/kaskad-panel.tgz
+    dest: /tmp/kaskad-panel.tgz
+    mode: "0600"
+  register: kaskad_panel_archive
+
+- name: Unpack the panel code
+  ansible.builtin.unarchive:
+    src: /tmp/kaskad-panel.tgz
+    dest: /opt/kaskad/app
+    remote_src: true
+    extra_opts:
+      - --overwrite
+      - --no-same-owner
+  when: kaskad_panel_archive.changed
+  changed_when: kaskad_panel_archive.changed
   notify:
     - Restart panel
     - Restart failover
+
+- name: Panel archive on the host
+  ansible.builtin.file:
+    path: /tmp/kaskad-panel.tgz
+    state: absent
 
 # Dependencies are installed only when requirements.txt changed: the pip run
 # talks to PyPI, and on a slow or lossy link it is what made a code deploy
