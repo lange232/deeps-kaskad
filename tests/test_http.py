@@ -2134,6 +2134,33 @@ class MobileApiTests(PanelTestCase):
         self.assertEqual(exit_row["country"], "Netherlands")
         self.assertEqual(exit_row["comment"], "Amsterdam")
 
+    def test_exits_api_marks_the_configuration_own_exit(self):
+        aid, cid = self.seed_client()
+        self.grant(aid, cid, self.seed_exit("first", "awg1"), 10)
+        self.grant(aid, cid, self.seed_exit("second", "awg2", priority=20), 20)
+        headers, _ = self.api_login()
+        status = {
+            "ts": int(time.time()),
+            "active": "awg1",                      # server default route
+            "clients": {"10.80.0.2": "awg2"},      # this configuration's table
+            "exits": {"awg1": {"alive": True}, "awg2": {"alive": True}},
+        }
+        with mock.patch.object(app, "read_status", return_value=status):
+            exits = self.client.get("/api/me/exits", headers=headers).json()
+        self.assertEqual([e["active"] for e in exits], [True, False])
+        self.assertEqual([e["current"] for e in exits], [False, True])
+        self.assertEqual({e["current_iface"] for e in exits}, {"awg2"})
+
+    def test_exits_api_says_unknown_when_the_configuration_has_no_route(self):
+        aid, cid = self.seed_client()
+        self.grant(aid, cid, self.seed_exit("first", "awg1"))
+        headers, _ = self.api_login()
+        status = {"ts": int(time.time()) - 600, "active": "awg1", "clients": {}}
+        with mock.patch.object(app, "read_status", return_value=status):
+            exits = self.client.get("/api/me/exits", headers=headers).json()
+        self.assertIsNone(exits[0]["current"])
+        self.assertIsNone(exits[0]["current_iface"])
+
     def test_create_conf_order_and_delete(self):
         aid, cid = self.seed_client(max_configs=5)
         exit_id = self.seed_exit()

@@ -290,6 +290,8 @@ Optional `config_id`; omitted or `0` means the first configuration.
     "rtt_ms": 42,
     "active": true,
     "pinned": false,
+    "current": true,
+    "current_iface": "awg1",
     "status_fresh": true
   }
 ]
@@ -300,6 +302,11 @@ Optional `config_id`; omitted or `0` means the first configuration.
 - `alive` is `true` or `false`. It is `null` when the failover daemon has not
   reported for more than 60 seconds; `rtt_ms`, `degraded` and `active` are also
   `null` then and `status_fresh` is `false`. Do not treat `null` as "down".
+- `current` is `true` for the exit this configuration's own routing table
+  points at, and `current_iface` names it. This is not `active`: `active` is
+  the server's default route, while a configuration with its own order or a
+  pin usually rides another exit. Both are `null` while the failover status is
+  stale; `current` is also `null` when the table points at no live exit.
 - `pinned` is `true` for the exit this configuration is pinned to. A pinned
   exit is used even when it is marked `degraded`, while its tunnel is alive;
   when it dies the configuration's order takes over.

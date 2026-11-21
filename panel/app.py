@@ -4024,6 +4024,10 @@ def api_exits(request: Request, config_id: int | None = None):
     status, fresh = routing_status()
     known = status.get("exits", {})
     active = status.get("active")
+    # The exit this configuration's own table points at. It is not ``active``:
+    # that one is the server's default route, and a configuration with its own
+    # order or a pin usually rides a different exit.
+    current_iface = ((status.get("clients") or {}).get(cl["ip"]) or None) if fresh else None
     return [
         {
             "id": e["id"],
@@ -4044,6 +4048,11 @@ def api_exits(request: Request, config_id: int | None = None):
             # The exit this configuration is pinned to, if any: it is used
             # even when the failover marks it degraded.
             "pinned": bool(cl["pinned_iface"]) and e["iface"] == cl["pinned_iface"],
+            # true for the exit this configuration actually uses. null while
+            # the failover has not reported or its table points at no live
+            # exit; false for every other exit in that case.
+            "current": (e["iface"] == current_iface) if current_iface else None,
+            "current_iface": current_iface,
             "status_fresh": fresh,
         }
         for e in config_internet_exits(cl)
