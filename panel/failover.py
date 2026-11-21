@@ -96,6 +96,9 @@ probe_inflight: dict = {}
 # Account check in flight -> (check id, target, exit). Same rule: one run per
 # target and exit, and every finished run is applied, even a slow one.
 check_inflight: dict = {}
+# Client ip -> the pinned exit it is staying on while degraded. Only a change
+# is logged, otherwise a long outage writes a line every tick.
+pinned_degraded: dict[str, str] = {}
 state: dict[str, dict] = {}
 # Last per-target results of every exit, for the panel's diagnosis.
 probe_targets: dict[str, dict[str, bool]] = {}
@@ -232,8 +235,13 @@ def apply_client_routes(
         if pin and pin in everything and pin in order:
             desired = pin
             if pin not in alive:
-                log(f"client {ip}: staying on pinned {pin}, degraded")
+                if pinned_degraded.get(ip) != pin:
+                    pinned_degraded[ip] = pin
+                    log(f"client {ip}: staying on pinned {pin}, degraded")
+            else:
+                pinned_degraded.pop(ip, None)
         else:
+            pinned_degraded.pop(ip, None)
             blocked = avoid.get((table, ip), set())
             allowed = [iface for iface in order if iface not in blocked]
             desired = pick_client_exit(allowed or order, alive)

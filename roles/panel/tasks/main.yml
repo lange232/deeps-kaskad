@@ -58,6 +58,8 @@
     mode: "{{ item.mode }}"
   loop:
     - { path: /opt/kaskad, mode: "0755" }
+    # The code is unpacked here; on a fresh host it does not exist yet.
+    - { path: /opt/kaskad/app, mode: "0755" }
     - { path: /etc/kaskad, mode: "0700" }
     - { path: /etc/kaskad/tls, mode: "0700" }
     - { path: /var/lib/kaskad, mode: "0700" }

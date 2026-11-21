@@ -707,6 +707,31 @@ class ClientCheckTests(unittest.TestCase):
         calls = self.routes(pins={(1002, "10.80.0.2"): "awg3"})
         self.assertFalse(any("awg3" in cmd for cmd in calls))
 
+    def test_staying_on_a_pinned_degraded_exit_is_logged_once(self):
+        failover.pinned_degraded.clear()
+        try:
+            messages = []
+
+            def fake_run(cmd, timeout=5):
+                return subprocess.CompletedProcess(cmd, 0, "", "")
+
+            with mock.patch.object(failover, "run", side_effect=fake_run), \
+                 mock.patch.object(failover, "current_default",
+                                   return_value="awg1"), \
+                 mock.patch.object(failover, "log", side_effect=messages.append):
+                for _ in range(3):
+                    failover.apply_client_routes(
+                        {(1002, "10.80.0.2"): ["awg1", "awg2"]},
+                        ["awg2"],
+                        None,
+                        {(1002, "10.80.0.2"): "awg1"},
+                        ["awg1", "awg2"],
+                    )
+            staying = [m for m in messages if "staying on pinned" in m]
+            self.assertEqual(len(staying), 1, messages)
+        finally:
+            failover.pinned_degraded.clear()
+
     def test_a_pinned_degraded_exit_is_reported_as_in_use(self):
         calls = []
         with mock.patch.object(failover, "current_default", return_value="awg1"), \

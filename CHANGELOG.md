@@ -60,10 +60,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   that exit right now. It is `null` while the failover status is stale, like
   `alive`, `degraded` and `rtt_ms`.
 
-### Changed
-
-
-
 ### Fixed
 
 - A check whose account has no exit yet is shown as unknown instead of
