@@ -8,13 +8,20 @@
       - ansible_distribution_major_version | int >= 22
     fail_msg: "role exit is written for Ubuntu 22.04 and newer"
 
-- name: S1 public key is known
+- name: Every peer has a key
   ansible.builtin.assert:
     that:
-      - kaskad_exit_peer_public_key | length > 0
+      - kaskad_exit_peers | length > 0
+      - item.public_key | default('') | length > 0
+      - item.address | default('') | length > 0
     fail_msg: >-
-      kaskad_exit_peer_public_key is empty: put the public key of S1 there.
-      The matching private key stays in state/ on the control machine.
+      kaskad_exit_peers needs an address and the public key of every S1 that
+      dials this exit. Each host has its own key: one key on two hosts makes
+      the server move the session between them.
+    quiet: true
+  loop: "{{ kaskad_exit_peers }}"
+  loop_control:
+    label: "{{ item.address | default('?') }}"
 
 - name: Base packages
   ansible.builtin.apt:
@@ -140,5 +147,5 @@
     msg:
       - "public key: {{ kaskad_exit_pubkey.stdout | default('check mode') }}"
       - "endpoint: {{ ansible_default_ipv4.address }}:{{ kaskad_exit_port }}/udp"
-      - "transit: {{ kaskad_exit_address }} <- peer {{ kaskad_exit_peer_address }}"
+      - "transit: {{ kaskad_exit_address }} <- peers {{ kaskad_exit_peers | map(attribute='address') | join(', ') }}"
       - "{{ kaskad_exit_show.stdout_lines | default(['check mode']) }}"

@@ -131,6 +131,11 @@ The run prints the node's public key. The S1 side is built from it: transit
 private key of S1 stays in `state/` on the control machine and never reaches
 the node.
 
+Several S1 hosts can share one exit: `kaskad_exit_peers` takes a list, and
+every host gets its own key and its own transit address (`10.9.0.3/32` for the
+second, and so on). One key on two hosts makes the server move the session
+between them, which is the same rule the provider exits follow.
+
 Both ends must carry the same obfuscation values - they are per tunnel, not
 per server - and changing them means changing both and restarting both
 interfaces. The magic headers `H1..H4` must be distinct and below 2^31; an

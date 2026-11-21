@@ -11,6 +11,12 @@ kaskad_exit_peer_address: 10.9.0.2/32
 # Public key of S1. The private half stays in state/ on the control machine
 # and is never written here.
 kaskad_exit_peer_public_key: ""
+# Every S1 that dials this exit needs its own key and its own transit
+# address: one key on two hosts makes the server move the session from one
+# to the other. The single pair above is the default for a one-host setup.
+kaskad_exit_peers:
+  - address: "{{ kaskad_exit_peer_address }}"
+    public_key: "{{ kaskad_exit_peer_public_key }}"
 kaskad_exit_mtu: 1420
 kaskad_exit_keepalive: 25
 # Where the tunnel traffic leaves this host. Defaults to the interface of the

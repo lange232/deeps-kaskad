@@ -40,6 +40,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   comment, then its name.
 - An account page in the cabinet lists its own exit order - the order a new
   configuration starts with - with the same state badges.
+- An exit node can serve several S1 hosts: `kaskad_exit_peers` lists a key and
+  a transit address per host, so two installations never share one session.
 - Exits carry a `country` field, editable next to the comment in the exit
   page; the administrator's exit list shows it too.
 - `GET /api/me/exits` reports `active`: whether the default route points at
