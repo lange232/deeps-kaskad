@@ -25,6 +25,7 @@ import os
 import re
 import socket
 import sqlite3
+import struct
 import subprocess
 import sys
 import time
@@ -55,11 +56,26 @@ FAILBACK_STABLE = 60
 DEGRADED_AFTER = 3
 RECOVER_AFTER = 3
 PROBE_TARGET = "1.1.1.1"
+# A TCP handshake is the cheapest thing a browser needs; ICMP is only a
+# fallback for networks that answer it and filter TCP nowhere.
+PROBE_TCP = ("1.1.1.1", 443)
+# Three targets in three networks: one unreachable site is visible in the
+# diagnosis but does not condemn the exit on its own.
 PROBE_HTTP = (
     ("http://connectivitycheck.gstatic.com/generate_204", 204),
     ("http://example.com/", 200),
+    ("http://captive.apple.com/hotspot-detect.html", 200),
 )
+MIN_HEALTHY_TARGETS = 2
+# Probing is asynchronous: a probe that outlives the interval keeps running
+# and its result is applied when it lands, instead of being dropped and
+# started again. The caps keep the queues finite.
+CHECK_MAX_INFLIGHT = 8
 HTTP_TIMEOUT = 4
+# Hostnames are resolved through the exit, exactly as a client does: the
+# answer is picked for the exit's network, not for the server's.
+DNS_TIMEOUT = 3
+DNS_CACHE_SECONDS = 300
 # Extra targets are per account: a destination that matters to one user must
 # not mark an exit bad for everybody.
 CHECK_DEAD_AFTER = 3
@@ -72,7 +88,22 @@ CHECK_TIMEOUT = 5
 CHECK_ACCOUNTS_PER_TICK = 4
 RTT_RE = re.compile(r"time=([0-9.]+)\s*ms")
 
+probe_pool = ThreadPoolExecutor(max_workers=8)
+check_pool = ThreadPoolExecutor(max_workers=CHECK_MAX_INFLIGHT)
+# Probe in flight -> the exit it describes. A probe is never started twice for
+# the same exit: the result of the running one is applied when it finishes.
+probe_inflight: dict = {}
+# Account check in flight -> (check id, target, exit). Same rule: one run per
+# target and exit, and every finished run is applied, even a slow one.
+check_inflight: dict = {}
+# Client ip -> the pinned exit it is staying on while degraded. Only a change
+# is logged, otherwise a long outage writes a line every tick.
+pinned_degraded: dict[str, str] = {}
 state: dict[str, dict] = {}
+# Last per-target results of every exit, for the panel's diagnosis.
+probe_targets: dict[str, dict[str, bool]] = {}
+# (iface, host) -> (expires at, addresses)
+dns_cache: dict[tuple[str, str], tuple[float, list[str]]] = {}
 check_state: dict[tuple[int, str], dict] = {}
 # Round-robin position over the accounts that keep checks.
 check_cursor = 0
@@ -146,7 +177,8 @@ def client_grants() -> list[dict]:
             dict(r)
             for r in conn.execute(
                 "SELECT ce.client_id, ce.priority AS choice, c.ip, "
-                "c.table_num AS client_table, c.account_id, e.iface "
+                "c.table_num AS client_table, c.account_id, c.pinned_iface, "
+                "e.iface "
                 "FROM client_internet_exits ce "
                 "JOIN clients c ON c.id = ce.client_id "
                 "AND c.enabled = 1 AND (c.internet = 1 OR c.account_id IS NOT NULL) "
@@ -177,7 +209,8 @@ def current_default(table: int) -> str | None:
 
 
 def apply_client_routes(
-    choices: dict[tuple[int, str], list[str]], alive, avoid=None
+    choices: dict[tuple[int, str], list[str]], alive, avoid=None,
+    pins=None, alive_all=None
 ) -> dict[str, str]:
     """Points each client table at its first usable granted exit.
 
@@ -185,16 +218,33 @@ def apply_client_routes(
     currently failing. They are skipped when another exit remains; when every
     exit is avoided the original order is used, so a bad check never leaves
     the account without a working exit.
+
+    ``pins`` maps a client key to the exit its owner asked for. A pin wins
+    over the degraded mark and over the account checks, but only while that
+    exit is alive: a dead tunnel is never forced, the order takes over.
     """
     used: dict[str, str] = {}
     avoid = avoid or {}
+    pins = pins or {}
+    everything = set(alive_all) if alive_all is not None else set(alive)
     for (table, ip), order in choices.items():
         if table <= 0:
             log(f"client {ip}: no routing table allocated")
             continue
-        blocked = avoid.get((table, ip), set())
-        allowed = [iface for iface in order if iface not in blocked]
-        desired = pick_client_exit(allowed or order, alive)
+        pin = pins.get((table, ip), "")
+        if pin and pin in everything and pin in order:
+            desired = pin
+            if pin not in alive:
+                if pinned_degraded.get(ip) != pin:
+                    pinned_degraded[ip] = pin
+                    log(f"client {ip}: staying on pinned {pin}, degraded")
+            else:
+                pinned_degraded.pop(ip, None)
+        else:
+            pinned_degraded.pop(ip, None)
+            blocked = avoid.get((table, ip), set())
+            allowed = [iface for iface in order if iface not in blocked]
+            desired = pick_client_exit(allowed or order, alive)
         before = current_default(table)
         # When nothing is alive the old route is left in place: it points at
         # a dead exit, so traffic already fails, and a daemon restart does
@@ -206,7 +256,7 @@ def apply_client_routes(
                 log(f"client {ip}: failed to route via {desired}: "
                     f"{res.stderr.strip()}")
         after = current_default(table)
-        if after in alive:
+        if after in everything:
             used[ip] = after
         if after != before:
             # Stale conntrack entries keep the source address of the old exit.
@@ -281,37 +331,197 @@ def ping_rtt(stdout: str) -> float | None:
     return float(match.group(1)) if match else None
 
 
-def http_probe(iface: str) -> bool:
-    """Every HTTP target must answer through this exit.
+def dns_servers() -> list[str]:
+    """The resolvers clients use, in the same order.
 
-    A provider can blackhole a destination while ICMP and other sites still
-    work; one failed target after another makes the exit degraded.
+    Only these are tried: falling back to the server's own resolver would
+    bring back the answers picked for the wrong network.
     """
-    for url, expected in PROBE_HTTP:
+    try:
+        dns = str(cfg().get("dns") or "")
+    except (OSError, ValueError):
+        dns = ""
+    servers = [part.strip() for part in dns.split(",") if part.strip()]
+    return servers or ["1.1.1.1"]
+
+
+def build_query(host: str, ident: int | None = None) -> bytes:
+    """A minimal A query: one question, no EDNS."""
+    if ident is None:
+        ident = int.from_bytes(os.urandom(2), "big")
+    packet = struct.pack("!HHHHHH", ident, 0x0100, 1, 0, 0, 0)
+    for part in host.rstrip(".").split("."):
+        packet += bytes([len(part)]) + part.encode()
+    return packet + b"\x00\x00\x01\x00\x01"
+
+
+def parse_a(data: bytes) -> list[tuple[str, int]]:
+    """A records with their TTL from a DNS response."""
+    if len(data) < 12:
+        return []
+    ancount = struct.unpack("!H", data[6:8])[0]
+    pos = 12
+    for _ in range(struct.unpack("!H", data[4:6])[0]):  # skip questions
+        while pos < len(data) and data[pos] != 0:
+            pos += data[pos] + 1
+        pos += 5
+    out = []
+    for _ in range(ancount):
+        if pos + 2 > len(data):
+            break
+        if data[pos] & 0xC0 == 0xC0:
+            pos += 2
+        else:
+            while pos < len(data) and data[pos] != 0:
+                pos += data[pos] + 1
+            pos += 1
+        if pos + 10 > len(data):
+            break
+        rtype, _rclass, ttl, rdlen = struct.unpack("!HHIH", data[pos:pos + 10])
+        pos += 10
+        if rtype == 1 and rdlen == 4 and pos + 4 <= len(data):
+            out.append((socket.inet_ntoa(data[pos:pos + 4]), ttl))
+        pos += rdlen
+    return out
+
+
+def matches_query(data: bytes, ident: int, host: str) -> bool:
+    """Is this the answer to our query, for our name?
+
+    The kernel filters by peer (the socket is connected), but a stale or
+    mangled datagram must not be cached as an answer either.
+    """
+    if len(data) < 12:
+        return False
+    if struct.unpack("!H", data[0:2])[0] != ident:
+        return False
+    if not struct.unpack("!H", data[2:4])[0] & 0x8000:  # QR bit
+        return False
+    if struct.unpack("!H", data[4:6])[0] != 1:  # one question
+        return False
+    pos, labels = 12, []
+    while pos < len(data) and data[pos] != 0:
+        length = data[pos]
+        pos += 1
+        if length > len(data) - pos:
+            return False
+        labels.append(data[pos:pos + length].decode("ascii", "replace").lower())
+        pos += length
+    return ".".join(labels) == host.rstrip(".").lower()
+
+
+def dns_lookup(host: str, server: str, iface: str) -> list[tuple[str, int]]:
+    """Ask the resolver with the query bound to one exit.
+
+    A client resolves through its exit, so the probe does the same: the
+    address chosen for the exit's network is the one a client would get.
+    """
+    query = build_query(host)
+    ident = struct.unpack("!H", query[0:2])[0]
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_BINDTODEVICE, iface.encode())
+        sock.settimeout(DNS_TIMEOUT)
+        # connect() makes the kernel drop datagrams from anybody but this
+        # resolver; the check below also verifies the id and the name.
+        sock.connect((server, 53))
+        sock.send(query)
+        data = sock.recv(4096)
+    finally:
+        sock.close()
+    if not matches_query(data, ident, host):
+        return []
+    return parse_a(data)
+
+
+def resolve_via(iface: str, host: str) -> list[str]:
+    """Addresses of ``host`` as seen from this exit, cached by TTL."""
+    try:
+        ipaddress.ip_address(host)
+        return [host]
+    except ValueError:
+        pass
+    key = (iface, host)
+    now = time.time()
+    cached = dns_cache.get(key)
+    if cached and cached[0] > now:
+        return cached[1]
+    answers: list[tuple[str, int]] = []
+    for server in dns_servers():
         try:
-            res = run(
-                ["curl", "-4", "-s", "-o", "/dev/null", "-w", "%{http_code}",
-                 "--max-time", str(HTTP_TIMEOUT), "--interface", iface, url],
-                timeout=HTTP_TIMEOUT + 2,
-            )
-        except (subprocess.TimeoutExpired, OSError):
-            return False
-        code = (res.stdout or "").strip()
-        if res.returncode != 0 or code != str(expected):
-            return False
-    return True
+            answers = dns_lookup(host, server, iface)
+        except (OSError, subprocess.TimeoutExpired):
+            answers = []
+        if answers:
+            break
+    if not answers:
+        return []
+    ttl = min(ttl for _ip, ttl in answers) or 1
+    addresses = [ip for ip, _ttl in answers]
+    dns_cache[key] = (now + min(ttl, DNS_CACHE_SECONDS), addresses)
+    return addresses
+
+
+def public_ip(address: str) -> bool:
+    try:
+        return ipaddress.ip_address(address.split("%", 1)[0]).is_global
+    except ValueError:
+        return False
+
+
+def tcp_ms(iface: str, host: str, port: int, timeout: float = 3.0) -> float | None:
+    """Milliseconds to complete a TCP handshake through the exit, or None."""
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    started = time.time()
+    try:
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_BINDTODEVICE, iface.encode())
+        sock.settimeout(timeout)
+        return (time.time() - started) * 1000 if sock.connect_ex((host, port)) == 0 else None
+    except OSError:
+        return None
+    finally:
+        sock.close()
+
+
+def http_probe(iface: str) -> tuple[bool, dict[str, bool]]:
+    """Fetch every target through this exit, at an address resolved by it."""
+    results: dict[str, bool] = {}
+    for url, expected in PROBE_HTTP:
+        parsed = urlparse(url)
+        host = parsed.hostname or ""
+        port = parsed.port or (443 if parsed.scheme == "https" else 80)
+        results[url] = False
+        for address in resolve_via(iface, host)[:2]:
+            if not public_ip(address):
+                continue
+            try:
+                res = run(
+                    ["curl", "-4", "-s", "-o", "/dev/null", "-w", "%{http_code}",
+                     "--max-time", str(HTTP_TIMEOUT), "--interface", iface,
+                     "--resolve", f"{host}:{port}:{address}", url],
+                    timeout=HTTP_TIMEOUT + 2,
+                )
+            except (subprocess.TimeoutExpired, OSError):
+                continue
+            code = (res.stdout or "").strip()
+            if res.returncode == 0 and code == str(expected):
+                results[url] = True
+                break
+    return sum(1 for ok in results.values() if ok) >= MIN_HEALTHY_TARGETS, results
 
 
 def probe(exit: dict) -> tuple[bool, float | None, bool]:
     """(alive, rtt_ms, healthy).
 
-    ``alive`` is transport-level: the interface answers ICMP (or, for routed
-    exits, has a fresh handshake). ``healthy`` additionally means the HTTP
-    targets are reachable through the exit; a live but degraded exit is not
-    offered to clients while a healthy one exists.
+    ``alive`` is transport-level: a TCP handshake to a public address through
+    the exit, or ICMP as a fallback for hosts that filter TCP. ``healthy``
+    additionally means the HTTP targets answer, resolved through the exit
+    itself; a live but degraded exit is not offered while a healthy one
+    exists.
     """
     iface = exit["iface"]
     if not iface_exists(iface):
+        probe_targets.pop(iface, None)
         return False, None, False
     if exit.get("mode") == "routes":
         # A routed exit only allows its own subnets in AllowedIPs, so pinging
@@ -326,13 +536,23 @@ def probe(exit: dict) -> tuple[bool, float | None, bool]:
                 if now - int(parts[-1]) < 180:
                     return True, None, True
         return False, None, False
-    try:
-        res = run(["ping", "-c1", "-W1", "-I", iface, PROBE_TARGET], timeout=3)
-    except subprocess.TimeoutExpired:
+    # A TCP handshake is what browsing needs; ICMP is the fallback for
+    # networks that drop TCP probes but answer ping.
+    rtt = tcp_ms(iface, *PROBE_TCP)
+    if rtt is None:
+        try:
+            res = run(["ping", "-c1", "-W1", "-I", iface, PROBE_TARGET], timeout=3)
+        except subprocess.TimeoutExpired:
+            res = None
+        if res is not None and res.returncode == 0:
+            rtt = ping_rtt(res.stdout)
+    alive = rtt is not None
+    if not alive:
+        probe_targets.pop(iface, None)
         return False, None, False
-    if res.returncode != 0:
-        return False, None, False
-    return True, ping_rtt(res.stdout), http_probe(iface)
+    healthy, results = http_probe(iface)
+    probe_targets[iface] = results
+    return True, rtt, healthy
 
 
 def probe_safe(exit: dict) -> tuple[bool, float | None, bool]:
@@ -391,48 +611,48 @@ def target_host(kind: str, target: str) -> str:
     return target
 
 
-def public_target(kind: str, target: str) -> bool:
-    """False when the target resolves into private space.
+def check_ok(kind: str, target: str, iface: str) -> bool:
+    """Is this account target reachable through this exit?
 
-    A name can point at a private address long after it was added, so the
-    address is checked at probe time too, not only when the check is saved.
+    The name is resolved through the exit and every address must be public:
+    a name that starts pointing into private space is not followed, and an
+    answer picked for another network is not used.
     """
+    try:
+        parsed = urlparse(target) if kind == "http" else None
+        port = parsed.port if parsed else None
+    except ValueError:
+        return False
     host = target_host(kind, target)
     if not host:
         return False
-    try:
-        infos = socket.getaddrinfo(host, None)
-    except OSError:
+    addresses = resolve_via(iface, host)
+    if not addresses or not all(public_ip(a) for a in addresses):
         return False
-    if not infos:
-        return False
-    for info in infos:
-        try:
-            ip = ipaddress.ip_address(info[4][0].split("%", 1)[0])
-        except ValueError:
-            return False
-        if not ip.is_global:
-            return False
-    return True
-
-
-def check_ok(kind: str, target: str, iface: str) -> bool:
-    if not public_target(kind, target):
-        return False
-    try:
-        if kind == "http":
-            res = run(
-                ["curl", "-4", "-s", "-o", "/dev/null", "-w", "%{http_code}",
-                 "--max-time", str(CHECK_TIMEOUT), "--interface", iface, target],
-                timeout=CHECK_TIMEOUT + 2,
-            )
+    if kind == "http":
+        port = port or (443 if parsed.scheme == "https" else 80)
+        for address in addresses[:2]:
+            try:
+                res = run(
+                    ["curl", "-4", "-s", "-o", "/dev/null", "-w", "%{http_code}",
+                     "--max-time", str(CHECK_TIMEOUT), "--interface", iface,
+                     "--resolve", f"{host}:{port}:{address}", target],
+                    timeout=CHECK_TIMEOUT + 2,
+                )
+            except (subprocess.TimeoutExpired, OSError):
+                continue
             code = (res.stdout or "").strip()
-            return res.returncode == 0 and code.isdigit() and 200 <= int(code) < 400
-        if kind == "icmp":
-            res = run(["ping", "-c1", "-W2", "-I", iface, target], timeout=4)
-            return res.returncode == 0
-    except (subprocess.TimeoutExpired, OSError):
+            if res.returncode == 0 and code.isdigit() and 200 <= int(code) < 400:
+                return True
         return False
+    if kind == "icmp":
+        for address in addresses[:2]:
+            try:
+                res = run(["ping", "-c1", "-W2", "-I", iface, address], timeout=4)
+            except (subprocess.TimeoutExpired, OSError):
+                continue
+            if res.returncode == 0:
+                return True
     return False
 
 
@@ -454,6 +674,42 @@ def update_check_state(
         if not st["bad"] and st["fails"] >= CHECK_DEAD_AFTER:
             st["bad"] = True
             log(f"check {target}: failing via {iface}")
+
+
+def start_probes(rows: list[dict]) -> None:
+    """Applies finished probes and starts one for every idle exit.
+
+    Nothing waits here: a probe slower than the interval finishes in the
+    background, its verdict is applied when it lands, and no second probe is
+    queued for the same exit meanwhile.
+    """
+    for future in list(probe_inflight):
+        if not future.done():
+            continue
+        exit_row = probe_inflight.pop(future)
+        try:
+            update_state(exit_row, *future.result())
+        except Exception as exc:  # a probe must never kill the daemon
+            log(f"probe {exit_row['iface']}: {exc}")
+    busy = {row["iface"] for row in probe_inflight.values()}
+    for exit_row in rows:
+        if not exit_row["enabled"] or exit_row["iface"] in busy:
+            continue
+        probe_inflight[probe_pool.submit(probe_safe, exit_row)] = exit_row
+
+
+def harvest_checks() -> None:
+    """Applies every finished account check, however late it came."""
+    for future in list(check_inflight):
+        if not future.done():
+            continue
+        check_id, target, iface = check_inflight.pop(future)
+        try:
+            ok = future.result()
+        except Exception as exc:  # one bad target must not stop the cycle
+            log(f"check {target} via {iface}: {exc}")
+            continue
+        update_check_state(check_id, target, iface, ok)
 
 
 def run_account_checks(alive=None) -> tuple[dict[int, set[str]], dict]:
@@ -502,21 +758,30 @@ def run_account_checks(alive=None) -> tuple[dict[int, set[str]], dict]:
     chosen = set(selected)
 
     live = set(alive) if alive is not None else None
-    tasks = [
-        (ch, iface)
-        for ch in checks
-        if ch["account_id"] in chosen
-        for iface in granted.get(ch["account_id"], [])
-        if live is None or iface in live
-    ]
-    if tasks:
-        with ThreadPoolExecutor(max_workers=min(8, len(tasks))) as pool:
-            results = list(pool.map(
-                lambda task: check_ok(task[0]["kind"], task[0]["target"], task[1]),
-                tasks,
-            ))
-        for (ch, iface), ok in zip(tasks, results):
-            update_check_state(ch["id"], ch["target"], iface, ok)
+    by_account: dict[int, list[dict]] = {}
+    for ch in checks:
+        by_account.setdefault(ch["account_id"], []).append(ch)
+
+    harvest_checks()
+    queued = {(task[0], task[2]) for task in check_inflight.values()}
+    free = CHECK_MAX_INFLIGHT - len(check_inflight)
+    for aid in selected:
+        if free <= 0:
+            break
+        for ch in by_account.get(aid, []):
+            for iface in granted.get(aid, []):
+                if free <= 0:
+                    break
+                if live is not None and iface not in live:
+                    continue
+                if (ch["id"], iface) in queued:
+                    continue
+                future = check_pool.submit(
+                    check_ok, ch["kind"], ch["target"], iface
+                )
+                check_inflight[future] = (ch["id"], ch["target"], iface)
+                queued.add((ch["id"], iface))
+                free -= 1
 
     avoid: dict[int, set[str]] = {}
     report: dict = {}
@@ -709,6 +974,7 @@ def write_status(active, rows: list[dict], manual: str = "", clients=None,
                 "alive_since": state.get(e["iface"], {}).get("alive_since", 0),
                 "rtt_ms": state.get(e["iface"], {}).get("rtt_ms"),
                 "rtt_ts": state.get(e["iface"], {}).get("rtt_ts", 0),
+                "targets": probe_targets.get(e["iface"], {}),
             }
             for e in rows
         },
@@ -747,12 +1013,7 @@ def _auto(active, alive, alive_since, now, stable):
 
 def tick(c: dict) -> None:
     rows = exits()
-    enabled = [e for e in rows if e["enabled"]]
-    if enabled:
-        with ThreadPoolExecutor(max_workers=min(8, len(enabled))) as pool:
-            results = list(pool.map(probe_safe, enabled))
-        for e, (ok, rtt, healthy) in zip(enabled, results):
-            update_state(e, ok, rtt, healthy)
+    start_probes(rows)
 
     # Exits can come up after kaskad-routing.service already ran; only this
     # loop notices, so it re-applies the tables and rules.
@@ -799,6 +1060,7 @@ def tick(c: dict) -> None:
     avoid, check_report = run_account_checks(alive)
     choices: dict[tuple[int, str], list[str]] = {}
     avoid_by_client: dict[tuple[int, str], set[str]] = {}
+    pins: dict[tuple[int, str], str] = {}
     for grant in client_grants():
         key = (grant["client_table"], grant["ip"])
         choices.setdefault(key, []).append(grant["iface"])
@@ -806,7 +1068,11 @@ def tick(c: dict) -> None:
             avoid_by_client.setdefault(key, set()).update(
                 avoid.get(int(grant["account_id"]), set())
             )
-    client_routes = apply_client_routes(choices, usable, avoid_by_client)
+        if grant.get("pinned_iface"):
+            pins[key] = grant["pinned_iface"]
+    client_routes = apply_client_routes(
+        choices, usable, avoid_by_client, pins, alive
+    )
 
     pings = client_pings()
     write_status(read_active(), rows, manual, client_routes,

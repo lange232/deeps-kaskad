@@ -4,6 +4,7 @@ Run with: python3 -m unittest discover -s tests
 """
 import json
 import sqlite3
+import struct
 import subprocess
 import sys
 import tempfile
@@ -122,15 +123,16 @@ class ClientGrantQueryTests(unittest.TestCase):
         conn.executescript(
             """
             CREATE TABLE clients (id INTEGER PRIMARY KEY, ip TEXT, enabled INTEGER,
-                internet INTEGER, table_num INTEGER, account_id INTEGER);
+                internet INTEGER, table_num INTEGER, account_id INTEGER,
+                pinned_iface TEXT NOT NULL DEFAULT '');
             CREATE TABLE exits (id INTEGER PRIMARY KEY, iface TEXT, enabled INTEGER,
                 mode TEXT, priority INTEGER);
             CREATE TABLE client_internet_exits (client_id INTEGER, exit_id INTEGER,
                 priority INTEGER);
             INSERT INTO exits VALUES (1, 'awg1', 1, 'internet', 10);
-            INSERT INTO clients VALUES (1, '10.80.0.2', 1, 0, 1001, 7);
-            INSERT INTO clients VALUES (2, '10.80.0.3', 1, 0, 1002, NULL);
-            INSERT INTO clients VALUES (3, '10.80.0.4', 1, 1, 1003, 7);
+            INSERT INTO clients VALUES (1, '10.80.0.2', 1, 0, 1001, 7, '');
+            INSERT INTO clients VALUES (2, '10.80.0.3', 1, 0, 1002, NULL, '');
+            INSERT INTO clients VALUES (3, '10.80.0.4', 1, 1, 1003, 7, '');
             INSERT INTO client_internet_exits VALUES (1, 1, 10);
             INSERT INTO client_internet_exits VALUES (2, 1, 10);
             INSERT INTO client_internet_exits VALUES (3, 1, 10);
@@ -385,6 +387,9 @@ class SyncRoutingTests(unittest.TestCase):
         self.assertEqual(failover.routing_backoff, 10)
 
 
+from concurrent.futures import Future, wait
+
+
 class ProbeTests(unittest.TestCase):
     def test_ping_rtt_is_parsed(self):
         line = "64 bytes from 1.1.1.1: icmp_seq=1 ttl=57 time=12.3 ms"
@@ -399,6 +404,8 @@ class ProbeTests(unittest.TestCase):
             return subprocess.CompletedProcess(cmd, 0, codes.get(cmd[-1], "000"), "")
 
         with mock.patch.object(failover, "iface_exists", return_value=True), \
+             mock.patch.object(failover, "resolve_via",
+                               return_value=["93.184.216.34"]), \
              mock.patch.object(failover, "run", side_effect=fake):
             return failover.probe({"iface": "awg1", "mode": "internet"})
 
@@ -406,17 +413,126 @@ class ProbeTests(unittest.TestCase):
         codes = {url: str(expected) for url, expected in failover.PROBE_HTTP}
         self.assertEqual(self.probe_with(codes), (True, 7.9, True))
 
-    def test_http_failure_marks_a_live_exit_unhealthy(self):
+    def test_one_unreachable_target_does_not_condemn_a_live_exit(self):
         codes = {url: str(expected) for url, expected in failover.PROBE_HTTP}
         codes["http://example.com/"] = "000"
+        self.assertEqual(self.probe_with(codes), (True, 7.9, True))
+
+    def test_two_unreachable_targets_mark_a_live_exit_unhealthy(self):
+        codes = {url: str(expected) for url, expected in failover.PROBE_HTTP}
+        codes["http://example.com/"] = "000"
+        codes["http://captive.apple.com/hotspot-detect.html"] = "000"
         self.assertEqual(self.probe_with(codes), (True, 7.9, False))
 
     def test_failed_probe_has_no_latency(self):
         failed = subprocess.CompletedProcess([], 1, "", "timeout")
         with mock.patch.object(failover, "iface_exists", return_value=True), \
+             mock.patch.object(failover, "tcp_ms", return_value=None), \
              mock.patch.object(failover, "run", return_value=failed):
             self.assertEqual(failover.probe({"iface": "awg1", "mode": "internet"}),
                              (False, None, False))
+
+    def test_alive_by_tcp_when_icmp_is_filtered(self):
+        ping_failed = subprocess.CompletedProcess([], 1, "", "")
+        with mock.patch.object(failover, "iface_exists", return_value=True), \
+             mock.patch.object(failover, "run", return_value=ping_failed), \
+             mock.patch.object(failover, "tcp_ms", return_value=12.5), \
+             mock.patch.object(failover, "http_probe", return_value=(True, {})):
+            self.assertEqual(
+                failover.probe({"iface": "awg1", "mode": "internet"}),
+                (True, 12.5, True),
+            )
+
+    def test_http_probe_fetches_the_address_resolved_by_the_exit(self):
+        commands = []
+
+        def fake(cmd, **kw):
+            commands.append(cmd)
+            code = "204" if cmd[-1].endswith("generate_204") else "200"
+            return subprocess.CompletedProcess(cmd, 0, code, "")
+
+        with mock.patch.object(failover, "resolve_via",
+                               return_value=["172.66.147.243"]), \
+             mock.patch.object(failover, "run", side_effect=fake):
+            healthy, results = failover.http_probe("awg1")
+        self.assertTrue(healthy)
+        self.assertTrue(all(results.values()))
+        joined = " ".join(commands[0])
+        self.assertIn("--resolve", commands[0])
+        self.assertIn("172.66.147.243", joined)
+
+    def test_http_probe_tries_the_next_address(self):
+        codes = iter(["000", "200"])
+
+        def fake(cmd, **kw):
+            url = cmd[-1]
+            if url.endswith("generate_204"):
+                code = "204"
+            elif "apple" in url:
+                code = "200"
+            else:
+                code = next(codes)
+            return subprocess.CompletedProcess(cmd, 0, code, "")
+
+        with mock.patch.object(failover, "resolve_via",
+                               return_value=["172.66.147.243", "104.20.23.154"]), \
+             mock.patch.object(failover, "run", side_effect=fake):
+            healthy, _results = failover.http_probe("awg1")
+        self.assertTrue(healthy)
+
+    def test_http_probe_fails_when_dns_returns_nothing(self):
+        with mock.patch.object(failover, "resolve_via", return_value=[]), \
+             mock.patch.object(failover, "run") as run:
+            healthy, results = failover.http_probe("awg1")
+        self.assertFalse(healthy)
+        self.assertFalse(any(results.values()))
+        self.assertFalse(run.called)
+
+    def test_a_records_are_parsed_with_their_ttl(self):
+        question = failover.build_query("example.com")
+        header = question[:12]
+        body = question[12:]
+        answer = (b"\xc0\x0c" + struct.pack("!HHIH", 1, 1, 60, 4)
+                  + bytes([172, 66, 147, 243]))
+        packet = (struct.pack("!HHHHHH", 0x4B41, 0x8180, 1, 1, 0, 0)
+                  + body + answer)
+        self.assertEqual(failover.parse_a(packet), [("172.66.147.243", 60)])
+        self.assertEqual(failover.parse_a(b""), [])
+
+    def test_resolve_via_caches_the_answer(self):
+        failover.dns_cache.clear()
+        try:
+            with mock.patch.object(failover, "dns_servers", return_value=["1.1.1.1"]), \
+                 mock.patch.object(failover, "dns_lookup",
+                                   return_value=[("172.66.147.243", 60)]) as lookup:
+                first = failover.resolve_via("awg1", "example.com")
+                second = failover.resolve_via("awg1", "example.com")
+            self.assertEqual(first, ["172.66.147.243"])
+            self.assertEqual(second, first)
+            self.assertEqual(lookup.call_count, 1)
+        finally:
+            failover.dns_cache.clear()
+
+    def test_resolve_via_tries_the_next_resolver(self):
+        failover.dns_cache.clear()
+        try:
+            def lookup(host, server, iface):
+                if server == "1.1.1.1":
+                    raise OSError("unreachable")
+                return [("172.66.147.243", 60)]
+
+            with mock.patch.object(failover, "dns_servers",
+                                   return_value=["1.1.1.1", "9.9.9.9"]), \
+                 mock.patch.object(failover, "dns_lookup", side_effect=lookup):
+                self.assertEqual(failover.resolve_via("awg1", "example.com"),
+                                 ["172.66.147.243"])
+        finally:
+            failover.dns_cache.clear()
+
+    def test_resolve_via_keeps_a_literal_address(self):
+        with mock.patch.object(failover, "dns_lookup") as lookup:
+            self.assertEqual(failover.resolve_via("awg1", "10.9.0.1"), ["10.9.0.1"])
+        self.assertFalse(lookup.called)
 
     def test_routed_probe_has_no_icmp_latency(self):
         handshake = subprocess.CompletedProcess(
@@ -430,6 +546,37 @@ class ProbeTests(unittest.TestCase):
         with mock.patch.object(failover, "iface_exists", return_value=False):
             self.assertEqual(failover.probe({"iface": "awg9", "mode": "internet"}),
                              (False, None, False))
+
+    def test_a_probe_in_flight_is_not_started_twice(self):
+        failover.probe_inflight.clear()
+        failover.state.pop("awg1", None)
+        try:
+            future = Future()
+            row = {"iface": "awg1", "enabled": 1, "mode": "internet"}
+            with mock.patch.object(failover.probe_pool, "submit",
+                                   return_value=future) as submit:
+                failover.start_probes([row])
+                failover.start_probes([row])
+                self.assertEqual(submit.call_count, 1)
+                future.set_result((True, 12.0, True))
+                failover.start_probes([])          # harvest only
+                failover.start_probes([row])       # a fresh probe is allowed
+                self.assertEqual(submit.call_count, 2)
+            self.assertEqual(failover.state["awg1"]["oks"], 1)
+        finally:
+            failover.probe_inflight.clear()
+            failover.state.pop("awg1", None)
+
+    def test_a_dns_answer_for_another_name_is_rejected(self):
+        query = failover.build_query("example.com", 0x1234)
+        body = query[12:]
+        answer = b"\xc0\x0c" + struct.pack("!HHIH", 1, 1, 60, 4) + bytes([1, 2, 3, 4])
+        reply = (struct.pack("!HHHHHH", 0x1234, 0x8180, 1, 1, 0, 0)
+                 + body + answer)
+        self.assertTrue(failover.matches_query(reply, 0x1234, "example.com"))
+        self.assertFalse(failover.matches_query(reply, 0x1234, "opencode.ai"))
+        self.assertFalse(failover.matches_query(reply, 0x9999, "example.com"))
+        self.assertFalse(failover.matches_query(b"", 0x1234, "example.com"))
 
     def test_a_live_exit_degrades_after_bad_rounds(self):
         old = failover.state.copy()
@@ -522,6 +669,88 @@ class ClientCheckTests(unittest.TestCase):
         # the client keeps a working exit instead of losing its route.
         self.assertFalse(any("replace" in cmd for cmd in calls))
 
+    def routes(self, pins=None, alive=None, avoid=None, current="awg2",
+               alive_all=("awg1", "awg2")):
+        calls = []
+
+        def fake_run(cmd, timeout=5):
+            calls.append(cmd)
+            return subprocess.CompletedProcess(cmd, 0, "", "")
+
+        with mock.patch.object(failover, "run", side_effect=fake_run), \
+             mock.patch.object(failover, "current_default", return_value=current):
+            failover.apply_client_routes(
+                {(1002, "10.80.0.2"): ["awg1", "awg2"]},
+                alive or ["awg2"],
+                avoid,
+                pins,
+                list(alive_all),
+            )
+        return calls
+
+    def test_a_pinned_degraded_exit_is_used(self):
+        # awg1 is alive but degraded (not in the healthy list); the owner
+        # asked for it, so the route follows the pin, not the order.
+        calls = self.routes(pins={(1002, "10.80.0.2"): "awg1"})
+        self.assertTrue(any(cmd[:3] == ["ip", "route", "replace"]
+                            and "awg1" in cmd for cmd in calls))
+
+    def test_a_pin_beats_the_account_checks(self):
+        calls = self.routes(
+            pins={(1002, "10.80.0.2"): "awg1"},
+            avoid={(1002, "10.80.0.2"): {"awg1"}},
+        )
+        self.assertTrue(any(cmd[:3] == ["ip", "route", "replace"]
+                            and "awg1" in cmd for cmd in calls))
+
+    def test_a_pin_to_an_exit_that_is_not_granted_is_ignored(self):
+        calls = self.routes(pins={(1002, "10.80.0.2"): "awg3"})
+        self.assertFalse(any("awg3" in cmd for cmd in calls))
+
+    def test_staying_on_a_pinned_degraded_exit_is_logged_once(self):
+        failover.pinned_degraded.clear()
+        try:
+            messages = []
+
+            def fake_run(cmd, timeout=5):
+                return subprocess.CompletedProcess(cmd, 0, "", "")
+
+            with mock.patch.object(failover, "run", side_effect=fake_run), \
+                 mock.patch.object(failover, "current_default",
+                                   return_value="awg1"), \
+                 mock.patch.object(failover, "log", side_effect=messages.append):
+                for _ in range(3):
+                    failover.apply_client_routes(
+                        {(1002, "10.80.0.2"): ["awg1", "awg2"]},
+                        ["awg2"],
+                        None,
+                        {(1002, "10.80.0.2"): "awg1"},
+                        ["awg1", "awg2"],
+                    )
+            staying = [m for m in messages if "staying on pinned" in m]
+            self.assertEqual(len(staying), 1, messages)
+        finally:
+            failover.pinned_degraded.clear()
+
+    def test_a_pinned_degraded_exit_is_reported_as_in_use(self):
+        calls = []
+        with mock.patch.object(failover, "current_default", return_value="awg1"), \
+             mock.patch.object(failover, "run", side_effect=lambda *a, **k: calls.append(a)):
+            used = failover.apply_client_routes(
+                {(1002, "10.80.0.2"): ["awg1", "awg2"]},
+                ["awg2"],
+                None,
+                {(1002, "10.80.0.2"): "awg1"},
+                ["awg1", "awg2"],
+            )
+        self.assertEqual(used.get("10.80.0.2"), "awg1")
+
+    def test_a_dead_pin_falls_back_to_the_order(self):
+        calls = self.routes(pins={(1002, "10.80.0.2"): "awg9"}, current="awg1")
+        self.assertTrue(any(cmd[:3] == ["ip", "route", "replace"]
+                            and "awg2" in cmd for cmd in calls))
+        self.assertFalse(any("awg9" in cmd for cmd in calls))
+
     def test_a_check_marks_an_exit_after_three_failures(self):
         failover.check_state.clear()
         try:
@@ -546,15 +775,27 @@ class ClientCheckTests(unittest.TestCase):
                  mock.patch.object(failover, "check_ok",
                                    side_effect=lambda k, t, i: i == "awg2"):
                 for _ in range(failover.CHECK_DEAD_AFTER):
-                    avoid, report = failover.run_account_checks()
+                    failover.run_account_checks()
+                    settle_checks()
+                avoid, report = failover.run_account_checks()
             self.assertEqual(avoid, {1: {"awg1"}})
             self.assertEqual(report["1"]["5"]["failing"], ["awg1"])
         finally:
             failover.check_state.clear()
 
 
+def settle_checks(timeout=5):
+    """Waits for the running account checks and applies their results."""
+    if failover.check_inflight:
+        wait(list(failover.check_inflight), timeout=timeout)
+    failover.harvest_checks()
+
+
 class AccountCheckSchedulingTests(unittest.TestCase):
     def tearDown(self):
+        if failover.check_inflight:
+            wait(list(failover.check_inflight), timeout=5)
+        failover.check_inflight.clear()
         failover.check_state.clear()
         failover.check_cursor = 0
 
@@ -590,6 +831,42 @@ class AccountCheckSchedulingTests(unittest.TestCase):
         self.assertEqual(report, {})
         self.assertFalse(probe.called)
 
+    def test_a_late_account_check_result_is_applied(self):
+        failover.check_state.clear()
+        failover.check_inflight.clear()
+        future = Future()
+        checks = [{"id": 1, "account_id": 1, "kind": "http",
+                   "target": "http://a1.example/"}]
+        grants = [{"account_id": 1, "iface": "awg1"}]
+        try:
+            with mock.patch.object(failover.check_pool, "submit",
+                                   return_value=future), \
+                 mock.patch.object(failover, "account_checks",
+                                   return_value=checks), \
+                 mock.patch.object(failover, "account_grants",
+                                   return_value=grants):
+                failover.run_account_checks()
+                future.set_result(False)
+                failover.harvest_checks()
+            self.assertEqual(failover.check_state[(1, "awg1")]["fails"], 1)
+        finally:
+            failover.check_inflight.clear()
+            failover.check_state.clear()
+
+    def test_a_crashing_check_does_not_stop_the_cycle(self):
+        checks = [{"id": 1, "account_id": 1, "kind": "http",
+                   "target": "http://a1.example/"}]
+        grants = [{"account_id": 1, "iface": "awg1"}]
+        with mock.patch.object(failover, "account_checks", return_value=checks), \
+             mock.patch.object(failover, "account_grants", return_value=grants), \
+             mock.patch.object(failover, "check_ok",
+                               side_effect=RuntimeError("boom")):
+            avoid, report = failover.run_account_checks()
+            settle_checks()          # the failure is logged, not raised
+            avoid, report = failover.run_account_checks()
+        self.assertEqual(avoid, {})
+        self.assertEqual(report, {})
+
     def test_dead_exits_are_not_probed(self):
         checks = [
             {"id": 1, "account_id": 1, "kind": "http",
@@ -607,6 +884,7 @@ class AccountCheckSchedulingTests(unittest.TestCase):
              mock.patch.object(failover, "account_grants", return_value=grants), \
              mock.patch.object(failover, "check_ok", side_effect=fake):
             failover.run_account_checks(alive=["awg2"])
+            settle_checks()
         self.assertEqual(probed, ["awg2"])
 
     def test_accounts_rotate_between_ticks(self):
@@ -623,9 +901,11 @@ class AccountCheckSchedulingTests(unittest.TestCase):
              mock.patch.object(failover, "account_grants", return_value=grants), \
              mock.patch.object(failover, "check_ok", side_effect=fake):
             failover.run_account_checks()
+            settle_checks()
             first = set(probed)
             probed.clear()
             failover.run_account_checks()
+            settle_checks()
             second = set(probed)
         self.assertEqual(len(first), failover.CHECK_ACCOUNTS_PER_TICK)
         self.assertEqual(len(second), failover.CHECK_ACCOUNTS_PER_TICK)
@@ -633,9 +913,17 @@ class AccountCheckSchedulingTests(unittest.TestCase):
         # Every account is covered within a couple of ticks.
         self.assertEqual(first | second, {f"http://a{a}.example/" for a in accounts})
 
+    def test_a_target_with_a_broken_port_is_a_failure_not_a_crash(self):
+        with mock.patch.object(failover, "resolve_via",
+                               return_value=["93.184.216.34"]), \
+             mock.patch.object(failover, "run") as run:
+            self.assertFalse(
+                failover.check_ok("http", "http://a1.example:notaport/", "awg1"))
+        self.assertFalse(run.called)
+
     def test_a_rebound_name_is_not_probed(self):
-        info = [(2, 1, 6, "", ("10.8.1.4", 0))]
-        with mock.patch.object(failover.socket, "getaddrinfo", return_value=info), \
+        with mock.patch.object(failover, "resolve_via",
+                               return_value=["10.8.1.4"]), \
              mock.patch.object(failover, "run") as run:
             self.assertFalse(failover.check_ok("http", "http://a1.example/", "awg1"))
         self.assertFalse(run.called)

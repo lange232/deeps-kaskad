@@ -5,6 +5,39 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.10] - 2026-11-21
+
+### Changed
+
+- Exit probes and account checks are asynchronous: a run slower than the
+  interval keeps going, its result is applied when it lands, and nothing is
+  queued twice for the same exit. Routes and the status file never wait for a
+  probe.
+- An exit is marked degraded only when two of the three probe targets fail:
+  one unreachable site stays visible in the diagnosis without moving every
+  client.
+- Failover probes resolve each target's hostname through the exit, with the
+  resolver clients use, and fetch the address that answer returned. A probe
+  no longer depends on the server's own DNS, which picked addresses chosen
+  for the server's network and marked healthy exits `degraded`. Liveness is
+  a TCP handshake; ICMP stays as a fallback and for the latency figure.
+  Per-target results are shown on the exit page.
+
+### Added
+
+- A configuration can be pinned to one exit from the cabinet or
+  `/api/me/exits/pin`: the pinned exit is used even when the failover marks it
+  degraded, while its tunnel is alive. A dead tunnel falls back to the
+  configuration's order until it returns.
+- An exit node can serve several S1 hosts: `kaskad_exit_peers` lists a key and
+  a transit address per host, so two installations never share one session.
+- `roles/exit` and `playbooks/exit.yml` turn an Ubuntu host into an exit node:
+  AmneziaWG with the obfuscation values from the inventory, forwarding, NAT to
+  the uplink and a key generated on the host. The matching client config is
+  still pasted into the panel by hand, so the panel stays the only source of
+  truth for exits. The playbook runs only against the `kaskad_exits` group, so
+  a wrong inventory cannot rewrite the S1 entry's `awg0`.
+
 ## [0.4.9] - 2026-11-20
 
 ### Added
@@ -26,13 +59,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `GET /api/me/exits` reports `active`: whether the default route points at
   that exit right now. It is `null` while the failover status is stale, like
   `alive`, `degraded` and `rtt_ms`.
-
-### Changed
-
-- Account checks are probed for a rotating slice of accounts per failover
-  cycle, at most four accounts at a time, so a host with many accounts does
-  not stretch the ten-second interval. Each account is still covered within a
-  few cycles.
 
 ### Fixed
 

@@ -58,6 +58,8 @@
     mode: "{{ item.mode }}"
   loop:
     - { path: /opt/kaskad, mode: "0755" }
+    # The code is unpacked here; on a fresh host it does not exist yet.
+    - { path: /opt/kaskad/app, mode: "0755" }
     - { path: /etc/kaskad, mode: "0700" }
     - { path: /etc/kaskad/tls, mode: "0700" }
     - { path: /var/lib/kaskad, mode: "0700" }
@@ -83,24 +85,94 @@
     state: absent
   notify: Restart panel
 
-- name: Panel code
+# One archive instead of a file-by-file copy: over a slow link the recursive
+# copy spent a round trip per file and could hang for minutes, while a single
+# small transfer takes seconds. The archive excludes bytecode so a stale
+# __pycache__ never lands on the host.
+- name: Panel source archive
+  ansible.builtin.command:
+    cmd: >-
+      tar -czf /tmp/kaskad-panel.tgz --exclude=__pycache__
+      -C {{ kaskad_repo_dir }}/panel .
+  delegate_to: localhost
+  become: false
+  run_once: true
+  changed_when: false
+
+- name: Copy the panel archive
   ansible.builtin.copy:
-    src: "{{ kaskad_repo_dir }}/panel/"
-    dest: /opt/kaskad/app/
-    owner: root
-    group: root
-    mode: "0644"
-    directory_mode: "0755"
+    src: /tmp/kaskad-panel.tgz
+    dest: /tmp/kaskad-panel.tgz
+    mode: "0600"
+  register: kaskad_panel_archive
+
+- name: Unpack the panel code
+  ansible.builtin.unarchive:
+    src: /tmp/kaskad-panel.tgz
+    dest: /opt/kaskad/app
+    remote_src: true
+    extra_opts:
+      - --overwrite
+      - --no-same-owner
+  when: kaskad_panel_archive.changed
+  changed_when: kaskad_panel_archive.changed
   notify:
     - Restart panel
     - Restart failover
 
+- name: Panel archive on the host
+  ansible.builtin.file:
+    path: /tmp/kaskad-panel.tgz
+    state: absent
+
+# Dependencies are installed only when requirements.txt changed: the pip run
+# talks to PyPI, and on a slow or lossy link it is what made a code deploy
+# hang for minutes. The tag lets a code-only deploy skip the step entirely.
+- name: Requirements file on the host
+  tags: [deps]
+  ansible.builtin.stat:
+    path: /opt/kaskad/app/requirements.txt
+    checksum_algorithm: sha256
+  register: kaskad_panel_requirements
+
+- name: Installed requirements marker
+  tags: [deps]
+  ansible.builtin.stat:
+    path: /opt/kaskad/venv/.requirements.sha256
+  register: kaskad_panel_requirements_marker
+
+- name: Installed requirements checksum
+  tags: [deps]
+  ansible.builtin.slurp:
+    src: /opt/kaskad/venv/.requirements.sha256
+  register: kaskad_panel_requirements_installed
+  when: kaskad_panel_requirements_marker.stat.exists
+  failed_when: false
+
 - name: Virtual environment
+  tags: [deps]
   ansible.builtin.pip:
     requirements: /opt/kaskad/app/requirements.txt
     virtualenv: /opt/kaskad/venv
     virtualenv_command: python3 -m venv
   notify: Restart panel
+  when: >-
+    not kaskad_panel_requirements_marker.stat.exists
+    or (kaskad_panel_requirements_installed.content | default('') | b64decode | trim)
+       != kaskad_panel_requirements.stat.checksum
+
+- name: Remember installed requirements
+  tags: [deps]
+  ansible.builtin.copy:
+    content: "{{ kaskad_panel_requirements.stat.checksum }}\n"
+    dest: /opt/kaskad/venv/.requirements.sha256
+    owner: root
+    group: root
+    mode: "0644"
+  when: >-
+    not kaskad_panel_requirements_marker.stat.exists
+    or (kaskad_panel_requirements_installed.content | default('') | b64decode | trim)
+       != kaskad_panel_requirements.stat.checksum
 
 - name: Public TLS certificate
   ansible.builtin.include_tasks: tls.yml
@@ -344,6 +416,7 @@
     - (kaskad_backup_files.matched | default(0)) == 0
 
 - name: Android APK present in the repo?
+  tags: [apk]
   ansible.builtin.stat:
     path: "{{ playbook_dir }}/../files/app/app.apk"
     checksum_algorithm: sha256
@@ -353,6 +426,7 @@
   register: kaskad_app_apk_stat
 
 - name: Android client APK (optional, from files/app/app.apk)
+  tags: [apk]
   ansible.builtin.copy:
     src: "{{ playbook_dir }}/../files/app/app.apk"
     dest: /var/lib/kaskad/app.apk
@@ -360,6 +434,7 @@
   when: kaskad_app_apk_stat.stat.exists
 
 - name: Android client APK checksum on the host
+  tags: [apk]
   ansible.builtin.stat:
     path: /var/lib/kaskad/app.apk
     checksum_algorithm: sha256
@@ -369,6 +444,7 @@
 # The APK is a release artifact, not something Ansible builds: refuse to
 # report success if what landed on the host differs from files/app/app.apk.
 - name: Android client APK on the host matches the local file
+  tags: [apk]
   ansible.builtin.assert:
     that:
       - kaskad_app_apk_remote.stat.checksum == kaskad_app_apk_stat.stat.checksum

@@ -112,6 +112,37 @@ exit's CIDRs.
 On the provider side, the subnets must be allowed in the peer and routed back
 to us. That part is outside this project.
 
+## Own exit nodes
+
+An exit does not have to come from a provider. `roles/exit` turns a plain
+Ubuntu host into one: it installs AmneziaWG, enables forwarding, generates the
+interface key on the host itself, writes `awg0` with the obfuscation
+parameters from the inventory and NATs the transit range to the uplink.
+
+```bash
+cp inventory.exit.example.yml inventory.exit.yml   # gitignored
+ansible-playbook -i inventory.exit.yml playbooks/exit.yml --check
+ansible-playbook -i inventory.exit.yml playbooks/exit.yml
+```
+
+The run prints the node's public key. The S1 side is built from it: transit
+`10.9.0.2/32`, `Endpoint = <name>:51820`, the same `Jc/S*/H*`, `AllowedIPs =
+0.0.0.0/0`; then it is pasted into `/exits/new` with mode `internet`. The
+private key of S1 stays in `state/` on the control machine and never reaches
+the node.
+
+Several S1 hosts can share one exit: `kaskad_exit_peers` takes a list, and
+every host gets its own key and its own transit address (`10.9.0.3/32` for the
+second, and so on). One key on two hosts makes the server move the session
+between them, which is the same rule the provider exits follow.
+
+Both ends must carry the same obfuscation values - they are per tunnel, not
+per server - and changing them means changing both and restarting both
+interfaces. The magic headers `H1..H4` must be distinct and below 2^31; an
+out-of-range value makes `awg setconf` fail with a bare `configuration parsing
+error`. The panel does not edit an exit config, so point the endpoint at a
+DNS name: moving the node to another address later means recreating the exit.
+
 ## Client configs
 
 Every generated `.conf` carries `PersistentKeepalive`, 25 seconds by default
@@ -194,15 +225,32 @@ Exit tables start at 1000 and the system tables are excluded explicitly.
 
 ## Failover
 
-Every 10 seconds each enabled internet exit is probed with ICMP
-(`ping -I awgN`) and two HTTP targets fetched through the interface. The first
-alive one by ascending `priority` becomes active, and the route
-`default dev awgN table 100` is replaced. An exit that answers ping but cannot
-reach every HTTP target is marked `degraded` after 3 bad rounds; clients and
-the active exit prefer a healthy one, and the degraded exit returns only after
-3 good rounds and 60 seconds of stability. An exit is dead after 3 failed ICMP
-probes and alive after 2 successful ones. Client conntrack entries are flushed
-on switch, otherwise the old NAT would send packets to the wrong address.
+Every 10 seconds each enabled internet exit is probed through its own
+interface: a TCP handshake to a public address (ICMP is a fallback for networks
+that drop TCP probes), then three HTTP targets in three networks. Each target's
+hostname is resolved **through the exit**, with the same resolver clients use,
+and the fetch is pinned to the address that answer returned (`curl
+--resolve`). A probe therefore sees the internet the way a client of that exit
+does; the server's own DNS has no say. The first alive one by ascending
+`priority` becomes active, and the route `default dev awgN table 100` is
+replaced. An exit that answers the transport probe but fails two of the three
+HTTP targets is marked `degraded` after 3 bad rounds; clients and the active
+exit prefer a healthy one, and the degraded exit returns only after 3 good
+rounds and 60 seconds of stability. An exit is dead after 3 failed transport
+probes and alive after 2 successful ones. Probing is asynchronous: a probe
+that outlives the interval keeps running, its verdict is applied when it
+lands, and the same exit is never probed twice at once. Route choice and the
+status file never wait for a probe. The last
+result of every target is visible on the exit page, so a `degraded` badge says
+which destination failed instead of only that something did. Client conntrack
+entries are flushed on switch, otherwise the old NAT would send packets to the
+wrong address.
+
+A configuration can also be pinned to one exit: the cabinet offers "use" next
+to every granted exit, and the pinned one is used even when the failover marks
+it degraded, as long as its tunnel is alive. If it dies, the configuration's
+order takes over again until it returns. This is how a client keeps a slower
+exit that reaches what it needs instead of a healthy one that does not.
 
 An account can keep up to three of its own destinations — an HTTP URL or a
 host for ICMP — in the cabinet (`/me/checks`). They are probed through every
@@ -482,6 +530,12 @@ scripts/fetch-apk.sh --tag v5.8.2 # or a pinned release
 ansible-playbook -i inventory.yml playbooks/site.yml --tags panel
 ```
 
+A code-only deploy on a slow link skips the two steps that touch the network:
+`--tags panel --skip-tags apk,deps`. `apk` is the client archive copy on the
+host, `deps` installs Python requirements - and even without the tag it runs
+only when `requirements.txt` changed, because pip to PyPI is what made those
+deploys hang.
+
 The script reads the GitHub releases API (one request per run, set
 `GITHUB_TOKEN` if the anonymous 60/hour limit is a problem), downloads
 `*-arm64.apk` together with `SHA256SUMS.txt` from the same release and
@@ -543,6 +597,8 @@ IP will still see the self-signed warning; use the domain name.
 - `kaskad-routing.service`: runs `routing.py apply` at boot.
 - `kaskad-failover.service`: selects the active internet exit.
 - `kaskad-firewall.service`: iptables, MSS clamp, NAT.
+- Own exit nodes run `playbooks/exit.yml` and nothing else from this
+  repository; the panel on S1 owns their client config.
 - `kaskad-panel.service`: the panel. Runs as root (netlink is required) with
   `ProtectSystem=strict` and `ReadWritePaths` limited to two directories.
 - `/run/kaskad` is created by `tmpfiles.d`; the units do not remove it.

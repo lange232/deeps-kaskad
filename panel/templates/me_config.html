@@ -80,7 +80,7 @@
             <td>
               {{ e.comment or e.name }}
               <div class="actions" style="margin-top:4px; gap:8px">
-                {% if current_exit and current_exit.id == e.id %}<span class="oc-badge oc-badge--accent">in use</span>{% endif %}
+                {% if pinned == e.iface %}<span class="oc-badge oc-badge--accent">pinned</span>{% elif current_exit and current_exit.id == e.id %}<span class="oc-badge oc-badge--accent">in use</span>{% endif %}
                 {% set exit_state = alive.get(e.iface) %}
                 <span class="oc-badge {% if exit_state is none %}oc-badge--subtle{% elif degraded.get(e.iface) %}oc-badge--warning{% elif exit_state %}oc-badge--success{% else %}oc-badge--subtle{% endif %}" data-live="exit|{{ e.iface }}">{% if exit_state is none %}no data{% elif degraded.get(e.iface) %}degraded{% elif exit_state %}up{% else %}down{% endif %}</span>
                 <span class="ping">
@@ -103,6 +103,15 @@
                   <input type="hidden" name="direction" value="down">
                   <button class="oc-btn oc-btn--neutral oc-btn--sm" {{ 'disabled' if loop.last }}>down</button>
                 </form>
+                {% if pinned != e.iface %}
+                <form method="post" action="/me/configs/{{ cl.id }}/pin">
+                  <input type="hidden" name="csrf_token" value="{{ csrf }}">
+                  <input type="hidden" name="exit_id" value="{{ e.id }}">
+                  <input type="hidden" name="action" value="pin">
+                  <button class="oc-btn oc-btn--ghost oc-btn--sm"
+                          title="keep this exit even when the failover marks it degraded">use</button>
+                </form>
+                {% endif %}
               </div>
             </td>
           </tr>
@@ -110,10 +119,24 @@
         </tbody>
       </table>
       </div>
-      <form method="post" action="/me/configs/{{ cl.id }}/order/reset" style="margin-top:14px">
-        <input type="hidden" name="csrf_token" value="{{ csrf }}">
-        <button class="oc-btn oc-btn--neutral oc-btn--sm">reset to account order</button>
-      </form>
+      <p class="oc-hint" style="margin-top:12px">
+        A pinned exit is used even when the failover marks it degraded, as long
+        as its tunnel is alive; if it dies, the order above takes over until it
+        returns.
+      </p>
+      <div class="actions" style="margin-top:10px">
+        <form method="post" action="/me/configs/{{ cl.id }}/order/reset">
+          <input type="hidden" name="csrf_token" value="{{ csrf }}">
+          <button class="oc-btn oc-btn--neutral oc-btn--sm">reset to account order</button>
+        </form>
+        {% if pinned %}
+        <form method="post" action="/me/configs/{{ cl.id }}/pin">
+          <input type="hidden" name="csrf_token" value="{{ csrf }}">
+          <input type="hidden" name="action" value="auto">
+          <button class="oc-btn oc-btn--contrast oc-btn--sm">back to automatic</button>
+        </form>
+        {% endif %}
+      </div>
     </div>
   </section>
   {% endif %}

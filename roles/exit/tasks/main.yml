@@ -1,0 +1,160 @@
+---
+# An exit node: AmneziaWG server side, NAT and forwarding. The panel on S1
+# owns the matching client config; nothing here knows about accounts.
+- name: Supported distribution
+  ansible.builtin.assert:
+    that:
+      - ansible_distribution == "Ubuntu"
+      - ansible_distribution_major_version | int >= 22
+    fail_msg: "role exit is written for Ubuntu 22.04 and newer"
+
+- name: This host is an exit, not the S1 entry
+  ansible.builtin.assert:
+    that:
+      - kaskad_role | default('') == 'exit'
+    fail_msg: >-
+      this host is not marked kaskad_role=exit: the exit role rewrites awg0 and
+      would cut the clients of an S1 entry. Set kaskad_role: exit on every host
+      of the kaskad_exits group.
+
+- name: Every peer has a key
+  ansible.builtin.assert:
+    that:
+      - kaskad_exit_peers | length > 0
+      - item.public_key | default('') | length > 0
+      - item.address | default('') | length > 0
+    fail_msg: >-
+      kaskad_exit_peers needs an address and the public key of every S1 that
+      dials this exit. Each host has its own key: one key on two hosts makes
+      the server move the session between them.
+    quiet: true
+  loop: "{{ kaskad_exit_peers }}"
+  loop_control:
+    label: "{{ item.address | default('?') }}"
+
+- name: Base packages
+  ansible.builtin.apt:
+    update_cache: true
+    cache_valid_time: 3600
+    state: present
+    name:
+      - iproute2
+      - iptables
+      - curl
+      - dnsutils
+      - ca-certificates
+
+# The same role S1 uses: PPA when Launchpad is reachable, files/awg/*.deb
+# otherwise (kaskad_awg_packages_mode in the inventory).
+- name: AmneziaWG
+  ansible.builtin.import_role:
+    name: amneziawg
+
+- name: Kernel parameters
+  ansible.builtin.template:
+    src: 90-kaskad-exit.conf.j2
+    dest: /etc/sysctl.d/90-kaskad-exit.conf
+    owner: root
+    group: root
+    mode: "0644"
+  register: kaskad_exit_sysctl
+
+- name: Apply kernel parameters
+  ansible.builtin.command: sysctl --system
+  changed_when: false
+  when: kaskad_exit_sysctl.changed
+
+- name: AmneziaWG directory
+  ansible.builtin.file:
+    path: "{{ kaskad_awg_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0700"
+
+- name: Interface key exists
+  ansible.builtin.stat:
+    path: "{{ kaskad_awg_dir }}/{{ kaskad_exit_iface }}.key"
+  register: kaskad_exit_key_file
+
+# The key is created here and never leaves the host in private form: only the
+# public half is printed at the end of the run.
+- name: Generate the interface key
+  ansible.builtin.command: awg genkey
+  register: kaskad_exit_keygen
+  when: not kaskad_exit_key_file.stat.exists
+  changed_when: true
+  no_log: true
+
+- name: Store the interface key
+  ansible.builtin.copy:
+    content: "{{ kaskad_exit_keygen.stdout }}\n"
+    dest: "{{ kaskad_awg_dir }}/{{ kaskad_exit_iface }}.key"
+    owner: root
+    group: root
+    mode: "0600"
+  when: not kaskad_exit_key_file.stat.exists
+  no_log: true
+
+- name: Interface key is readable
+  ansible.builtin.stat:
+    path: "{{ kaskad_awg_dir }}/{{ kaskad_exit_iface }}.key"
+  register: kaskad_exit_key_now
+
+- name: Read the interface key
+  ansible.builtin.slurp:
+    src: "{{ kaskad_awg_dir }}/{{ kaskad_exit_iface }}.key"
+  register: kaskad_exit_key
+  no_log: true
+  # The key may have been generated a task earlier, so this checks the state
+  # after creation, not the first look. On a fresh host in check mode nothing
+  # is created and the rest that needs the key is skipped.
+  when: kaskad_exit_key_now.stat.exists
+
+- name: Public key of this exit
+  ansible.builtin.command: awg pubkey
+  args:
+    stdin: "{{ kaskad_exit_key.content | b64decode }}"
+  register: kaskad_exit_pubkey
+  changed_when: false
+  no_log: true
+  when: kaskad_exit_key_now.stat.exists
+
+- name: Remember the private key for this run
+  ansible.builtin.set_fact:
+    kaskad_exit_private_key: "{{ kaskad_exit_key.content | b64decode | trim }}"
+  no_log: true
+  when: kaskad_exit_key_now.stat.exists
+
+# The config carries the private key, so a diff would print it: no_log keeps
+# it out of the run output. A change still restarts the interface.
+- name: Tunnel configuration
+  ansible.builtin.template:
+    src: awg0.conf.j2
+    dest: "{{ kaskad_awg_dir }}/{{ kaskad_exit_iface }}.conf"
+    owner: root
+    group: root
+    mode: "0600"
+  notify: Restart the exit interface
+  no_log: true
+  when: kaskad_exit_key_now.stat.exists
+
+- name: Interface enabled
+  ansible.builtin.systemd:
+    name: "awg-quick@{{ kaskad_exit_iface }}"
+    enabled: true
+    state: started
+
+- name: Tunnel state
+  ansible.builtin.command: "awg show {{ kaskad_exit_iface }}"
+  register: kaskad_exit_show
+  changed_when: false
+  when: not ansible_check_mode
+
+- name: Exit summary
+  ansible.builtin.debug:
+    msg:
+      - "public key: {{ kaskad_exit_pubkey.stdout | default('check mode') }}"
+      - "endpoint: {{ ansible_default_ipv4.address }}:{{ kaskad_exit_port }}/udp"
+      - "transit: {{ kaskad_exit_address }} <- peers {{ kaskad_exit_peers | map(attribute='address') | join(', ') }}"
+      - "{{ kaskad_exit_show.stdout_lines | default(['check mode']) }}"

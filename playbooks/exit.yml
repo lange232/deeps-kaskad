@@ -1,0 +1,14 @@
+---
+# Builds an exit node: AmneziaWG server side, NAT, forwarding. The panel on
+# S1 gets the matching client config afterwards; this playbook never touches
+# S1 or the panel database.
+#
+#   ansible-playbook -i inventory.exit.yml playbooks/exit.yml --check
+#   ansible-playbook -i inventory.exit.yml playbooks/exit.yml
+- name: Exit node
+  # A dedicated group, never "all": ansible.cfg points at the production
+  # inventory by default, and this role rewrites awg0 and restarts it.
+  hosts: kaskad_exits
+  become: true
+  roles:
+    - role: exit

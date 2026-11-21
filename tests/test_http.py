@@ -634,9 +634,71 @@ class AccountCheckTests(PanelTestCase):
             ("http", "http://192.168.0.1/"), ("icmp", "127.0.0.1"),
             ("icmp", "10.0.0.1"), ("http", "file:///etc/passwd"),
             ("http", "http://user:pass@1.1.1.1/"),
+            ("http", "http://1.1.1.1:notaport/"),
+            ("http", "http://1.1.1.1:70000/"),
         ):
             self.assertIsNotNone(app.check_target_error(kind, target), target)
 
+
+
+class ExitPinTests(PanelTestCase):
+    def setUp(self):
+        super().setUp()
+        self.aid, self.cid = self.seed_client()
+        self.first = self.seed_exit("nl-1", "awg1", priority=10)
+        self.second = self.seed_exit("us-1", "awg2", priority=20)
+        self.grant(self.aid, self.cid, self.first, 10)
+        self.grant(self.aid, self.cid, self.second, 20)
+        self.login("c1@example.com", USER_PASSWORD)
+
+    def pinned(self):
+        with app.db() as conn:
+            return conn.execute(
+                "SELECT pinned_iface FROM clients WHERE id = ?", (self.cid,)
+            ).fetchone()[0]
+
+    def post(self, action, exit_id=0):
+        return self.client.post(
+            f"/me/configs/{self.cid}/pin",
+            data={"exit_id": exit_id, "action": action,
+                  "csrf_token": self.csrf(f"/me/configs/{self.cid}")},
+        )
+
+    def test_pinning_a_degraded_exit_and_going_back(self):
+        self.assertEqual(self.post("pin", self.second).status_code, 303)
+        self.assertEqual(self.pinned(), "awg2")
+        page = self.client.get(f"/me/configs/{self.cid}").text
+        self.assertIn("pinned", page)
+        self.assertEqual(self.post("auto").status_code, 303)
+        self.assertEqual(self.pinned(), "")
+
+    def test_only_a_granted_exit_can_be_pinned(self):
+        foreign = self.seed_exit("spare", "awg3", priority=30)
+        self.assertEqual(self.post("pin", foreign).status_code, 404)
+        self.assertEqual(self.pinned(), "")
+
+    def test_an_exit_delete_clears_the_pin(self):
+        self.post("pin", self.second)
+        self.login_admin()
+        self.client.post(f"/exits/{self.second}/delete", data={
+            "csrf_token": self.csrf(f"/exits/{self.second}")})
+        self.assertEqual(self.pinned(), "")
+
+    def test_the_api_pins_and_reports_it(self):
+        response = self.client.post("/api/login", data={
+            "email": "c1@example.com", "password": USER_PASSWORD})
+        headers = {"Authorization": "Bearer " + response.json()["token"]}
+        pin = self.client.post("/api/me/exits/pin", headers=headers, data={
+            "exit_id": self.second, "action": "pin"})
+        self.assertEqual(pin.status_code, 200)
+        self.assertEqual(pin.json()["pinned"], "awg2")
+        with mock.patch.object(app, "read_status",
+                               return_value={"ts": int(time.time())}):
+            exits = self.client.get("/api/me/exits", headers=headers).json()
+        self.assertEqual([e["pinned"] for e in exits], [False, True])
+        auto = self.client.post("/api/me/exits/pin", headers=headers, data={
+            "action": "auto"})
+        self.assertEqual(auto.json()["pinned"], "")
 
 
 class CabinetExitStateTests(PanelTestCase):
@@ -2059,6 +2121,18 @@ class MobileApiTests(PanelTestCase):
         with mock.patch.object(app, "read_status", return_value=status):
             exits = self.client.get("/api/me/exits", headers=headers).json()
         self.assertEqual([e["active"] for e in exits], [False, True])
+
+    def test_exits_api_reports_the_country(self):
+        aid, cid = self.seed_client()
+        self.grant(aid, cid, self.seed_exit("nl-1", "awg1"))
+        with app.db() as conn:
+            conn.execute("UPDATE exits SET country = 'Netherlands', comment = 'Amsterdam'")
+        headers, _ = self.api_login()
+        with mock.patch.object(app, "read_status",
+                               return_value={"ts": int(time.time())}):
+            exit_row = self.client.get("/api/me/exits", headers=headers).json()[0]
+        self.assertEqual(exit_row["country"], "Netherlands")
+        self.assertEqual(exit_row["comment"], "Amsterdam")
 
     def test_create_conf_order_and_delete(self):
         aid, cid = self.seed_client(max_configs=5)

@@ -1,0 +1,22 @@
+# Managed by Ansible (role exit). Hand edits are lost on the next run.
+[Interface]
+Address = {{ kaskad_exit_address }}
+ListenPort = {{ kaskad_exit_port }}
+PrivateKey = {{ kaskad_exit_private_key }}
+MTU = {{ kaskad_exit_mtu }}
+{% for key, value in kaskad_exit_params.items() %}
+{{ key }} = {{ value }}
+{% endfor %}
+PostUp = iptables -t nat -A POSTROUTING -s {{ kaskad_exit_net }} -o {{ kaskad_exit_wan }} -j MASQUERADE
+PostUp = iptables -A FORWARD -i %i -o {{ kaskad_exit_wan }} -j ACCEPT
+PostUp = iptables -A FORWARD -i {{ kaskad_exit_wan }} -o %i -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+PostDown = iptables -D FORWARD -i {{ kaskad_exit_wan }} -o %i -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT || true
+PostDown = iptables -D FORWARD -i %i -o {{ kaskad_exit_wan }} -j ACCEPT || true
+PostDown = iptables -t nat -D POSTROUTING -s {{ kaskad_exit_net }} -o {{ kaskad_exit_wan }} -j MASQUERADE || true
+
+{% for peer in kaskad_exit_peers %}
+[Peer]
+PublicKey = {{ peer.public_key }}
+AllowedIPs = {{ peer.address }}
+PersistentKeepalive = {{ kaskad_exit_keepalive }}
+{% endfor %}
