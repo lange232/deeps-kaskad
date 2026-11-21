@@ -13,48 +13,47 @@
     <a class="oc-tabs__item{{ ' is-active' if mode == 'internet' }}" {% if mode == 'internet' %}aria-current="page"{% endif %} href="/exits?mode=internet">Internet · {{ counts.internet }}</a>
     <a class="oc-tabs__item{{ ' is-active' if mode == 'routes' }}" {% if mode == 'routes' %}aria-current="page"{% endif %} href="/exits?mode=routes">Subnets · {{ counts.routes }}</a>
   </nav>
+  <span class="oc-muted exits-count">{{ exits | selectattr('enabled') | list | length }} of {{ exits | length }} shown enabled</span>
 </div>
 
 {% if exits %}
 <div class="oc-panel">
-  <div class="oc-panel__head">
-    <span class="oc-badge oc-badge--subtle">{{ exits | selectattr('enabled') | list | length }} of {{ exits | length }} enabled</span>
-  </div>
-  <div class="table-scroll">
-  <table class="oc-table">
+  <table class="oc-table exits-table">
     <thead>
-      <tr><th scope="col">Exit</th><th scope="col">State</th><th scope="col">In use</th><th scope="col">Priority</th><th scope="col">Mode</th></tr>
+      <tr><th scope="col">Exit</th><th scope="col">State</th><th scope="col">In use</th><th scope="col">Latency</th><th scope="col">Priority</th></tr>
     </thead>
     <tbody>
     {% for e in exits %}
       <tr data-href="/exits/{{ e.id }}">
-        <td>
+        <td class="exits-table__name">
+          <div class="exits-identity">
           <a class="oc-link" href="/exits/{{ e.id }}">{{ e.name }}</a>
-          {% if e.country %}<div class="cell-sub">{{ e.country }}</div>{% endif %}
-          {% if e.mode == 'internet' %}<div class="actions exit-markers">{{ exit_roles(e) }}</div>{% endif %}
+          {% if e.country %}<span class="oc-muted">{{ e.country }}</span>{% endif %}
+          {% if e.mode == 'internet' %}{{ exit_roles(e) }}{% else %}
+          <span class="oc-badge oc-badge--subtle">Subnets</span>
+          {% if not e.nat %}<span class="oc-badge oc-badge--warning">No NAT</span>{% endif %}
+          {% endif %}
+          </div>
         </td>
-        <td>
+        <td class="exits-table__state">
           {{ exit_state(e) }}
         </td>
-        <td class="oc-num">
+        <td class="oc-num exits-table__usage">
+          <span class="exits-mobile-label">In use </span>
           {% if e.mode == 'internet' %}
           <span data-live="exit-usage|{{ e.iface }}">{{ usage.get(e.iface, 0) if routing_fresh else '—' }}</span>
           {% else %}<span aria-label="Not applicable">—</span>{% endif %}
         </td>
-        <td class="oc-num">{{ e.priority if e.mode == 'internet' else '—' }}</td>
-        <td>
-          {% if e.mode == 'routes' %}
-            <span class="oc-badge oc-badge--subtle">subnets</span>
-            {% if not e.nat %}<span class="oc-badge oc-badge--warning">no NAT</span>{% endif %}
-          {% else %}
-            <span class="oc-badge oc-badge--subtle">internet</span>
-          {% endif %}
+        <td class="oc-num exits-table__latency">
+          <span class="exits-mobile-label">Latency </span>
+          {% if e.mode == 'internet' %}<span data-live="exit-rtt|{{ e.iface }}">{{ (e.rtt_ms ~ ' ms') if e.enabled and e.alive and e.rtt_ms is not none else '—' }}</span>
+          {% else %}<span aria-label="Handshake only">—</span>{% endif %}
         </td>
+        <td class="oc-num exits-table__priority"><span class="exits-mobile-label">Priority </span>{{ e.priority if e.mode == 'internet' else '—' }}</td>
       </tr>
     {% endfor %}
     </tbody>
   </table>
-  </div>
 </div>
 {% else %}
 <div class="oc-card oc-card--warning">

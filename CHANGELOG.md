@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Compact the admin exit list and adapt it to narrow screens; show exit latency
+  alongside health and usage.
+
+### Changed
+
 - The admin overview highlights exit problems first. Exit lists distinguish
   global selection from health and show live configuration counts. Exit
   details show probe results and configuration usage before settings, with

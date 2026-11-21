@@ -1759,6 +1759,26 @@ class NavigationTests(PanelTestCase):
         self.assertIn("second has a failed check", overview)
         self.assertIn(f"/exits/{second}#exit-configurations", overview)
 
+    def test_exit_list_shows_latency_and_subnet_mode_without_internet_badges(self):
+        self.seed_exit("online", "awg1")
+        self.seed_exit("subnet", "awg2", mode="routes", routes="10.1.0.0/24")
+        self.login_admin()
+        status = {"ts": int(time.time()), "exits": {
+            "awg1": {"alive": True, "rtt_ms": 0},
+            "awg2": {"alive": True},
+        }}
+        with mock.patch.object(app, "read_status", return_value=status):
+            all_exits = self.client.get("/exits").text
+            internet = self.client.get("/exits?mode=internet").text
+            subnet = self.client.get("/exits?mode=routes").text
+        self.assertIn('data-live="exit-rtt|awg1">0 ms</span>', all_exits)
+        self.assertIn('aria-label="Handshake only">—</span>', all_exits)
+        self.assertIn(">Subnets</span>", all_exits)
+        self.assertIn("2 of 2 shown enabled", all_exits)
+        self.assertIn("1 of 1 shown enabled", internet)
+        self.assertIn("1 of 1 shown enabled", subnet)
+        self.assertNotIn('>internet</span>', all_exits)
+
     def test_current_page_is_marked_for_screen_readers(self):
         self.login_admin()
         text = self.client.get("/accounts").text
