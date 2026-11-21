@@ -220,14 +220,21 @@ Exit tables start at 1000 and the system tables are excluded explicitly.
 
 ## Failover
 
-Every 10 seconds each enabled internet exit is probed with ICMP
-(`ping -I awgN`) and two HTTP targets fetched through the interface. The first
+Every 10 seconds each enabled internet exit is probed through its own
+interface: a TCP handshake to a public address (ICMP is a fallback for
+networks that answer it), then two HTTP targets. Each target's hostname is
+resolved **through the exit**, with the same resolver clients use, and the
+fetch is pinned to the address that answer returned (`curl --resolve`). A
+probe therefore sees the internet the way a client of that exit does; the
+server's own DNS has no say. The first
 alive one by ascending `priority` becomes active, and the route
 `default dev awgN table 100` is replaced. An exit that answers ping but cannot
 reach every HTTP target is marked `degraded` after 3 bad rounds; clients and
 the active exit prefer a healthy one, and the degraded exit returns only after
-3 good rounds and 60 seconds of stability. An exit is dead after 3 failed ICMP
-probes and alive after 2 successful ones. Client conntrack entries are flushed
+3 good rounds and 60 seconds of stability. An exit is dead after 3 failed
+transport probes and alive after 2 successful ones. The last result of every
+target is visible on the exit page, so a `degraded` badge says which
+destination failed instead of only that something did. Client conntrack entries are flushed
 on switch, otherwise the old NAT would send packets to the wrong address.
 
 An account can keep up to three of its own destinations — an HTTP URL or a

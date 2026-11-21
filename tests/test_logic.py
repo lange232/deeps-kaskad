@@ -4,6 +4,7 @@ Run with: python3 -m unittest discover -s tests
 """
 import json
 import sqlite3
+import struct
 import subprocess
 import sys
 import tempfile
@@ -399,6 +400,8 @@ class ProbeTests(unittest.TestCase):
             return subprocess.CompletedProcess(cmd, 0, codes.get(cmd[-1], "000"), "")
 
         with mock.patch.object(failover, "iface_exists", return_value=True), \
+             mock.patch.object(failover, "resolve_via",
+                               return_value=["93.184.216.34"]), \
              mock.patch.object(failover, "run", side_effect=fake):
             return failover.probe({"iface": "awg1", "mode": "internet"})
 
@@ -414,9 +417,90 @@ class ProbeTests(unittest.TestCase):
     def test_failed_probe_has_no_latency(self):
         failed = subprocess.CompletedProcess([], 1, "", "timeout")
         with mock.patch.object(failover, "iface_exists", return_value=True), \
+             mock.patch.object(failover, "tcp_ms", return_value=None), \
              mock.patch.object(failover, "run", return_value=failed):
             self.assertEqual(failover.probe({"iface": "awg1", "mode": "internet"}),
                              (False, None, False))
+
+    def test_alive_by_tcp_when_icmp_is_filtered(self):
+        ping_failed = subprocess.CompletedProcess([], 1, "", "")
+        with mock.patch.object(failover, "iface_exists", return_value=True), \
+             mock.patch.object(failover, "run", return_value=ping_failed), \
+             mock.patch.object(failover, "tcp_ms", return_value=12.5), \
+             mock.patch.object(failover, "http_probe", return_value=(True, {})):
+            self.assertEqual(
+                failover.probe({"iface": "awg1", "mode": "internet"}),
+                (True, 12.5, True),
+            )
+
+    def test_http_probe_fetches_the_address_resolved_by_the_exit(self):
+        commands = []
+
+        def fake(cmd, **kw):
+            commands.append(cmd)
+            code = "204" if cmd[-1].endswith("generate_204") else "200"
+            return subprocess.CompletedProcess(cmd, 0, code, "")
+
+        with mock.patch.object(failover, "resolve_via",
+                               return_value=["172.66.147.243"]), \
+             mock.patch.object(failover, "run", side_effect=fake):
+            healthy, results = failover.http_probe("awg1")
+        self.assertTrue(healthy)
+        self.assertTrue(all(results.values()))
+        joined = " ".join(commands[0])
+        self.assertIn("--resolve", commands[0])
+        self.assertIn("172.66.147.243", joined)
+
+    def test_http_probe_tries_the_next_address(self):
+        codes = iter(["000", "200"])
+
+        def fake(cmd, **kw):
+            code = "204" if cmd[-1].endswith("generate_204") else next(codes)
+            return subprocess.CompletedProcess(cmd, 0, code, "")
+
+        with mock.patch.object(failover, "resolve_via",
+                               return_value=["172.66.147.243", "104.20.23.154"]), \
+             mock.patch.object(failover, "run", side_effect=fake):
+            healthy, _results = failover.http_probe("awg1")
+        self.assertTrue(healthy)
+
+    def test_http_probe_fails_when_dns_returns_nothing(self):
+        with mock.patch.object(failover, "resolve_via", return_value=[]), \
+             mock.patch.object(failover, "run") as run:
+            healthy, results = failover.http_probe("awg1")
+        self.assertFalse(healthy)
+        self.assertFalse(any(results.values()))
+        self.assertFalse(run.called)
+
+    def test_a_records_are_parsed_with_their_ttl(self):
+        question = failover.build_query("example.com")
+        header = question[:12]
+        body = question[12:]
+        answer = (b"\xc0\x0c" + struct.pack("!HHIH", 1, 1, 60, 4)
+                  + bytes([172, 66, 147, 243]))
+        packet = (struct.pack("!HHHHHH", 0x4B41, 0x8180, 1, 1, 0, 0)
+                  + body + answer)
+        self.assertEqual(failover.parse_a(packet), [("172.66.147.243", 60)])
+        self.assertEqual(failover.parse_a(b""), [])
+
+    def test_resolve_via_caches_the_answer(self):
+        failover.dns_cache.clear()
+        try:
+            with mock.patch.object(failover, "dns_server", return_value="1.1.1.1"), \
+                 mock.patch.object(failover, "dns_lookup",
+                                   return_value=[("172.66.147.243", 60)]) as lookup:
+                first = failover.resolve_via("awg1", "example.com")
+                second = failover.resolve_via("awg1", "example.com")
+            self.assertEqual(first, ["172.66.147.243"])
+            self.assertEqual(second, first)
+            self.assertEqual(lookup.call_count, 1)
+        finally:
+            failover.dns_cache.clear()
+
+    def test_resolve_via_keeps_a_literal_address(self):
+        with mock.patch.object(failover, "dns_lookup") as lookup:
+            self.assertEqual(failover.resolve_via("awg1", "10.9.0.1"), ["10.9.0.1"])
+        self.assertFalse(lookup.called)
 
     def test_routed_probe_has_no_icmp_latency(self):
         handshake = subprocess.CompletedProcess(
@@ -634,8 +718,8 @@ class AccountCheckSchedulingTests(unittest.TestCase):
         self.assertEqual(first | second, {f"http://a{a}.example/" for a in accounts})
 
     def test_a_rebound_name_is_not_probed(self):
-        info = [(2, 1, 6, "", ("10.8.1.4", 0))]
-        with mock.patch.object(failover.socket, "getaddrinfo", return_value=info), \
+        with mock.patch.object(failover, "resolve_via",
+                               return_value=["10.8.1.4"]), \
              mock.patch.object(failover, "run") as run:
             self.assertFalse(failover.check_ok("http", "http://a1.example/", "awg1"))
         self.assertFalse(run.called)

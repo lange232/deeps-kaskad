@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Failover probes resolve each target's hostname through the exit, with the
+  resolver clients use, and fetch the address that answer returned. A probe
+  no longer depends on the server's own DNS, which picked addresses chosen
+  for the server's network and marked healthy exits `degraded`. Liveness is
+  a TCP handshake; ICMP stays as a fallback and for the latency figure.
+  Per-target results are shown on the exit page.
+
 ### Added
 
 - `roles/exit` and `playbooks/exit.yml` turn an Ubuntu host into an exit node:

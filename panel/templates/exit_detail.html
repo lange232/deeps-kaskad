@@ -59,6 +59,16 @@
       <div><div class="k">DNS</div><div class="v oc-mono">{{ exit.dns or '—' }}</div></div>
       {% endif %}
       <div><div class="k">last check</div><div class="v" data-live="lastok|{{ exit.iface }}">—</div></div>
+      {% if exit.targets %}
+      <div><div class="k">targets</div><div class="v">
+        {% for url, ok in exit.targets.items() %}
+        <div class="cell-sub">
+          {% if ok %}<span class="oc-badge oc-badge--success">ok</span>{% else %}<span class="oc-badge oc-badge--danger">fail</span>{% endif %}
+          <span class="oc-mono">{{ url }}</span>
+        </div>
+        {% endfor %}
+      </div></div>
+      {% endif %}
     </div>
 
     <form method="post" action="/exits/{{ exit.id }}/details" style="margin-top:18px; max-width:420px">

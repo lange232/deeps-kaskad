@@ -1577,6 +1577,7 @@ def exit_view(e, status: dict, active, manual: str = "") -> dict:
         "last_ok": st.get("last_ok", 0),
         "rtt_ms": st.get("rtt_ms"),
         "rtt_ts": st.get("rtt_ts", 0),
+        "targets": st.get("targets") or {},
         "active": e["iface"] == active,
         "pinned": bool(manual) and e["iface"] == manual,
     }
