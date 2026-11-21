@@ -95,12 +95,54 @@
     - Restart panel
     - Restart failover
 
+# Dependencies are installed only when requirements.txt changed: the pip run
+# talks to PyPI, and on a slow or lossy link it is what made a code deploy
+# hang for minutes. The tag lets a code-only deploy skip the step entirely.
+- name: Requirements file on the host
+  tags: [deps]
+  ansible.builtin.stat:
+    path: /opt/kaskad/app/requirements.txt
+    checksum_algorithm: sha256
+  register: kaskad_panel_requirements
+
+- name: Installed requirements marker
+  tags: [deps]
+  ansible.builtin.stat:
+    path: /opt/kaskad/venv/.requirements.sha256
+  register: kaskad_panel_requirements_marker
+
+- name: Installed requirements checksum
+  tags: [deps]
+  ansible.builtin.slurp:
+    src: /opt/kaskad/venv/.requirements.sha256
+  register: kaskad_panel_requirements_installed
+  when: kaskad_panel_requirements_marker.stat.exists
+  failed_when: false
+
 - name: Virtual environment
+  tags: [deps]
   ansible.builtin.pip:
     requirements: /opt/kaskad/app/requirements.txt
     virtualenv: /opt/kaskad/venv
     virtualenv_command: python3 -m venv
   notify: Restart panel
+  when: >-
+    not kaskad_panel_requirements_marker.stat.exists
+    or (kaskad_panel_requirements_installed.content | default('') | b64decode | trim)
+       != kaskad_panel_requirements.stat.checksum
+
+- name: Remember installed requirements
+  tags: [deps]
+  ansible.builtin.copy:
+    content: "{{ kaskad_panel_requirements.stat.checksum }}\n"
+    dest: /opt/kaskad/venv/.requirements.sha256
+    owner: root
+    group: root
+    mode: "0644"
+  when: >-
+    not kaskad_panel_requirements_marker.stat.exists
+    or (kaskad_panel_requirements_installed.content | default('') | b64decode | trim)
+       != kaskad_panel_requirements.stat.checksum
 
 - name: Public TLS certificate
   ansible.builtin.include_tasks: tls.yml

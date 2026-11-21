@@ -530,8 +530,11 @@ scripts/fetch-apk.sh --tag v5.8.2 # or a pinned release
 ansible-playbook -i inventory.yml playbooks/site.yml --tags panel
 ```
 
-The APK copy carries the `apk` tag. A code-only deploy on a slow link skips
-it: `--tags panel --skip-tags apk`. The file stays as it was on the host.
+A code-only deploy on a slow link skips the two steps that touch the network:
+`--tags panel --skip-tags apk,deps`. `apk` is the client archive copy on the
+host, `deps` installs Python requirements - and even without the tag it runs
+only when `requirements.txt` changed, because pip to PyPI is what made those
+deploys hang.
 
 The script reads the GitHub releases API (one request per run, set
 `GITHUB_TOKEN` if the anonymous 60/hour limit is a problem), downloads
