@@ -528,12 +528,14 @@ itself:
 ```bash
 scp deepskaskad-standalone-v0.4.10-arm64.apk user@host:/tmp/
 ssh user@host 'sudo install -o root -g root -m 0644 \
-    /tmp/deepskaskad-standalone-v0.4.10-arm64.apk /var/lib/kaskad/app.apk'
+    /tmp/deepskaskad-standalone-v0.4.10-arm64.apk /var/lib/kaskad/app.apk.new &&
+    sudo mv -f /var/lib/kaskad/app.apk.new /var/lib/kaskad/app.apk'
 ```
 
 The panel reads the package, `versionCode`, `versionName`, `minSdk` and
 SHA-256 from that file on each request, caching them until the file changes.
-A replacement is therefore visible immediately at `/api/android` and
+A same-directory atomic rename avoids serving a partially written APK. A
+replacement is visible at `/api/android` and
 `/download/android`, with no deploy and no restart. `/download/android`
 answers 404 until the file exists; the client's `/me` page then shows an
 "android app" button.

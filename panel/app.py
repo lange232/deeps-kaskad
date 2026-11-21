@@ -3826,7 +3826,7 @@ def download_android():
     )
 
 
-_apk_meta: tuple[tuple[int, int], dict] | None = None
+_apk_meta: tuple[tuple[int, ...], dict] | None = None
 
 
 def android_apk_meta(path: Path) -> dict:
@@ -3836,11 +3836,17 @@ def android_apk_meta(path: Path) -> dict:
     host without a deploy, and the next request picks up the new version.
     """
     global _apk_meta
-    stat = path.stat()
-    key = (stat.st_mtime_ns, stat.st_size)
-    if _apk_meta and _apk_meta[0] == key:
-        return _apk_meta[1]
-    meta = apkmeta.read_meta(path)
+    def identity(stat):
+        return (stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns)
+
+    with path.open("rb") as handle:
+        stat = os.fstat(handle.fileno())
+        key = identity(stat)
+        if _apk_meta and _apk_meta[0] == key:
+            return _apk_meta[1]
+        meta = apkmeta.read_meta_stream(handle)
+        if identity(os.fstat(handle.fileno())) != key or identity(path.stat()) != key:
+            raise apkmeta.ApkError("APK changed while being read")
     meta["published"] = datetime.fromtimestamp(
         stat.st_mtime, timezone.utc
     ).strftime("%Y-%m-%dT%H:%M:%SZ")

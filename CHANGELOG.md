@@ -16,15 +16,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- Compact the admin exit list and adapt it to narrow screens; show exit latency
-  alongside health and usage.
-- The deploy no longer ships or replaces the Android client APK, and
-  `scripts/fetch-apk.sh` is gone with the repo copy it produced. The file on
-  the host (`/var/lib/kaskad/app.apk`) is the only source: the panel reads its
-  version and digest on request, so replacing it takes effect immediately.
-
-### Changed
-
 - The admin overview highlights exit problems first. Exit lists distinguish
   global selection from health and show live configuration counts. Exit
   details show probe results and configuration usage before settings, with
@@ -37,6 +28,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Activity and Overview show readable event names. Activity uses a compact
   event filter and keeps it when paging. System shows live service health
   before panel settings and stored data.
+- Read Android APK metadata and checksum from the same file; reject a changing
+  or malformed APK. Document atomic publication to avoid partial downloads.
+- Refresh exit configuration lists while retaining keyboard focus when possible.
+- Compact the admin exit list and adapt it to narrow screens; show exit latency
+  alongside health and usage.
+- The deploy no longer ships or replaces the Android client APK, and
+  `scripts/fetch-apk.sh` is gone with the repo copy it produced. The file on
+  the host (`/var/lib/kaskad/app.apk`) is the only source: the panel reads its
+  version and digest on request, so replacing it takes effect immediately.
 
 ## [0.4.10] - 2026-11-21
 

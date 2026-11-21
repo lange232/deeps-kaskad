@@ -144,26 +144,39 @@ def manifest_elements(data: bytes):
 
 def read_meta(path: Path) -> dict:
     """Package metadata plus the digest of the file itself."""
+    with path.open("rb") as handle:
+        return read_meta_stream(handle)
+
+
+def read_meta_stream(handle) -> dict:
+    """Read both the digest and manifest through the same open file."""
     digest = hashlib.sha256()
     size = 0
-    with path.open("rb") as handle:
-        for block in iter(lambda: handle.read(1 << 20), b""):
-            digest.update(block)
-            size += len(block)
+    handle.seek(0)
+    for block in iter(lambda: handle.read(1 << 20), b""):
+        digest.update(block)
+        size += len(block)
     try:
-        with zipfile.ZipFile(path) as apk:
+        handle.seek(0)
+        with zipfile.ZipFile(handle) as apk:
             manifest = apk.read("AndroidManifest.xml")
-    except zipfile.BadZipFile as exc:
+    except (zipfile.BadZipFile, EOFError) as exc:
         raise ApkError("the file is not a zip archive") from exc
     except KeyError as exc:
         raise ApkError("the APK has no AndroidManifest.xml") from exc
+    except (RuntimeError, NotImplementedError) as exc:
+        # Encrypted entries and unsupported compression methods.
+        raise ApkError("the APK cannot be read") from exc
     root = None
     min_sdk = None
-    for name, attributes in manifest_elements(manifest):
-        if name == "manifest" and root is None:
-            root = attributes
-        elif name == "uses-sdk" and min_sdk is None:
-            min_sdk = attributes.get(ATTR_MIN_SDK, attributes.get("minSdkVersion"))
+    try:
+        for name, attributes in manifest_elements(manifest):
+            if name == "manifest" and root is None:
+                root = attributes
+            elif name == "uses-sdk" and min_sdk is None:
+                min_sdk = attributes.get(ATTR_MIN_SDK, attributes.get("minSdkVersion"))
+    except (struct.error, IndexError, ValueError) as exc:
+        raise ApkError("the manifest is malformed") from exc
     if root is None:
         raise ApkError("AndroidManifest.xml has no <manifest> element")
     package = root.get("package")
@@ -171,15 +184,18 @@ def read_meta(path: Path) -> dict:
     version_name = root.get(ATTR_VERSION_NAME, root.get("versionName"))
     if not package or version_code is None or version_name is None:
         raise ApkError("the manifest has no package, versionCode or versionName")
-    meta = {
-        "package": str(package),
-        "versionCode": int(version_code),
-        "versionName": str(version_name),
-        "sha256": digest.hexdigest(),
-        "size": size,
-    }
-    if min_sdk is not None:
-        meta["minSdk"] = int(min_sdk)
+    try:
+        meta = {
+            "package": str(package),
+            "versionCode": int(version_code),
+            "versionName": str(version_name),
+            "sha256": digest.hexdigest(),
+            "size": size,
+        }
+        if min_sdk is not None:
+            meta["minSdk"] = int(min_sdk)
+    except (TypeError, ValueError) as exc:
+        raise ApkError("the manifest contains invalid version fields") from exc
     return meta
 
 

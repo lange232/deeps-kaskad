@@ -242,13 +242,16 @@
     function renderExitConfigs(el, items, available) {
       var snapshot = JSON.stringify([items, available]);
       if (el.dataset.snapshot === snapshot) return;
-      if (el.contains(document.activeElement)) return;
+      var focused = el.contains(document.activeElement) ? document.activeElement : null;
+      var focusHref = focused && focused.getAttribute('href');
+      var section = el.closest('section');
       el.dataset.snapshot = snapshot;
       if (!available || !items.length) {
         var empty = document.createElement(available ? 'div' : 'p');
         empty.className = available ? 'oc-empty' : 'oc-muted';
         empty.textContent = available ? 'No configurations' : 'Current routing status unavailable';
         el.replaceChildren(empty);
+        if (focused && section) section.focus({preventScroll: true});
         return;
       }
       var panel = document.createElement('div');
@@ -274,6 +277,13 @@
       table.append(body);
       panel.append(table);
       el.replaceChildren(panel);
+      if (focused) {
+        var replacement = Array.from(el.querySelectorAll('a')).find(function (link) {
+          return link.getAttribute('href') === focusHref;
+        });
+        if (replacement) replacement.focus({preventScroll: true});
+        else if (section) section.focus({preventScroll: true});
+      }
     }
     var ping = function (el, exit) {
       if (!exit || !exit.enabled || !exit.alive || !exit.rtt_ms) {

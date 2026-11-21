@@ -1014,7 +1014,7 @@ class AdminPingTests(PanelTestCase):
         with mock.patch.object(app, "read_status", return_value=status), \
                 mock.patch.object(app.awgconf, "render", return_value=""):
             text = self.client.get(f"/exits/{eid}").text
-        current, reserve = text.split('<section id="exit-configurations">', 1)[1].split(
+        current, reserve = text.split('<section id="exit-configurations" tabindex="-1">', 1)[1].split(
             '<summary data-live="exit-config-summary|awg1">', 1)
         self.assertIn("current-peer", current)
         self.assertNotIn("alternative-peer", current)
@@ -1685,6 +1685,38 @@ class ApkMetaTests(unittest.TestCase):
             with self.assertRaises(apkmeta.ApkError):
                 apkmeta.read_meta(path)
 
+    @unittest.skipUnless(apkmeta, "panel modules are not importable")
+    def test_encrypted_or_unsupported_archive_is_an_apk_error(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "app.apk"
+            path.write_bytes(b"PK\x03\x04")
+            for error in (RuntimeError("encrypted"), NotImplementedError("compression")):
+                with self.subTest(error=error), \
+                        mock.patch.object(apkmeta.zipfile, "ZipFile", side_effect=error):
+                    with self.assertRaises(apkmeta.ApkError):
+                        apkmeta.read_meta(path)
+
+    @unittest.skipUnless(apkmeta, "panel modules are not importable")
+    def test_manifest_and_digest_use_same_open_file_during_replacement(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "app.apk"
+            replacement = Path(tmp) / "new.apk"
+            for filename, version in ((path, 411), (replacement, 412)):
+                with zipfile.ZipFile(filename, "w") as apk:
+                    apk.writestr("AndroidManifest.xml",
+                                 build_apk("ru.deffhost.kaskad", str(version), version))
+            old_digest = hashlib.sha256(path.read_bytes()).hexdigest()
+            open_zip = zipfile.ZipFile
+
+            def replace_then_open(handle, *args, **kwargs):
+                replacement.replace(path)
+                return open_zip(handle, *args, **kwargs)
+
+            with mock.patch.object(apkmeta.zipfile, "ZipFile", side_effect=replace_then_open):
+                result = apkmeta.read_meta(path)
+            self.assertEqual(result["versionCode"], 411)
+            self.assertEqual(result["sha256"], old_digest)
+
 
 class AndroidInfoTests(PanelTestCase):
     def setUp(self):
@@ -1741,6 +1773,29 @@ class AndroidInfoTests(PanelTestCase):
         self.assertEqual(response.status_code, 503)
         self.assertEqual(response.json()["detail"], "app metadata is unreadable")
         self.assertNotIn("versionCode", response.text)
+
+    def test_truncated_binary_manifest_returns_503(self):
+        for manifest in (b"", b"\x03\x00", b"\x03\x00\x08\x00\x10\x00\x00\x00\x01\x00"):
+            with self.subTest(manifest=manifest):
+                with zipfile.ZipFile(self.apk, "w") as apk:
+                    apk.writestr("AndroidManifest.xml", manifest)
+                self.assertEqual(self.client.get("/api/android").status_code, 503)
+
+    def test_file_replaced_during_read_is_not_cached(self):
+        self.publish()
+        original = app.apkmeta.read_meta_stream
+
+        def replace_during_read(handle):
+            meta = original(handle)
+            replacement = self.apk.with_name("replacement.apk")
+            with zipfile.ZipFile(replacement, "w") as apk:
+                apk.writestr("AndroidManifest.xml", build_apk("ru.deffhost.kaskad", "0.4.12", 412))
+            replacement.replace(self.apk)
+            return meta
+
+        with mock.patch.object(app.apkmeta, "read_meta_stream", side_effect=replace_during_read):
+            self.assertEqual(self.client.get("/api/android").status_code, 503)
+        self.assertEqual(self.client.get("/api/android").json()["versionCode"], 412)
 
     def test_download_endpoint_serves_the_same_file_it_describes(self):
         digest = self.publish()

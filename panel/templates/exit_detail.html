@@ -35,7 +35,7 @@
     </div>
   </section>
 
-  <section id="exit-configurations">
+  <section id="exit-configurations" tabindex="-1">
     {% if exit.mode == 'routes' %}
     <h2 class="oc-section__title">Selected for subnets</h2>
     {% with clients = current_configs %}{% include '_exit_configurations.html' %}{% endwith %}
