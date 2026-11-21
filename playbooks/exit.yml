@@ -6,7 +6,9 @@
 #   ansible-playbook -i inventory.exit.yml playbooks/exit.yml --check
 #   ansible-playbook -i inventory.exit.yml playbooks/exit.yml
 - name: Exit node
-  hosts: all
+  # A dedicated group, never "all": ansible.cfg points at the production
+  # inventory by default, and this role rewrites awg0 and restarts it.
+  hosts: kaskad_exits
   become: true
   roles:
     - role: exit

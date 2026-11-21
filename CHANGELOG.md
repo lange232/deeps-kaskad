@@ -18,20 +18,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- A configuration can be pinned to one exit from the cabinet or
+  `/api/me/exits/pin`: the pinned exit is used even when the failover marks it
+  degraded, while its tunnel is alive. A dead tunnel falls back to the
+  configuration's order until it returns.
+- An exit node can serve several S1 hosts: `kaskad_exit_peers` lists a key and
+  a transit address per host, so two installations never share one session.
 - `roles/exit` and `playbooks/exit.yml` turn an Ubuntu host into an exit node:
   AmneziaWG with the obfuscation values from the inventory, forwarding, NAT to
   the uplink and a key generated on the host. The matching client config is
   still pasted into the panel by hand, so the panel stays the only source of
-  truth for exits.
+  truth for exits. The playbook runs only against the `kaskad_exits` group, so
+  a wrong inventory cannot rewrite the S1 entry's `awg0`.
 
 ## [0.4.9] - 2026-11-20
 
 ### Added
 
-- A configuration can be pinned to one exit from the cabinet or
-  `/api/me/exits/pin`: the pinned exit is used even when the failover marks it
-  degraded, while its tunnel is alive. A dead tunnel falls back to the
-  configuration's order until it returns.
 - Accounts can keep up to three destinations that matter to them (HTTP or
   ICMP) in the cabinet (`/me/checks`). The failover probes them through every
   exit the account may use; an exit failing them is skipped for that account's
@@ -44,8 +47,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   comment, then its name.
 - An account page in the cabinet lists its own exit order - the order a new
   configuration starts with - with the same state badges.
-- An exit node can serve several S1 hosts: `kaskad_exit_peers` lists a key and
-  a transit address per host, so two installations never share one session.
 - Exits carry a `country` field, editable next to the comment in the exit
   page; the administrator's exit list shows it too.
 - `GET /api/me/exits` reports `active`: whether the default route points at
@@ -54,10 +55,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- Account checks are probed for a rotating slice of accounts per failover
-  cycle, at most four accounts at a time, so a host with many accounts does
-  not stretch the ten-second interval. Each account is still covered within a
-  few cycles.
+- Account checks run on their own small pool with a time budget and never
+  delay the route choice or the status file; a check still running keeps its
+  last result instead of queueing another. Global probes are bounded the same
+  way.
+- An exit is marked degraded only when two of the three probe targets fail:
+  one unreachable site stays visible in the diagnosis without moving every
+  client.
+
 
 ### Fixed
 

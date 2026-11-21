@@ -3179,6 +3179,12 @@ def check_target_error(kind: str, target: str) -> str | None:
             return "http:// or https:// URL expected"
         if parsed.username or parsed.password:
             return "credentials in the URL are not allowed"
+        try:
+            port = parsed.port
+        except ValueError:
+            return "the port is not a number"
+        if port is not None and not 1 <= port <= 65535:
+            return "the port is out of range"
     else:
         host = target
         if "/" in host or " " in host:

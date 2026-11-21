@@ -634,6 +634,8 @@ class AccountCheckTests(PanelTestCase):
             ("http", "http://192.168.0.1/"), ("icmp", "127.0.0.1"),
             ("icmp", "10.0.0.1"), ("http", "file:///etc/passwd"),
             ("http", "http://user:pass@1.1.1.1/"),
+            ("http", "http://1.1.1.1:notaport/"),
+            ("http", "http://1.1.1.1:70000/"),
         ):
             self.assertIsNotNone(app.check_target_error(kind, target), target)
 

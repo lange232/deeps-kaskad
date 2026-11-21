@@ -349,8 +349,11 @@ Pins the configuration to one granted exit, or returns it to automatic.
 | `config_id` | no | Default `0`: the account's first configuration |
 
 ```json
-{"ok": true, "pinned": "nl-1"}
+{"ok": true, "pinned": "awg2"}
 ```
+
+`pinned` is the interface name of the pinned exit, or an empty string after
+`auto`. It is not the exit `name` and not the `active` exit.
 
 A pinned exit is used even when the failover marks it `degraded`, as long as
 it is alive; a dead tunnel is never forced.

@@ -8,6 +8,15 @@
       - ansible_distribution_major_version | int >= 22
     fail_msg: "role exit is written for Ubuntu 22.04 and newer"
 
+- name: This host is an exit, not the S1 entry
+  ansible.builtin.assert:
+    that:
+      - kaskad_role | default('exit') == 'exit'
+    fail_msg: >-
+      this host is marked kaskad_role={{ kaskad_role }}: the exit role rewrites
+      awg0 and would cut the clients of an S1 entry. Run it only against hosts
+      in the kaskad_exits group.
+
 - name: Every peer has a key
   ansible.builtin.assert:
     that:

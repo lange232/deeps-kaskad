@@ -29,7 +29,7 @@ import struct
 import subprocess
 import sys
 import time
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, wait
 from contextlib import closing
 from datetime import datetime, timezone
 from pathlib import Path
@@ -59,10 +59,19 @@ PROBE_TARGET = "1.1.1.1"
 # A TCP handshake is the cheapest thing a browser needs; ICMP is only a
 # fallback for networks that answer it and filter TCP nowhere.
 PROBE_TCP = ("1.1.1.1", 443)
+# Three targets in three networks: one unreachable site is visible in the
+# diagnosis but does not condemn the exit on its own.
 PROBE_HTTP = (
     ("http://connectivitycheck.gstatic.com/generate_204", 204),
     ("http://example.com/", 200),
+    ("http://captive.apple.com/hotspot-detect.html", 200),
 )
+MIN_HEALTHY_TARGETS = 2
+# A cycle must stay shorter than the interval even when a provider drops
+# packets silently: waiting is bounded, unfinished probes keep their last
+# result and the next round reuses the slot.
+PROBE_BUDGET = 12
+CHECK_BUDGET = 6
 HTTP_TIMEOUT = 4
 # Hostnames are resolved through the exit, exactly as a client does: the
 # answer is picked for the exit's network, not for the server's.
@@ -80,6 +89,11 @@ CHECK_TIMEOUT = 5
 CHECK_ACCOUNTS_PER_TICK = 4
 RTT_RE = re.compile(r"time=([0-9.]+)\s*ms")
 
+probe_pool = ThreadPoolExecutor(max_workers=8)
+check_pool = ThreadPoolExecutor(max_workers=4)
+# Accounts whose checks are still running from a previous tick: starting a
+# second batch for them would only queue more blocked sockets.
+check_inflight: set[int] = set()
 state: dict[str, dict] = {}
 # Last per-target results of every exit, for the panel's diagnosis.
 probe_targets: dict[str, dict[str, bool]] = {}
@@ -213,7 +227,7 @@ def apply_client_routes(
             log(f"client {ip}: no routing table allocated")
             continue
         pin = pins.get((table, ip), "")
-        if pin and pin in everything:
+        if pin and pin in everything and pin in order:
             desired = pin
             if pin not in alive:
                 log(f"client {ip}: staying on pinned {pin}, degraded")
@@ -232,7 +246,7 @@ def apply_client_routes(
                 log(f"client {ip}: failed to route via {desired}: "
                     f"{res.stderr.strip()}")
         after = current_default(table)
-        if after in alive:
+        if after in everything:
             used[ip] = after
         if after != before:
             # Stale conntrack entries keep the source address of the old exit.
@@ -307,17 +321,18 @@ def ping_rtt(stdout: str) -> float | None:
     return float(match.group(1)) if match else None
 
 
-def dns_server() -> str:
-    """The resolver clients use, so probes ask the same one they do."""
+def dns_servers() -> list[str]:
+    """The resolvers clients use, in the same order.
+
+    Only these are tried: falling back to the server's own resolver would
+    bring back the answers picked for the wrong network.
+    """
     try:
         dns = str(cfg().get("dns") or "")
     except (OSError, ValueError):
         dns = ""
-    for part in dns.split(","):
-        part = part.strip()
-        if part:
-            return part
-    return "1.1.1.1"
+    servers = [part.strip() for part in dns.split(",") if part.strip()]
+    return servers or ["1.1.1.1"]
 
 
 def build_query(host: str, ident: int = 0x4B41) -> bytes:
@@ -382,16 +397,19 @@ def resolve_via(iface: str, host: str) -> list[str]:
         return [host]
     except ValueError:
         pass
-    server = dns_server()
     key = (iface, host)
     now = time.time()
     cached = dns_cache.get(key)
     if cached and cached[0] > now:
         return cached[1]
-    try:
-        answers = dns_lookup(host, server, iface)
-    except (OSError, subprocess.TimeoutExpired):
-        return []
+    answers: list[tuple[str, int]] = []
+    for server in dns_servers():
+        try:
+            answers = dns_lookup(host, server, iface)
+        except (OSError, subprocess.TimeoutExpired):
+            answers = []
+        if answers:
+            break
     if not answers:
         return []
     ttl = min(ttl for _ip, ttl in answers) or 1
@@ -445,7 +463,7 @@ def http_probe(iface: str) -> tuple[bool, dict[str, bool]]:
             if res.returncode == 0 and code == str(expected):
                 results[url] = True
                 break
-    return all(results.values()), results
+    return sum(1 for ok in results.values() if ok) >= MIN_HEALTHY_TARGETS, results
 
 
 def probe(exit: dict) -> tuple[bool, float | None, bool]:
@@ -474,17 +492,17 @@ def probe(exit: dict) -> tuple[bool, float | None, bool]:
                 if now - int(parts[-1]) < 180:
                     return True, None, True
         return False, None, False
-    try:
-        res = run(["ping", "-c1", "-W1", "-I", iface, PROBE_TARGET], timeout=3)
-    except subprocess.TimeoutExpired:
-        res = None
-    rtt = ping_rtt(res.stdout) if res is not None and res.returncode == 0 else None
+    # A TCP handshake is what browsing needs; ICMP is the fallback for
+    # networks that drop TCP probes but answer ping.
+    rtt = tcp_ms(iface, *PROBE_TCP)
+    if rtt is None:
+        try:
+            res = run(["ping", "-c1", "-W1", "-I", iface, PROBE_TARGET], timeout=3)
+        except subprocess.TimeoutExpired:
+            res = None
+        if res is not None and res.returncode == 0:
+            rtt = ping_rtt(res.stdout)
     alive = rtt is not None
-    if not alive:
-        # ICMP is often filtered; a TCP handshake is what browsing needs.
-        tcp = tcp_ms(iface, *PROBE_TCP)
-        alive = tcp is not None
-        rtt = tcp
     if not alive:
         probe_targets.pop(iface, None)
         return False, None, False
@@ -556,6 +574,11 @@ def check_ok(kind: str, target: str, iface: str) -> bool:
     a name that starts pointing into private space is not followed, and an
     answer picked for another network is not used.
     """
+    try:
+        parsed = urlparse(target) if kind == "http" else None
+        port = parsed.port if parsed else None
+    except ValueError:
+        return False
     host = target_host(kind, target)
     if not host:
         return False
@@ -563,8 +586,7 @@ def check_ok(kind: str, target: str, iface: str) -> bool:
     if not addresses or not all(public_ip(a) for a in addresses):
         return False
     if kind == "http":
-        parsed = urlparse(target)
-        port = parsed.port or (443 if parsed.scheme == "https" else 80)
+        port = port or (443 if parsed.scheme == "https" else 80)
         for address in addresses[:2]:
             try:
                 res = run(
@@ -656,21 +678,42 @@ def run_account_checks(alive=None) -> tuple[dict[int, set[str]], dict]:
     chosen = set(selected)
 
     live = set(alive) if alive is not None else None
-    tasks = [
-        (ch, iface)
-        for ch in checks
-        if ch["account_id"] in chosen
-        for iface in granted.get(ch["account_id"], [])
-        if live is None or iface in live
+    by_account: dict[int, list[dict]] = {}
+    for ch in checks:
+        by_account.setdefault(ch["account_id"], []).append(ch)
+
+    def probe_account(aid: int) -> list[tuple[int, str, str, bool]]:
+        out = []
+        for ch in by_account.get(aid, []):
+            for iface in granted.get(aid, []):
+                if live is not None and iface not in live:
+                    continue
+                out.append((ch["id"], ch["target"], iface,
+                            check_ok(ch["kind"], ch["target"], iface)))
+        return out
+
+    started = [
+        aid for aid in selected
+        if aid not in check_inflight and by_account.get(aid)
     ]
-    if tasks:
-        with ThreadPoolExecutor(max_workers=min(8, len(tasks))) as pool:
-            results = list(pool.map(
-                lambda task: check_ok(task[0]["kind"], task[0]["target"], task[1]),
-                tasks,
-            ))
-        for (ch, iface), ok in zip(tasks, results):
-            update_check_state(ch["id"], ch["target"], iface, ok)
+    if started:
+        futures = {}
+        for aid in started:
+            check_inflight.add(aid)
+            future = check_pool.submit(probe_account, aid)
+            future.add_done_callback(
+                lambda _f, aid=aid: check_inflight.discard(aid)
+            )
+            futures[future] = aid
+        done, _pending = wait(futures, timeout=CHECK_BUDGET)
+        for future in done:
+            try:
+                results = future.result()
+            except Exception as exc:  # one bad target must not stop the cycle
+                log(f"check {futures[future]}: {exc}")
+                continue
+            for check_id, target, iface, ok in results:
+                update_check_state(check_id, target, iface, ok)
 
     avoid: dict[int, set[str]] = {}
     report: dict = {}
@@ -904,10 +947,15 @@ def tick(c: dict) -> None:
     rows = exits()
     enabled = [e for e in rows if e["enabled"]]
     if enabled:
-        with ThreadPoolExecutor(max_workers=min(8, len(enabled))) as pool:
-            results = list(pool.map(probe_safe, enabled))
-        for e, (ok, rtt, healthy) in zip(enabled, results):
-            update_state(e, ok, rtt, healthy)
+        futures = {probe_pool.submit(probe_safe, e): e for e in enabled}
+        done, pending = wait(futures, timeout=PROBE_BUDGET)
+        for future in done:
+            update_state(futures[future], *future.result())
+        for future in pending:
+            # Keep the last verdict: a probe that outlives the budget must not
+            # be read as a failure, and the next round is a fresh slot.
+            log(f"probe {futures[future]['iface']}: still running, "
+                "keeping the last result")
 
     # Exits can come up after kaskad-routing.service already ran; only this
     # loop notices, so it re-applies the tables and rules.
