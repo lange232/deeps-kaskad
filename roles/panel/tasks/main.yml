@@ -344,6 +344,7 @@
     - (kaskad_backup_files.matched | default(0)) == 0
 
 - name: Android APK present in the repo?
+  tags: [apk]
   ansible.builtin.stat:
     path: "{{ playbook_dir }}/../files/app/app.apk"
     checksum_algorithm: sha256
@@ -353,6 +354,7 @@
   register: kaskad_app_apk_stat
 
 - name: Android client APK (optional, from files/app/app.apk)
+  tags: [apk]
   ansible.builtin.copy:
     src: "{{ playbook_dir }}/../files/app/app.apk"
     dest: /var/lib/kaskad/app.apk
@@ -360,6 +362,7 @@
   when: kaskad_app_apk_stat.stat.exists
 
 - name: Android client APK checksum on the host
+  tags: [apk]
   ansible.builtin.stat:
     path: /var/lib/kaskad/app.apk
     checksum_algorithm: sha256
@@ -369,6 +372,7 @@
 # The APK is a release artifact, not something Ansible builds: refuse to
 # report success if what landed on the host differs from files/app/app.apk.
 - name: Android client APK on the host matches the local file
+  tags: [apk]
   ansible.builtin.assert:
     that:
       - kaskad_app_apk_remote.stat.checksum == kaskad_app_apk_stat.stat.checksum

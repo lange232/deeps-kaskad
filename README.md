@@ -529,6 +529,9 @@ scripts/fetch-apk.sh --tag v5.8.2 # or a pinned release
 ansible-playbook -i inventory.yml playbooks/site.yml --tags panel
 ```
 
+The APK copy carries the `apk` tag. A code-only deploy on a slow link skips
+it: `--tags panel --skip-tags apk`. The file stays as it was on the host.
+
 The script reads the GitHub releases API (one request per run, set
 `GITHUB_TOKEN` if the anonymous 60/hour limit is a problem), downloads
 `*-arm64.apk` together with `SHA256SUMS.txt` from the same release and
