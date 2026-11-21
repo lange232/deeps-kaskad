@@ -28,20 +28,24 @@ ssh_opts=(-i "$key" -o IdentitiesOnly=yes -o StrictHostKeyChecking=no -o UserKno
 archive=$(mktemp /tmp/kaskad-panel.XXXXXX.tgz)
 trap 'rm -f "$archive"' EXIT
 tar -czf "$archive" --exclude=__pycache__ -C "$repo/panel" .
+version=$(tr -d '[:space:]' < "$repo/VERSION")
 
 echo "deploying panel to $addr"
 scp -q "${ssh_opts[@]}" "$archive" "$user@$addr:/tmp/kaskad-panel.tgz"
-ssh "${ssh_opts[@]}" "$user@$addr" '
+ssh "${ssh_opts[@]}" "$user@$addr" "
   sudo -n tar -xzf /tmp/kaskad-panel.tgz -C /opt/kaskad/app --overwrite --no-same-owner
   sudo -n chown -R root:root /opt/kaskad/app
+  # The playbook writes the version into panel.json; a code-only deploy must
+  # not leave a stale number in the panel footer.
+  sudo -n sed -i 's/\"version\": \"[^\"]*\"/\"version\": \"$version\"/' /etc/kaskad/panel.json
   sudo -n systemctl restart kaskad-panel kaskad-failover
   rm -f /tmp/kaskad-panel.tgz
   for unit in kaskad-panel kaskad-failover; do
-    if ! systemctl is-active --quiet "$unit"; then
-      echo "$unit did not start after the deploy" >&2
+    if ! systemctl is-active --quiet \"\$unit\"; then
+      echo \"\$unit did not start after the deploy\" >&2
       exit 1
     fi
   done
-  echo "panel and failover are active"
-'
+  echo \"panel and failover are active\"
+"
 echo "done: $addr"
