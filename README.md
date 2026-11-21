@@ -521,36 +521,33 @@ with a password change or "sign out everywhere".
 
 The panel distributes the companion Android app, the
 [deeps-kaskad-client](https://github.com/lange232/deeps-kaskad-client) fork of
-WG Tunnel. Releases are published there as arm64 APKs; fetch the latest one
-into the repo and deploy it:
+WG Tunnel. The APK is a release artifact of that repository and is not kept in
+this one; the deploy neither ships nor replaces it. Put the file on the host
+itself:
 
 ```bash
-scripts/fetch-apk.sh              # latest release -> files/app/app.apk
-scripts/fetch-apk.sh --tag v5.8.2 # or a pinned release
-ansible-playbook -i inventory.yml playbooks/site.yml --tags panel
+scp deepskaskad-standalone-v0.4.10-arm64.apk user@host:/tmp/
+ssh user@host 'sudo install -o root -g root -m 0644 \
+    /tmp/deepskaskad-standalone-v0.4.10-arm64.apk /var/lib/kaskad/app.apk'
 ```
 
-A code-only deploy on a slow link skips the two steps that touch the network:
-`--tags panel --skip-tags apk,deps`. `apk` is the client archive copy on the
-host, `deps` installs Python requirements - and even without the tag it runs
-only when `requirements.txt` changed, because pip to PyPI is what made those
-deploys hang.
+The panel reads the package, `versionCode`, `versionName`, `minSdk` and
+SHA-256 from that file on each request, caching them until the file changes.
+A replacement is therefore visible immediately at `/api/android` and
+`/download/android`, with no deploy and no restart. `/download/android`
+answers 404 until the file exists; the client's `/me` page then shows an
+"android app" button.
 
-The script reads the GitHub releases API (one request per run, set
-`GITHUB_TOKEN` if the anonymous 60/hour limit is a problem), downloads
-`*-arm64.apk` together with `SHA256SUMS.txt` from the same release and
-replaces `files/app/app.apk` only when the checksum matches. The panel role
-then copies it to `/var/lib/kaskad/app.apk`, checks the copy on the host and
-serves it at `/download/android` without authentication; the client's `/me`
-page shows an "android app" button once the file is uploaded. `files/app/` is
-gitignored.
+A code-only deploy on a slow link skips the step that touches the network:
+`--tags panel --skip-tags deps`. `deps` installs Python requirements, and even
+without the tag it runs only when `requirements.txt` changed, because pip to
+PyPI is what made those deploys hang.
 
-Dropping a locally built APK into `files/app/app.apk` still works, but then it
-must be the same build that was published: users update in place, so a
-different signing key or a lower `versionCode` than the installed client means
-a reinstall or a refused update. Releases are `v<versionName>` with
-`versionCode` in `gradle/libs.versions.toml`; never reuse a version number for
-a different build.
+The file must be the published build: users update in place, so a different
+signing key or a lower `versionCode` than the installed client means a
+reinstall or a refused update. Releases are `v<versionName>` with `versionCode`
+in `gradle/libs.versions.toml`; never reuse a version number for a different
+build.
 
 ## Fail2ban
 

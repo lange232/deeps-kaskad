@@ -415,44 +415,8 @@
     - kaskad_backup_dir_stat.stat.exists
     - (kaskad_backup_files.matched | default(0)) == 0
 
-- name: Android APK present in the repo?
-  tags: [apk]
-  ansible.builtin.stat:
-    path: "{{ playbook_dir }}/../files/app/app.apk"
-    checksum_algorithm: sha256
-  delegate_to: localhost
-  become: false
-  run_once: true
-  register: kaskad_app_apk_stat
-
-- name: Android client APK (optional, from files/app/app.apk)
-  tags: [apk]
-  ansible.builtin.copy:
-    src: "{{ playbook_dir }}/../files/app/app.apk"
-    dest: /var/lib/kaskad/app.apk
-    mode: "0644"
-  when: kaskad_app_apk_stat.stat.exists
-
-- name: Android client APK checksum on the host
-  tags: [apk]
-  ansible.builtin.stat:
-    path: /var/lib/kaskad/app.apk
-    checksum_algorithm: sha256
-  register: kaskad_app_apk_remote
-  when: kaskad_app_apk_stat.stat.exists
-
-# The APK is a release artifact, not something Ansible builds: refuse to
-# report success if what landed on the host differs from files/app/app.apk.
-- name: Android client APK on the host matches the local file
-  tags: [apk]
-  ansible.builtin.assert:
-    that:
-      - kaskad_app_apk_remote.stat.checksum == kaskad_app_apk_stat.stat.checksum
-    fail_msg: >-
-      /var/lib/kaskad/app.apk does not match files/app/app.apk
-      ({{ kaskad_app_apk_remote.stat.checksum }} vs
-      {{ kaskad_app_apk_stat.stat.checksum }})
-    quiet: true
-  when:
-    - not ansible_check_mode
-    - kaskad_app_apk_stat.stat.exists
+# The Android client is not part of this deploy. It is a release artifact of
+# the client repository, placed on the host as /var/lib/kaskad/app.apk outside
+# Ansible: the panel reads its version and digest from that file on request.
+# Keeping a copy in the server repo once replaced a newer client on a stand,
+# so the deploy deliberately does not know about the file at all.

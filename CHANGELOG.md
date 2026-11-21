@@ -7,10 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `GET /api/android` gives the Android client its package, version, size and
+  SHA-256 for an update check without signing in. Everything is read from the
+  APK on the host, so replacing the file takes effect without a deploy and the
+  answer cannot drift from what `/download/android` serves.
+
 ### Changed
 
 - Compact the admin exit list and adapt it to narrow screens; show exit latency
   alongside health and usage.
+- The deploy no longer ships or replaces the Android client APK, and
+  `scripts/fetch-apk.sh` is gone with the repo copy it produced. The file on
+  the host (`/var/lib/kaskad/app.apk`) is the only source: the panel reads its
+  version and digest on request, so replacing it takes effect immediately.
 
 ### Changed
 

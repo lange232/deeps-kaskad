@@ -52,6 +52,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+import apkmeta
 import auth
 import awgconf
 import routing
@@ -3823,6 +3824,57 @@ def download_android():
         media_type="application/vnd.android.package-archive",
         filename="deepskaskad.apk",
     )
+
+
+_apk_meta: tuple[tuple[int, int], dict] | None = None
+
+
+def android_apk_meta(path: Path) -> dict:
+    """Package metadata of the APK, cached until the file changes.
+
+    The file itself is the only source of truth: it can be replaced on the
+    host without a deploy, and the next request picks up the new version.
+    """
+    global _apk_meta
+    stat = path.stat()
+    key = (stat.st_mtime_ns, stat.st_size)
+    if _apk_meta and _apk_meta[0] == key:
+        return _apk_meta[1]
+    meta = apkmeta.read_meta(path)
+    meta["published"] = datetime.fromtimestamp(
+        stat.st_mtime, timezone.utc
+    ).strftime("%Y-%m-%dT%H:%M:%SZ")
+    _apk_meta = (key, meta)
+    return meta
+
+
+@app.get("/api/android")
+def android_info(request: Request):
+    """Public version and digest of the APK served at /download/android.
+
+    The Android client checks this before signing in, so it needs no token.
+    Everything here describes the file on disk: the version comes from its
+    manifest and the digest from its bytes, so the answer cannot drift from
+    what a download would actually deliver.
+    """
+    if not ANDROID_APK.exists():
+        raise HTTPException(status_code=404, detail="no app published")
+    try:
+        meta = android_apk_meta(ANDROID_APK)
+    except (OSError, apkmeta.ApkError):
+        raise HTTPException(status_code=503, detail="app metadata is unreadable")
+    payload = {
+        "package": meta["package"],
+        "versionCode": meta["versionCode"],
+        "versionName": meta["versionName"],
+        "url": str(request.base_url).rstrip("/") + "/download/android",
+        "sha256": meta["sha256"],
+        "size": meta["size"],
+        "published": meta["published"],
+    }
+    if "minSdk" in meta:
+        payload["minSdk"] = meta["minSdk"]
+    return JSONResponse(payload, headers={"Cache-Control": "public, max-age=300"})
 
 
 @app.get("/me/conf")

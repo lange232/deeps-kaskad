@@ -7,15 +7,18 @@ They need FastAPI and the panel venv:
 The system side (awg, systemctl, ip) is mocked: these tests only check the
 request handling, the database state and the transaction boundaries.
 """
+import hashlib
 import json
 import os
 import re
 import sqlite3
+import struct
 import subprocess
 import sys
 import tempfile
 import time
 import unittest
+import zipfile
 from pathlib import Path
 from unittest import mock
 
@@ -24,9 +27,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "panel"))
 try:
     from fastapi.testclient import TestClient
 
+    import apkmeta
     import app
     import auth
 except ImportError:  # pragma: no cover - local python without fastapi
+    apkmeta = None
     app = None
     TestClient = None
     auth = None
@@ -1600,6 +1605,151 @@ class AdminRouteConsistencyTests(PanelTestCase):
         self.assertNotIn("exit_configurations", user_data)
         self.assertNotIn("exit_usage", user_data)
         self.assertNotIn("admin_route", user_data["configs"]["10.80.0.2"])
+
+
+def _axml_strings(strings):
+    body = b""
+    offsets = []
+    for text in strings:
+        offsets.append(len(body))
+        raw = text.encode()
+        body += bytes([len(text), len(raw)]) + raw + b"\x00"
+    start = 28 + 4 * len(strings)
+    size = start + len(body)
+    return (struct.pack("<HHI", 0x0001, 28, size)
+            + struct.pack("<IIIII", len(strings), 0, 0x0100, start, 0)
+            + b"".join(struct.pack("<I", offset) for offset in offsets) + body)
+
+
+def _axml_attribute(name_index, value=None, string_index=None):
+    if string_index is None:
+        typed = struct.pack("<HBBI", 8, 0, 0x10, value)
+        raw = 0xFFFFFFFF
+    else:
+        typed = struct.pack("<HBBI", 8, 0, 0x03, string_index)
+        raw = string_index
+    return struct.pack("<III", 0xFFFFFFFF, name_index, raw) + typed
+
+
+def _axml_element(name_index, attributes):
+    body = struct.pack("<II", 0, 0xFFFFFFFF)
+    body += struct.pack("<II", 0xFFFFFFFF, name_index)
+    body += struct.pack("<HHHHHH", 20, 20, len(attributes), 0, 0, 0)
+    body += b"".join(attributes)
+    return struct.pack("<HHI", 0x0102, 16, 8 + len(body)) + body
+
+
+def build_apk(package, version_name, version_code, min_sdk=26):
+    """A minimal APK whose binary manifest carries the fields apkmeta reads."""
+    strings = ["versionName", "versionCode", "manifest", version_name, package,
+               "uses-sdk", "minSdkVersion", "package"]
+    resource_map = [0x0101021C, 0x0101021B, 0, 0, 0, 0, 0x0101020C, 0]
+    manifest = _axml_element(2, [
+        _axml_attribute(7, string_index=4),
+        _axml_attribute(0, string_index=3),
+        _axml_attribute(1, version_code),
+    ])
+    content = manifest
+    if min_sdk is not None:
+        content += _axml_element(5, [_axml_attribute(6, min_sdk)])
+    resources = struct.pack("<HHI", 0x0180, 8, 8 + 4 * len(resource_map))
+    resources += b"".join(struct.pack("<I", item) for item in resource_map)
+    pool = _axml_strings(strings)
+    return struct.pack("<HHI", 0x0003, 8, 8 + len(pool + resources + content)) + pool + resources + content
+
+
+class ApkMetaTests(unittest.TestCase):
+    @unittest.skipUnless(apkmeta, "panel modules are not importable")
+    def test_reads_package_and_versions_from_the_binary_manifest(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "app.apk"
+            with zipfile.ZipFile(path, "w") as apk:
+                apk.writestr("AndroidManifest.xml",
+                             build_apk("ru.deffhost.kaskad", "0.4.11", 411))
+            expected_size = path.stat().st_size
+            expected_digest = hashlib.sha256(path.read_bytes()).hexdigest()
+            meta = apkmeta.read_meta(path)
+        self.assertEqual(meta["package"], "ru.deffhost.kaskad")
+        self.assertEqual(meta["versionName"], "0.4.11")
+        self.assertEqual(meta["versionCode"], 411)
+        self.assertEqual(meta["minSdk"], 26)
+        self.assertEqual(meta["size"], expected_size)
+        self.assertEqual(meta["sha256"], expected_digest)
+
+    @unittest.skipUnless(apkmeta, "panel modules are not importable")
+    def test_rejects_a_file_without_a_manifest(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "app.apk"
+            with zipfile.ZipFile(path, "w") as apk:
+                apk.writestr("classes.dex", b"dex")
+            with self.assertRaises(apkmeta.ApkError):
+                apkmeta.read_meta(path)
+
+
+class AndroidInfoTests(PanelTestCase):
+    def setUp(self):
+        super().setUp()
+        self.apk = Path(self.tmp.name) / "app.apk"
+        self.apk_patch = mock.patch.object(app, "ANDROID_APK", self.apk)
+        self.apk_patch.start()
+        app._apk_meta = None
+
+    def tearDown(self):
+        app._apk_meta = None
+        self.apk_patch.stop()
+        super().tearDown()
+
+    def publish(self, version_name="0.4.11", version_code=411, min_sdk=26):
+        with zipfile.ZipFile(self.apk, "w") as apk:
+            apk.writestr("AndroidManifest.xml", build_apk(
+                "ru.deffhost.kaskad", version_name, version_code, min_sdk))
+        return hashlib.sha256(self.apk.read_bytes()).hexdigest()
+
+    def test_anonymous_client_gets_version_and_digest(self):
+        digest = self.publish()
+        response = self.client.get("/api/android")
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["package"], "ru.deffhost.kaskad")
+        self.assertEqual(body["versionCode"], 411)
+        self.assertEqual(body["versionName"], "0.4.11")
+        self.assertEqual(body["minSdk"], 26)
+        self.assertEqual(body["sha256"], digest)
+        self.assertEqual(body["size"], self.apk.stat().st_size)
+        self.assertEqual(body["url"], "https://testserver/download/android")
+        self.assertRegex(body["published"], r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$")
+        self.assertEqual(response.headers["cache-control"], "public, max-age=300")
+
+    def test_no_apk_is_404_and_min_sdk_is_optional(self):
+        self.assertEqual(self.client.get("/api/android").status_code, 404)
+        self.publish(min_sdk=None)
+        body = self.client.get("/api/android").json()
+        self.assertNotIn("minSdk", body)
+        self.assertEqual(body["versionCode"], 411)
+
+    def test_replacing_the_file_changes_the_answer_without_a_restart(self):
+        self.publish(version_name="0.4.11", version_code=411)
+        self.assertEqual(self.client.get("/api/android").json()["versionCode"], 411)
+        self.publish(version_name="0.4.12", version_code=412)
+        body = self.client.get("/api/android").json()
+        self.assertEqual(body["versionCode"], 412)
+        self.assertEqual(body["versionName"], "0.4.12")
+
+    def test_a_file_that_is_not_an_apk_is_not_advertised(self):
+        self.apk.write_bytes(b"not a zip archive")
+        response = self.client.get("/api/android")
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(response.json()["detail"], "app metadata is unreadable")
+        self.assertNotIn("versionCode", response.text)
+
+    def test_download_endpoint_serves_the_same_file_it_describes(self):
+        digest = self.publish()
+        info = self.client.get("/api/android").json()
+        download = self.client.get("/download/android")
+        self.assertEqual(download.status_code, 200)
+        self.assertEqual(hashlib.sha256(download.content).hexdigest(), info["sha256"])
+        self.assertEqual(digest, info["sha256"])
+        self.assertEqual(len(download.content), info["size"])
 
 
 class ConfigPingTests(PanelTestCase):
