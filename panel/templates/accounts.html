@@ -1,17 +1,17 @@
 {% extends "base.html" %}
 {% block title %}accounts — deeps kaskad{% endblock %}
 {% block body %}
-<div class="page-head">
+<div class="page-head toolbar">
   <h1>Accounts</h1>
+  <a class="oc-btn oc-btn--contrast oc-btn--sm" href="/accounts/new">Add account</a>
 </div>
 
 <div class="toolbar toolbar--list">
   <form method="get" action="/accounts" class="actions list-search">
-    <input class="oc-input oc-input--sm" type="text" name="q" value="{{ q }}" placeholder="search by email">
+    <input class="oc-input oc-input--sm" type="search" name="q" value="{{ q }}" aria-label="Search accounts" placeholder="Search by email">
     <button class="oc-btn oc-btn--neutral oc-btn--sm">search</button>
     {% if q %}<a class="oc-btn oc-btn--ghost oc-btn--sm" href="/accounts">reset</a>{% endif %}
   </form>
-  <a class="oc-btn oc-btn--contrast oc-btn--sm" href="/accounts/new">add account</a>
 </div>
 
 {% if accounts %}
@@ -19,19 +19,19 @@
   <div class="table-scroll">
   <table class="oc-table">
     <thead>
-      <tr><th>account</th><th style="width:1%">access</th></tr>
+      <tr><th scope="col">Account</th><th scope="col">Configurations</th><th scope="col">Access</th></tr>
     </thead>
     <tbody>
     {% for a in accounts %}
-      <tr data-href="/accounts/{{ a.id }}" tabindex="0">
+      <tr data-href="/accounts/{{ a.id }}">
         <td>
-          <span class="oc-mono">{{ a.email }}</span>
+          <a class="oc-link oc-mono" href="/accounts/{{ a.id }}">{{ a.email }}</a>
           {% if not a.enabled %}<span class="oc-badge oc-badge--subtle">login off</span>{% endif %}
           <div class="cell-sub">
-            {{ a.configs_n }} of {{ a.limit }} configurations ·
             last login {{ a.last_login | ts }}
           </div>
         </td>
+        <td class="oc-num">{{ a.configs_n }} / {{ a.limit }}</td>
         <td>
           <div class="actions">
             {% if a.internet %}<span class="oc-badge oc-badge--subtle">internet</span>{% endif %}

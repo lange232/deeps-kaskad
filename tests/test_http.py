@@ -1009,7 +1009,8 @@ class AdminPingTests(PanelTestCase):
         with mock.patch.object(app, "read_status", return_value=status), \
                 mock.patch.object(app.awgconf, "render", return_value=""):
             text = self.client.get(f"/exits/{eid}").text
-        current, reserve = text.split("Available as an alternative", 1)
+        current, reserve = text.split('<section id="exit-configurations">', 1)[1].split(
+            '<summary data-live="exit-config-summary|awg1">', 1)
         self.assertIn("current-peer", current)
         self.assertNotIn("alternative-peer", current)
         self.assertIn("alternative-peer", reserve)
@@ -1264,6 +1265,52 @@ class ConfigLimitTests(PanelTestCase):
         self.assertEqual(app.setting("default_max_configs"), "2")
 
 
+class AdminActivitySystemTests(PanelTestCase):
+    def test_activity_labels_and_filter_survive_pagination(self):
+        self.login_admin()
+        app.audit("login_failed", "unrelated detail")
+        for i in range(51):
+            app.audit("exit_failover", f"Switch #{i}.")
+        app.audit("legacy_event", "<old detail>")
+
+        overview = self.client.get("/").text
+        self.assertIn("Global exit switched automatically", overview)
+        self.assertIn("Legacy event", overview)
+        self.assertIn("&lt;old detail&gt;", overview)
+        first = self.client.get("/journal?action=exit_failover").text
+        self.assertIn('value="exit_failover" selected>Global exit switched automatically', first)
+        self.assertIn('href="/journal?page=2&amp;action=exit_failover"', first)
+        self.assertNotIn("unrelated detail", first)
+        last = self.client.get("/journal?action=exit_failover&page=999").text
+        self.assertIn("Page 2 of 2", last)
+        self.assertIn("Switch #0.", last)
+        self.assertNotIn("Switch #50.", last)
+        empty = self.client.get("/journal?action=unrecorded_event").text
+        self.assertIn("No events match this filter", empty)
+        self.assertIn('value="unrecorded_event" selected', empty)
+
+    def test_system_service_health_is_independent_of_exit_status(self):
+        self.login_admin()
+        states = {"awg0": "active", "routing": "failed", "firewall": "unknown",
+                  "failover": "activating"}
+        with mock.patch.object(app, "services", return_value=states), \
+                mock.patch.object(app, "read_status", return_value={}):
+            page = self.client.get("/settings").text
+            data = self.client.get("/status.json?overview=true").json()
+        self.assertLess(page.index('id="services"'), page.index("Panel and network"))
+        self.assertIn('data-live="service|routing">Failed</span>', page)
+        self.assertIn('data-live="service|firewall">Unknown</span>', page)
+        self.assertFalse(data["status_fresh"])
+        self.assertEqual(data["overview"]["services"]["failover"],
+                         {"label": "Starting", "tone": "warning"})
+        self.seed_account()
+        self.login("c1@example.com", USER_PASSWORD)
+        denied = self.client.get("/settings")
+        self.assertEqual(denied.status_code, 303)
+        self.assertEqual(denied.headers["location"], "/me")
+        self.assertNotIn("overview", self.client.get("/status.json?overview=true").json())
+
+
 class RoutedChoiceTests(PanelTestCase):
     def test_admin_distinguishes_unselected_and_ungranted_subnets(self):
         aid, cid, routed = self.account_with_routed()
@@ -1486,6 +1533,75 @@ class StatusJsonTests(PanelTestCase):
         self.assertEqual(self.client.get("/status.json").status_code, 401)
 
 
+class AdminRouteConsistencyTests(PanelTestCase):
+    def test_reported_route_stays_visible_when_access_or_exit_is_disabled(self):
+        aid, cid = self.seed_client(name="phone")
+        eid = self.seed_exit("stopped", "awg1", enabled=0)
+        status = {"ts": int(time.time()), "clients": {"10.80.0.2": "awg1"}}
+        self.login_admin()
+        with mock.patch.object(app, "read_status", return_value=status), \
+                mock.patch.object(app.awgconf, "render", return_value=""):
+            live = self.client.get("/status.json?exit_configurations=awg1").json()
+            detail = self.client.get(f"/exits/{eid}").text
+        self.assertEqual(live["exit_usage"]["awg1"], 1)
+        self.assertEqual(live["configs"]["10.80.0.2"]["admin_route"]["current"]["id"], eid)
+        self.assertEqual([x["id"] for x in live["exit_configurations"]["current"]], [cid])
+        self.assertIn('data-live="admin-exit|awg1">Disabled</span>', detail)
+
+    def test_global_pin_fallback_and_shared_routes_are_consistent(self):
+        aid, cid = self.seed_client(name="phone")
+        global_id = self.seed_exit("global", "awg1")
+        pinned_id = self.seed_exit("pinned", "awg2")
+        fallback_id = self.seed_exit("fallback", "awg3")
+        self.grant(aid, cid, pinned_id)
+        self.grant(aid, cid, fallback_id, 20)
+        with app.db() as conn:
+            conn.execute("UPDATE clients SET pinned_iface = 'awg2' WHERE id = ?", (cid,))
+            orphan = conn.execute(
+                "INSERT INTO clients (name, ip, public_key, private_key, preshared_key, "
+                "enabled, created_at, internet, table_num) "
+                "VALUES ('shared', '10.80.0.9', 'pub2', 'priv', 'psk', 1, 'now', 1, 0)"
+            ).lastrowid
+        self.login_admin()
+        status = {"ts": int(time.time()), "active": "awg1",
+                  "clients": {"10.80.0.2": "awg3"},
+                  "exits": {"awg1": {"alive": True}, "awg2": {"alive": False},
+                            "awg3": {"alive": True, "degraded": True}}}
+        with mock.patch.object(app, "read_status", return_value=status), \
+                mock.patch.object(app, "run_dir", return_value="awg1"), \
+                mock.patch.object(app, "services", return_value={}), \
+                mock.patch.object(app.awgconf, "render", return_value=""):
+            global_data = self.client.get("/status.json?exit_configurations=awg1").json()
+            fallback_data = self.client.get("/status.json?overview=true&exit_configurations=awg3").json()
+            listing = self.client.get("/exits").text
+            detail = self.client.get(f"/exits/{fallback_id}").text
+            overview = self.client.get("/").text
+        self.assertEqual(global_data["exit_usage"], {"awg1": 1, "awg3": 1})
+        self.assertEqual([x["id"] for x in global_data["exit_configurations"]["current"]], [orphan])
+        self.assertEqual([x["id"] for x in fallback_data["exit_configurations"]["current"]], [cid])
+        route = fallback_data["configs"]["10.80.0.2"]["admin_route"]
+        self.assertEqual((global_data["global_exit"], route["pinned"]["id"], route["current"]["id"]),
+                         ("awg1", pinned_id, fallback_id))
+        self.assertIn('data-live="exit-usage|awg3">1</span>', listing)
+        self.assertIn(f'href="/exits/{fallback_id}#exit-configurations"', overview)
+        self.assertIn("fallback is degraded", overview)
+        self.assertIn(f'href="/configs/{cid}">phone</a>', detail)
+        self.assertEqual(global_id, fallback_data["overview"]["active"]["id"])
+
+        stale = dict(status, ts=int(time.time()) - 300)
+        with mock.patch.object(app, "read_status", return_value=stale):
+            data = self.client.get("/status.json?exit_configurations=awg3").json()
+            listing = self.client.get("/exits").text
+        self.assertFalse(data["status_fresh"])
+        self.assertEqual(data["exit_configurations"]["current"], [])
+        self.assertIn('data-live="exit-usage|awg3">—</span>', listing)
+        self.login("c1@example.com", USER_PASSWORD)
+        user_data = self.client.get("/status.json?exit_configurations=awg3").json()
+        self.assertNotIn("exit_configurations", user_data)
+        self.assertNotIn("exit_usage", user_data)
+        self.assertNotIn("admin_route", user_data["configs"]["10.80.0.2"])
+
+
 class ConfigPingTests(PanelTestCase):
     def card(self, status):
         aid, cid = self.seed_client()
@@ -1519,9 +1635,32 @@ class ConfigPingTests(PanelTestCase):
             "ts": int(time.time()) - 300,
             "exits": {"awg1": {"alive": True, "rtt_ms": 40}},
         })
-        self.assertIn(">no data</span>", text)
-        self.assertNotIn(">up</span>", text)
+        self.assertIn('data-live="admin-exit|awg1">No data</span>', text)
+        self.assertIn("data-route-current hidden", text)
+        self.assertNotIn(">Up</span>", text)
         self.assertNotIn("40 ms", text)
+
+    def test_admin_pages_distinguish_current_exit_from_saved_pin(self):
+        aid, cid = self.seed_client()
+        pinned = self.seed_exit("preferred", "awg1")
+        current = self.seed_exit("fallback", "awg2")
+        self.grant(aid, cid, pinned)
+        self.grant(aid, cid, current, 20)
+        with app.db() as conn:
+            conn.execute("UPDATE clients SET pinned_iface = ? WHERE id = ?", ("awg1", cid))
+        self.login_admin()
+        status = {"ts": int(time.time()), "active": "awg1",
+                  "clients": {"10.80.0.2": "awg2"}}
+        with mock.patch.object(app, "read_status", return_value=status):
+            routes = self.client.get("/status.json").json()["configs"]
+            for path in ("/configs", f"/configs/{cid}", f"/accounts/{aid}"):
+                with self.subTest(path=path):
+                    page = self.client.get(path)
+                    self.assertEqual(page.status_code, 200)
+                    self.assertIn(f'data-route-current href="/exits/{current}">fallback', page.text)
+                    self.assertIn(f'Pinned · <a class="oc-link" href="/exits/{pinned}">preferred', page.text)
+        self.assertEqual(routes["10.80.0.2"]["admin_route"]["current"]["id"], current)
+        self.assertEqual(routes["10.80.0.2"]["admin_route"]["pinned"]["id"], pinned)
 
 
 class NavigationTests(PanelTestCase):
@@ -1585,10 +1724,40 @@ class NavigationTests(PanelTestCase):
                 mock.patch.object(app, "run_dir", return_value="awg1"):
             page = self.client.get("/exits")
         self.assertEqual(page.status_code, 200)
-        self.assertIn('data-live="status">status unavailable', page.text)
-        self.assertIn(">no data</span>", page.text)
-        self.assertNotIn(">up</span>", page.text)
-        self.assertNotIn('oc-badge--accent">active', page.text)
+        self.assertIn('role="status">Stale · exit status unavailable', page.text)
+        self.assertIn('data-live="admin-exit|awg1">No data</span>', page.text)
+        self.assertIn('data-live="exit-usage|awg1">—</span>', page.text)
+        self.assertIn('data-live="global-exit|awg1" hidden', page.text)
+
+    def test_admin_exit_usage_and_health_follow_the_reported_routes(self):
+        aid, cid = self.seed_client()
+        self.seed_client(name="disabled", ip="10.80.0.9",
+                         email="other@example.com", enabled=0)
+        first = self.seed_exit("first", "awg1")
+        second = self.seed_exit("second", "awg2")
+        self.grant(aid, cid, first)
+        self.grant(aid, cid, second, 20)
+        self.login_admin()
+        probe = "https://example.com/"
+        status = {
+            "ts": int(time.time()), "active": "awg1",
+            "clients": {"10.80.0.2": "awg2", "10.80.0.9": "awg2"},
+            "exits": {"awg1": {"alive": True},
+                      "awg2": {"alive": True, "targets": {probe: False}}},
+        }
+        with mock.patch.object(app, "read_status", return_value=status), \
+                mock.patch.object(app, "run_dir", return_value="awg1"), \
+                mock.patch.object(app, "services", return_value={}):
+            data = self.client.get("/status.json?overview=true").json()
+            exits = self.client.get("/exits").text
+            overview = self.client.get("/").text
+        self.assertEqual(data["global_exit"], "awg1")
+        self.assertEqual(data["exit_usage"], {"awg2": 1})
+        self.assertEqual(data["exit_targets"]["awg2"], {probe: False})
+        self.assertIn('data-live="exit-usage|awg1">0</span>', exits)
+        self.assertIn('data-live="exit-usage|awg2">1</span>', exits)
+        self.assertIn("second has a failed check", overview)
+        self.assertIn(f"/exits/{second}#exit-configurations", overview)
 
     def test_current_page_is_marked_for_screen_readers(self):
         self.login_admin()
