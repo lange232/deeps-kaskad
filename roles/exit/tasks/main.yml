@@ -11,11 +11,11 @@
 - name: This host is an exit, not the S1 entry
   ansible.builtin.assert:
     that:
-      - kaskad_role | default('exit') == 'exit'
+      - kaskad_role | default('') == 'exit'
     fail_msg: >-
-      this host is marked kaskad_role={{ kaskad_role }}: the exit role rewrites
-      awg0 and would cut the clients of an S1 entry. Run it only against hosts
-      in the kaskad_exits group.
+      this host is not marked kaskad_role=exit: the exit role rewrites awg0 and
+      would cut the clients of an S1 entry. Set kaskad_role: exit on every host
+      of the kaskad_exits group.
 
 - name: Every peer has a key
   ansible.builtin.assert:

@@ -29,7 +29,7 @@ import struct
 import subprocess
 import sys
 import time
-from concurrent.futures import ThreadPoolExecutor, wait
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import closing
 from datetime import datetime, timezone
 from pathlib import Path
@@ -67,11 +67,10 @@ PROBE_HTTP = (
     ("http://captive.apple.com/hotspot-detect.html", 200),
 )
 MIN_HEALTHY_TARGETS = 2
-# A cycle must stay shorter than the interval even when a provider drops
-# packets silently: waiting is bounded, unfinished probes keep their last
-# result and the next round reuses the slot.
-PROBE_BUDGET = 12
-CHECK_BUDGET = 6
+# Probing is asynchronous: a probe that outlives the interval keeps running
+# and its result is applied when it lands, instead of being dropped and
+# started again. The caps keep the queues finite.
+CHECK_MAX_INFLIGHT = 8
 HTTP_TIMEOUT = 4
 # Hostnames are resolved through the exit, exactly as a client does: the
 # answer is picked for the exit's network, not for the server's.
@@ -90,10 +89,13 @@ CHECK_ACCOUNTS_PER_TICK = 4
 RTT_RE = re.compile(r"time=([0-9.]+)\s*ms")
 
 probe_pool = ThreadPoolExecutor(max_workers=8)
-check_pool = ThreadPoolExecutor(max_workers=4)
-# Accounts whose checks are still running from a previous tick: starting a
-# second batch for them would only queue more blocked sockets.
-check_inflight: set[int] = set()
+check_pool = ThreadPoolExecutor(max_workers=CHECK_MAX_INFLIGHT)
+# Probe in flight -> the exit it describes. A probe is never started twice for
+# the same exit: the result of the running one is applied when it finishes.
+probe_inflight: dict = {}
+# Account check in flight -> (check id, target, exit). Same rule: one run per
+# target and exit, and every finished run is applied, even a slow one.
+check_inflight: dict = {}
 state: dict[str, dict] = {}
 # Last per-target results of every exit, for the panel's diagnosis.
 probe_targets: dict[str, dict[str, bool]] = {}
@@ -335,8 +337,10 @@ def dns_servers() -> list[str]:
     return servers or ["1.1.1.1"]
 
 
-def build_query(host: str, ident: int = 0x4B41) -> bytes:
+def build_query(host: str, ident: int | None = None) -> bytes:
     """A minimal A query: one question, no EDNS."""
+    if ident is None:
+        ident = int.from_bytes(os.urandom(2), "big")
     packet = struct.pack("!HHHHHH", ident, 0x0100, 1, 0, 0, 0)
     for part in host.rstrip(".").split("."):
         packet += bytes([len(part)]) + part.encode()
@@ -373,20 +377,52 @@ def parse_a(data: bytes) -> list[tuple[str, int]]:
     return out
 
 
+def matches_query(data: bytes, ident: int, host: str) -> bool:
+    """Is this the answer to our query, for our name?
+
+    The kernel filters by peer (the socket is connected), but a stale or
+    mangled datagram must not be cached as an answer either.
+    """
+    if len(data) < 12:
+        return False
+    if struct.unpack("!H", data[0:2])[0] != ident:
+        return False
+    if not struct.unpack("!H", data[2:4])[0] & 0x8000:  # QR bit
+        return False
+    if struct.unpack("!H", data[4:6])[0] != 1:  # one question
+        return False
+    pos, labels = 12, []
+    while pos < len(data) and data[pos] != 0:
+        length = data[pos]
+        pos += 1
+        if length > len(data) - pos:
+            return False
+        labels.append(data[pos:pos + length].decode("ascii", "replace").lower())
+        pos += length
+    return ".".join(labels) == host.rstrip(".").lower()
+
+
 def dns_lookup(host: str, server: str, iface: str) -> list[tuple[str, int]]:
     """Ask the resolver with the query bound to one exit.
 
     A client resolves through its exit, so the probe does the same: the
     address chosen for the exit's network is the one a client would get.
     """
+    query = build_query(host)
+    ident = struct.unpack("!H", query[0:2])[0]
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     try:
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_BINDTODEVICE, iface.encode())
         sock.settimeout(DNS_TIMEOUT)
-        sock.sendto(build_query(host), (server, 53))
-        data, _ = sock.recvfrom(4096)
+        # connect() makes the kernel drop datagrams from anybody but this
+        # resolver; the check below also verifies the id and the name.
+        sock.connect((server, 53))
+        sock.send(query)
+        data = sock.recv(4096)
     finally:
         sock.close()
+    if not matches_query(data, ident, host):
+        return []
     return parse_a(data)
 
 
@@ -632,6 +668,42 @@ def update_check_state(
             log(f"check {target}: failing via {iface}")
 
 
+def start_probes(rows: list[dict]) -> None:
+    """Applies finished probes and starts one for every idle exit.
+
+    Nothing waits here: a probe slower than the interval finishes in the
+    background, its verdict is applied when it lands, and no second probe is
+    queued for the same exit meanwhile.
+    """
+    for future in list(probe_inflight):
+        if not future.done():
+            continue
+        exit_row = probe_inflight.pop(future)
+        try:
+            update_state(exit_row, *future.result())
+        except Exception as exc:  # a probe must never kill the daemon
+            log(f"probe {exit_row['iface']}: {exc}")
+    busy = {row["iface"] for row in probe_inflight.values()}
+    for exit_row in rows:
+        if not exit_row["enabled"] or exit_row["iface"] in busy:
+            continue
+        probe_inflight[probe_pool.submit(probe_safe, exit_row)] = exit_row
+
+
+def harvest_checks() -> None:
+    """Applies every finished account check, however late it came."""
+    for future in list(check_inflight):
+        if not future.done():
+            continue
+        check_id, target, iface = check_inflight.pop(future)
+        try:
+            ok = future.result()
+        except Exception as exc:  # one bad target must not stop the cycle
+            log(f"check {target} via {iface}: {exc}")
+            continue
+        update_check_state(check_id, target, iface, ok)
+
+
 def run_account_checks(alive=None) -> tuple[dict[int, set[str]], dict]:
     """Probes the accounts' targets through their exits.
 
@@ -682,38 +754,26 @@ def run_account_checks(alive=None) -> tuple[dict[int, set[str]], dict]:
     for ch in checks:
         by_account.setdefault(ch["account_id"], []).append(ch)
 
-    def probe_account(aid: int) -> list[tuple[int, str, str, bool]]:
-        out = []
+    harvest_checks()
+    queued = {(task[0], task[2]) for task in check_inflight.values()}
+    free = CHECK_MAX_INFLIGHT - len(check_inflight)
+    for aid in selected:
+        if free <= 0:
+            break
         for ch in by_account.get(aid, []):
             for iface in granted.get(aid, []):
+                if free <= 0:
+                    break
                 if live is not None and iface not in live:
                     continue
-                out.append((ch["id"], ch["target"], iface,
-                            check_ok(ch["kind"], ch["target"], iface)))
-        return out
-
-    started = [
-        aid for aid in selected
-        if aid not in check_inflight and by_account.get(aid)
-    ]
-    if started:
-        futures = {}
-        for aid in started:
-            check_inflight.add(aid)
-            future = check_pool.submit(probe_account, aid)
-            future.add_done_callback(
-                lambda _f, aid=aid: check_inflight.discard(aid)
-            )
-            futures[future] = aid
-        done, _pending = wait(futures, timeout=CHECK_BUDGET)
-        for future in done:
-            try:
-                results = future.result()
-            except Exception as exc:  # one bad target must not stop the cycle
-                log(f"check {futures[future]}: {exc}")
-                continue
-            for check_id, target, iface, ok in results:
-                update_check_state(check_id, target, iface, ok)
+                if (ch["id"], iface) in queued:
+                    continue
+                future = check_pool.submit(
+                    check_ok, ch["kind"], ch["target"], iface
+                )
+                check_inflight[future] = (ch["id"], ch["target"], iface)
+                queued.add((ch["id"], iface))
+                free -= 1
 
     avoid: dict[int, set[str]] = {}
     report: dict = {}
@@ -945,17 +1005,7 @@ def _auto(active, alive, alive_since, now, stable):
 
 def tick(c: dict) -> None:
     rows = exits()
-    enabled = [e for e in rows if e["enabled"]]
-    if enabled:
-        futures = {probe_pool.submit(probe_safe, e): e for e in enabled}
-        done, pending = wait(futures, timeout=PROBE_BUDGET)
-        for future in done:
-            update_state(futures[future], *future.result())
-        for future in pending:
-            # Keep the last verdict: a probe that outlives the budget must not
-            # be read as a failure, and the next round is a fresh slot.
-            log(f"probe {futures[future]['iface']}: still running, "
-                "keeping the last result")
+    start_probes(rows)
 
     # Exits can come up after kaskad-routing.service already ran; only this
     # loop notices, so it re-applies the tables and rules.

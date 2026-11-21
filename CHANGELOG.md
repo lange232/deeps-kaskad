@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Exit probes and account checks are asynchronous: a run slower than the
+  interval keeps going, its result is applied when it lands, and nothing is
+  queued twice for the same exit. Routes and the status file never wait for a
+  probe.
+- An exit is marked degraded only when two of the three probe targets fail:
+  one unreachable site stays visible in the diagnosis without moving every
+  client.
 - Failover probes resolve each target's hostname through the exit, with the
   resolver clients use, and fetch the address that answer returned. A probe
   no longer depends on the server's own DNS, which picked addresses chosen
@@ -55,13 +62,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- Account checks run on their own small pool with a time budget and never
-  delay the route choice or the status file; a check still running keeps its
-  last result instead of queueing another. Global probes are bounded the same
-  way.
-- An exit is marked degraded only when two of the three probe targets fail:
-  one unreachable site stays visible in the diagnosis without moving every
-  client.
 
 
 ### Fixed

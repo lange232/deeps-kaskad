@@ -237,9 +237,10 @@ replaced. An exit that answers the transport probe but fails two of the three
 HTTP targets is marked `degraded` after 3 bad rounds; clients and the active
 exit prefer a healthy one, and the degraded exit returns only after 3 good
 rounds and 60 seconds of stability. An exit is dead after 3 failed transport
-probes and alive after 2 successful ones. Probes are bounded in time: a probe
-that outlives the budget keeps its previous verdict, and account checks run on
-their own pool so they never hold up the route or the status file. The last
+probes and alive after 2 successful ones. Probing is asynchronous: a probe
+that outlives the interval keeps running, its verdict is applied when it
+lands, and the same exit is never probed twice at once. Route choice and the
+status file never wait for a probe. The last
 result of every target is visible on the exit page, so a `degraded` badge says
 which destination failed instead of only that something did. Client conntrack
 entries are flushed on switch, otherwise the old NAT would send packets to the

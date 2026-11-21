@@ -387,6 +387,9 @@ class SyncRoutingTests(unittest.TestCase):
         self.assertEqual(failover.routing_backoff, 10)
 
 
+from concurrent.futures import Future, wait
+
+
 class ProbeTests(unittest.TestCase):
     def test_ping_rtt_is_parsed(self):
         line = "64 bytes from 1.1.1.1: icmp_seq=1 ttl=57 time=12.3 ms"
@@ -543,6 +546,37 @@ class ProbeTests(unittest.TestCase):
         with mock.patch.object(failover, "iface_exists", return_value=False):
             self.assertEqual(failover.probe({"iface": "awg9", "mode": "internet"}),
                              (False, None, False))
+
+    def test_a_probe_in_flight_is_not_started_twice(self):
+        failover.probe_inflight.clear()
+        failover.state.pop("awg1", None)
+        try:
+            future = Future()
+            row = {"iface": "awg1", "enabled": 1, "mode": "internet"}
+            with mock.patch.object(failover.probe_pool, "submit",
+                                   return_value=future) as submit:
+                failover.start_probes([row])
+                failover.start_probes([row])
+                self.assertEqual(submit.call_count, 1)
+                future.set_result((True, 12.0, True))
+                failover.start_probes([])          # harvest only
+                failover.start_probes([row])       # a fresh probe is allowed
+                self.assertEqual(submit.call_count, 2)
+            self.assertEqual(failover.state["awg1"]["oks"], 1)
+        finally:
+            failover.probe_inflight.clear()
+            failover.state.pop("awg1", None)
+
+    def test_a_dns_answer_for_another_name_is_rejected(self):
+        query = failover.build_query("example.com", 0x1234)
+        body = query[12:]
+        answer = b"\xc0\x0c" + struct.pack("!HHIH", 1, 1, 60, 4) + bytes([1, 2, 3, 4])
+        reply = (struct.pack("!HHHHHH", 0x1234, 0x8180, 1, 1, 0, 0)
+                 + body + answer)
+        self.assertTrue(failover.matches_query(reply, 0x1234, "example.com"))
+        self.assertFalse(failover.matches_query(reply, 0x1234, "opencode.ai"))
+        self.assertFalse(failover.matches_query(reply, 0x9999, "example.com"))
+        self.assertFalse(failover.matches_query(b"", 0x1234, "example.com"))
 
     def test_a_live_exit_degrades_after_bad_rounds(self):
         old = failover.state.copy()
@@ -716,15 +750,27 @@ class ClientCheckTests(unittest.TestCase):
                  mock.patch.object(failover, "check_ok",
                                    side_effect=lambda k, t, i: i == "awg2"):
                 for _ in range(failover.CHECK_DEAD_AFTER):
-                    avoid, report = failover.run_account_checks()
+                    failover.run_account_checks()
+                    settle_checks()
+                avoid, report = failover.run_account_checks()
             self.assertEqual(avoid, {1: {"awg1"}})
             self.assertEqual(report["1"]["5"]["failing"], ["awg1"])
         finally:
             failover.check_state.clear()
 
 
+def settle_checks(timeout=5):
+    """Waits for the running account checks and applies their results."""
+    if failover.check_inflight:
+        wait(list(failover.check_inflight), timeout=timeout)
+    failover.harvest_checks()
+
+
 class AccountCheckSchedulingTests(unittest.TestCase):
     def tearDown(self):
+        if failover.check_inflight:
+            wait(list(failover.check_inflight), timeout=5)
+        failover.check_inflight.clear()
         failover.check_state.clear()
         failover.check_cursor = 0
 
@@ -760,6 +806,28 @@ class AccountCheckSchedulingTests(unittest.TestCase):
         self.assertEqual(report, {})
         self.assertFalse(probe.called)
 
+    def test_a_late_account_check_result_is_applied(self):
+        failover.check_state.clear()
+        failover.check_inflight.clear()
+        future = Future()
+        checks = [{"id": 1, "account_id": 1, "kind": "http",
+                   "target": "http://a1.example/"}]
+        grants = [{"account_id": 1, "iface": "awg1"}]
+        try:
+            with mock.patch.object(failover.check_pool, "submit",
+                                   return_value=future), \
+                 mock.patch.object(failover, "account_checks",
+                                   return_value=checks), \
+                 mock.patch.object(failover, "account_grants",
+                                   return_value=grants):
+                failover.run_account_checks()
+                future.set_result(False)
+                failover.harvest_checks()
+            self.assertEqual(failover.check_state[(1, "awg1")]["fails"], 1)
+        finally:
+            failover.check_inflight.clear()
+            failover.check_state.clear()
+
     def test_a_crashing_check_does_not_stop_the_cycle(self):
         checks = [{"id": 1, "account_id": 1, "kind": "http",
                    "target": "http://a1.example/"}]
@@ -768,6 +836,8 @@ class AccountCheckSchedulingTests(unittest.TestCase):
              mock.patch.object(failover, "account_grants", return_value=grants), \
              mock.patch.object(failover, "check_ok",
                                side_effect=RuntimeError("boom")):
+            avoid, report = failover.run_account_checks()
+            settle_checks()          # the failure is logged, not raised
             avoid, report = failover.run_account_checks()
         self.assertEqual(avoid, {})
         self.assertEqual(report, {})
@@ -789,6 +859,7 @@ class AccountCheckSchedulingTests(unittest.TestCase):
              mock.patch.object(failover, "account_grants", return_value=grants), \
              mock.patch.object(failover, "check_ok", side_effect=fake):
             failover.run_account_checks(alive=["awg2"])
+            settle_checks()
         self.assertEqual(probed, ["awg2"])
 
     def test_accounts_rotate_between_ticks(self):
@@ -805,9 +876,11 @@ class AccountCheckSchedulingTests(unittest.TestCase):
              mock.patch.object(failover, "account_grants", return_value=grants), \
              mock.patch.object(failover, "check_ok", side_effect=fake):
             failover.run_account_checks()
+            settle_checks()
             first = set(probed)
             probed.clear()
             failover.run_account_checks()
+            settle_checks()
             second = set(probed)
         self.assertEqual(len(first), failover.CHECK_ACCOUNTS_PER_TICK)
         self.assertEqual(len(second), failover.CHECK_ACCOUNTS_PER_TICK)
