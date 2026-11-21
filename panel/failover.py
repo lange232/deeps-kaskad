@@ -849,6 +849,7 @@ def write_status(active, rows: list[dict], manual: str = "", clients=None,
                 "alive_since": state.get(e["iface"], {}).get("alive_since", 0),
                 "rtt_ms": state.get(e["iface"], {}).get("rtt_ms"),
                 "rtt_ts": state.get(e["iface"], {}).get("rtt_ts", 0),
+                "targets": probe_targets.get(e["iface"], {}),
             }
             for e in rows
         },
