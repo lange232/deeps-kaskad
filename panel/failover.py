@@ -158,7 +158,8 @@ def client_grants() -> list[dict]:
             dict(r)
             for r in conn.execute(
                 "SELECT ce.client_id, ce.priority AS choice, c.ip, "
-                "c.table_num AS client_table, c.account_id, e.iface "
+                "c.table_num AS client_table, c.account_id, c.pinned_iface, "
+                "e.iface "
                 "FROM client_internet_exits ce "
                 "JOIN clients c ON c.id = ce.client_id "
                 "AND c.enabled = 1 AND (c.internet = 1 OR c.account_id IS NOT NULL) "
@@ -189,7 +190,8 @@ def current_default(table: int) -> str | None:
 
 
 def apply_client_routes(
-    choices: dict[tuple[int, str], list[str]], alive, avoid=None
+    choices: dict[tuple[int, str], list[str]], alive, avoid=None,
+    pins=None, alive_all=None
 ) -> dict[str, str]:
     """Points each client table at its first usable granted exit.
 
@@ -197,16 +199,28 @@ def apply_client_routes(
     currently failing. They are skipped when another exit remains; when every
     exit is avoided the original order is used, so a bad check never leaves
     the account without a working exit.
+
+    ``pins`` maps a client key to the exit its owner asked for. A pin wins
+    over the degraded mark and over the account checks, but only while that
+    exit is alive: a dead tunnel is never forced, the order takes over.
     """
     used: dict[str, str] = {}
     avoid = avoid or {}
+    pins = pins or {}
+    everything = set(alive_all) if alive_all is not None else set(alive)
     for (table, ip), order in choices.items():
         if table <= 0:
             log(f"client {ip}: no routing table allocated")
             continue
-        blocked = avoid.get((table, ip), set())
-        allowed = [iface for iface in order if iface not in blocked]
-        desired = pick_client_exit(allowed or order, alive)
+        pin = pins.get((table, ip), "")
+        if pin and pin in everything:
+            desired = pin
+            if pin not in alive:
+                log(f"client {ip}: staying on pinned {pin}, degraded")
+        else:
+            blocked = avoid.get((table, ip), set())
+            allowed = [iface for iface in order if iface not in blocked]
+            desired = pick_client_exit(allowed or order, alive)
         before = current_default(table)
         # When nothing is alive the old route is left in place: it points at
         # a dead exit, so traffic already fails, and a daemon restart does
@@ -940,6 +954,7 @@ def tick(c: dict) -> None:
     avoid, check_report = run_account_checks(alive)
     choices: dict[tuple[int, str], list[str]] = {}
     avoid_by_client: dict[tuple[int, str], set[str]] = {}
+    pins: dict[tuple[int, str], str] = {}
     for grant in client_grants():
         key = (grant["client_table"], grant["ip"])
         choices.setdefault(key, []).append(grant["iface"])
@@ -947,7 +962,11 @@ def tick(c: dict) -> None:
             avoid_by_client.setdefault(key, set()).update(
                 avoid.get(int(grant["account_id"]), set())
             )
-    client_routes = apply_client_routes(choices, usable, avoid_by_client)
+        if grant.get("pinned_iface"):
+            pins[key] = grant["pinned_iface"]
+    client_routes = apply_client_routes(
+        choices, usable, avoid_by_client, pins, alive
+    )
 
     pings = client_pings()
     write_status(read_active(), rows, manual, client_routes,

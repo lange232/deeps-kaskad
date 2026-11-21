@@ -311,6 +311,13 @@ def migrate(conn: sqlite3.Connection, existing: set[str]) -> None:
     # which is meant for people. One account cannot hold the same device twice.
     if "device_id" not in cols:
         conn.execute("ALTER TABLE clients ADD COLUMN device_id TEXT")
+    # An account can pin its configuration to one exit even when that exit is
+    # marked degraded: sometimes a slow-but-working tunnel beats a healthy one
+    # that does not reach what the user needs.
+    if "pinned_iface" not in cols:
+        conn.execute(
+            "ALTER TABLE clients ADD COLUMN pinned_iface TEXT NOT NULL DEFAULT ''"
+        )
     conn.execute(
         "CREATE UNIQUE INDEX IF NOT EXISTS clients_device ON clients "
         "(account_id, device_id) WHERE device_id IS NOT NULL"
@@ -2092,6 +2099,8 @@ def delete_exit(request: Request, eid: int, csrf_token: str = Form(...)):
         conn.execute("DELETE FROM exits WHERE id = ?", (eid,))
         conn.execute("DELETE FROM client_exits WHERE exit_id = ?", (eid,))
         conn.execute("DELETE FROM client_internet_exits WHERE exit_id = ?", (eid,))
+        conn.execute("UPDATE clients SET pinned_iface = '' WHERE pinned_iface = ?",
+                     (row["iface"],))
         routing.release_table(conn, "exit", eid)
     remove_exit(row)
     apply_routing()
@@ -2898,6 +2907,23 @@ def account_exits_update(
                 next_priority += 10
         # Granted exits appear on every configuration; revoked ones go away.
         sync_account_configs(conn, aid)
+        # A pin to an exit that is no longer granted must not linger.
+        for row in conn.execute(
+            "SELECT id, pinned_iface FROM clients WHERE account_id = ?", (aid,)
+        ).fetchall():
+            if not row["pinned_iface"]:
+                continue
+            have = {
+                r[0] for r in conn.execute(
+                    "SELECT e.iface FROM client_internet_exits ce "
+                    "JOIN exits e ON e.id = ce.exit_id WHERE ce.client_id = ?",
+                    (row["id"],),
+                )
+            }
+            if row["pinned_iface"] not in have:
+                conn.execute(
+                    "UPDATE clients SET pinned_iface = '' WHERE id = ?", (row["id"],)
+                )
     audit("account_exits", f"{account['email']} exits={sorted(wanted)}")
     apply_routing()
     return RedirectResponse(f"/accounts/{aid}?ok=access+updated", status_code=303)
@@ -3446,6 +3472,7 @@ def me_config_page(
         csrf=csrf(token), err=err, ok=ok, email=account["email"],
         cl=view, diagnosis=configuration_diagnosis(view, status, int(time.time())),
         conf=conf, internet_exits=granted, current_exit=current,
+        pinned=cl["pinned_iface"],
         alive=alive, degraded=degraded, latency=latency, has_app=ANDROID_APK.exists(),
         routing_fresh=routing_fresh,
         **traffic_context(cid, period),
@@ -3505,6 +3532,48 @@ def me_config_order(request: Request, cid: int, exit_id: int = Form(...),
     apply_routing()
     return RedirectResponse(
         f"/me/configs/{cid}?ok=exit+order+updated", status_code=303
+    )
+
+
+@app.post("/me/configs/{cid}/pin")
+def me_config_pin(
+    request: Request,
+    cid: int,
+    exit_id: int = Form(0),
+    action: str = Form("pin"),
+    csrf_token: str = Form(...),
+):
+    """Pins this configuration to one exit, degraded or not.
+
+    The pin only overrides the automatic choice while the exit is alive: a
+    dead tunnel still falls back to the configuration's order, otherwise the
+    client would lose internet for nothing.
+    """
+    token, account = require_user(request)
+    if not hmac.compare_digest(csrf_token, csrf(token)):
+        raise HTTPException(status_code=400, detail="csrf")
+    cl = user_config(account, cid)
+    allowed = [e for e in config_internet_exits(cl)]
+    if action == "auto":
+        with db() as conn:
+            conn.execute("UPDATE clients SET pinned_iface = '' WHERE id = ?", (cid,))
+        audit("user_exit_pin_cleared", f"{account['email']} {cl['name']}")
+        apply_routing()
+        return RedirectResponse(
+            f"/me/configs/{cid}?ok=back+to+automatic", status_code=303
+        )
+    chosen = next((e for e in allowed if e["id"] == exit_id), None)
+    if not chosen:
+        raise HTTPException(status_code=404)
+    with db() as conn:
+        conn.execute(
+            "UPDATE clients SET pinned_iface = ? WHERE id = ?",
+            (chosen["iface"], cid),
+        )
+    audit("user_exit_pin", f"{account['email']} {cl['name']} {chosen['iface']}")
+    apply_routing()
+    return RedirectResponse(
+        f"/me/configs/{cid}?ok=exit+pinned", status_code=303
     )
 
 
@@ -3966,6 +4035,9 @@ def api_exits(request: Request, config_id: int | None = None):
             # necessarily this configuration's first choice: an account with
             # its own checks can ride another one.
             "active": (e["iface"] == active) if fresh and active else None,
+            # The exit this configuration is pinned to, if any: it is used
+            # even when the failover marks it degraded.
+            "pinned": bool(cl["pinned_iface"]) and e["iface"] == cl["pinned_iface"],
             "status_fresh": fresh,
         }
         for e in config_internet_exits(cl)
@@ -3995,6 +4067,44 @@ def api_exits_order(
     )
     apply_routing()
     return {"ok": True}
+
+
+@app.post("/api/me/exits/pin")
+def api_exits_pin(
+    request: Request,
+    exit_id: int = Form(0),
+    action: str = Form("pin"),
+    config_id: int = Form(0),
+):
+    """Pins a configuration to one exit, or returns it to automatic.
+
+    A pinned exit is used while it is alive even if it is marked degraded;
+    when it dies the configuration's order takes over again.
+    """
+    _, account = api_user(request)
+    cl = api_config(account, config_id)
+    if action == "auto":
+        with db() as conn:
+            conn.execute(
+                "UPDATE clients SET pinned_iface = '' WHERE id = ?", (cl["id"],))
+        audit("user_exit_pin_cleared",
+              f"{account['email']} {cl['name']} via=api")
+        apply_routing()
+        return {"ok": True, "pinned": ""}
+    chosen = next(
+        (e for e in config_internet_exits(cl) if e["id"] == exit_id), None
+    )
+    if not chosen:
+        raise HTTPException(status_code=404, detail="exit not granted")
+    with db() as conn:
+        conn.execute(
+            "UPDATE clients SET pinned_iface = ? WHERE id = ?",
+            (chosen["iface"], cl["id"]),
+        )
+    audit("user_exit_pin",
+          f"{account['email']} {cl['name']} {chosen['iface']} via=api")
+    apply_routing()
+    return {"ok": True, "pinned": chosen["iface"]}
 
 
 @app.get("/api/me/subnets")

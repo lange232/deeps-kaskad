@@ -71,6 +71,7 @@ reveal whether the account exists or is disabled.
 | GET | `/api/me/configs/{id}/traffic` | Traffic history of one configuration |
 | GET | `/api/me/exits` | Internet exits available to a configuration |
 | POST | `/api/me/exits/order` | Set the configuration's exit order |
+| POST | `/api/me/exits/pin` | Pin a configuration to one exit, or back to automatic |
 | GET | `/api/me/subnets` | Subnets granted to the account and their choice |
 | POST | `/api/me/subnets` | Switch subnets on or off for a configuration |
 
@@ -288,6 +289,7 @@ Optional `config_id`; omitted or `0` means the first configuration.
     "degraded": false,
     "rtt_ms": 42,
     "active": true,
+    "pinned": false,
     "status_fresh": true
   }
 ]
@@ -298,6 +300,9 @@ Optional `config_id`; omitted or `0` means the first configuration.
 - `alive` is `true` or `false`. It is `null` when the failover daemon has not
   reported for more than 60 seconds; `rtt_ms`, `degraded` and `active` are also
   `null` then and `status_fresh` is `false`. Do not treat `null` as "down".
+- `pinned` is `true` for the exit this configuration is pinned to. A pinned
+  exit is used even when it is marked `degraded`, while its tunnel is alive;
+  when it dies the configuration's order takes over.
 - `country` is where the exit is hosted, set by the administrator; an empty
   string means it was left blank. Show it in preference to `comment`, which is
   an internal note such as the provider or the bandwidth.
@@ -330,6 +335,28 @@ Replaces the configuration's exit order.
 
 Errors: `400 the order must list every granted exit once`, `404 configuration
 not found`, `409 no configuration yet; create one first`.
+
+---
+
+### POST /api/me/exits/pin
+
+Pins the configuration to one granted exit, or returns it to automatic.
+
+| Field | Required | Notes |
+|---|---|---|
+| `action` | no | `pin` (default) or `auto` |
+| `exit_id` | for `pin` | One of the exits from `/api/me/exits` |
+| `config_id` | no | Default `0`: the account's first configuration |
+
+```json
+{"ok": true, "pinned": "nl-1"}
+```
+
+A pinned exit is used even when the failover marks it `degraded`, as long as
+it is alive; a dead tunnel is never forced.
+
+Errors: `404 exit not granted`, `404 configuration not found`,
+`409 no configuration yet; create one first`.
 
 ---
 

@@ -242,6 +242,12 @@ target is visible on the exit page, so a `degraded` badge says which
 destination failed instead of only that something did. Client conntrack entries are flushed
 on switch, otherwise the old NAT would send packets to the wrong address.
 
+A configuration can also be pinned to one exit: the cabinet offers "use" next
+to every granted exit, and the pinned one is used even when the failover marks
+it degraded, as long as its tunnel is alive. If it dies, the configuration's
+order takes over again until it returns. This is how a client keeps a slower
+exit that reaches what it needs instead of a healthy one that does not.
+
 An account can keep up to three of its own destinations — an HTTP URL or a
 host for ICMP — in the cabinet (`/me/checks`). They are probed through every
 exit the account may use; an exit that fails them for that account is skipped

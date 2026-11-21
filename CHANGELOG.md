@@ -28,6 +28,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- A configuration can be pinned to one exit from the cabinet or
+  `/api/me/exits/pin`: the pinned exit is used even when the failover marks it
+  degraded, while its tunnel is alive. A dead tunnel falls back to the
+  configuration's order until it returns.
 - Accounts can keep up to three destinations that matter to them (HTTP or
   ICMP) in the cabinet (`/me/checks`). The failover probes them through every
   exit the account may use; an exit failing them is skipped for that account's

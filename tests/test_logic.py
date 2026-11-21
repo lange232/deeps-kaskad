@@ -123,15 +123,16 @@ class ClientGrantQueryTests(unittest.TestCase):
         conn.executescript(
             """
             CREATE TABLE clients (id INTEGER PRIMARY KEY, ip TEXT, enabled INTEGER,
-                internet INTEGER, table_num INTEGER, account_id INTEGER);
+                internet INTEGER, table_num INTEGER, account_id INTEGER,
+                pinned_iface TEXT NOT NULL DEFAULT '');
             CREATE TABLE exits (id INTEGER PRIMARY KEY, iface TEXT, enabled INTEGER,
                 mode TEXT, priority INTEGER);
             CREATE TABLE client_internet_exits (client_id INTEGER, exit_id INTEGER,
                 priority INTEGER);
             INSERT INTO exits VALUES (1, 'awg1', 1, 'internet', 10);
-            INSERT INTO clients VALUES (1, '10.80.0.2', 1, 0, 1001, 7);
-            INSERT INTO clients VALUES (2, '10.80.0.3', 1, 0, 1002, NULL);
-            INSERT INTO clients VALUES (3, '10.80.0.4', 1, 1, 1003, 7);
+            INSERT INTO clients VALUES (1, '10.80.0.2', 1, 0, 1001, 7, '');
+            INSERT INTO clients VALUES (2, '10.80.0.3', 1, 0, 1002, NULL, '');
+            INSERT INTO clients VALUES (3, '10.80.0.4', 1, 1, 1003, 7, '');
             INSERT INTO client_internet_exits VALUES (1, 1, 10);
             INSERT INTO client_internet_exits VALUES (2, 1, 10);
             INSERT INTO client_internet_exits VALUES (3, 1, 10);
@@ -605,6 +606,45 @@ class ClientCheckTests(unittest.TestCase):
         # awg1 is already the route, so nothing is replaced; the point is that
         # the client keeps a working exit instead of losing its route.
         self.assertFalse(any("replace" in cmd for cmd in calls))
+
+    def routes(self, pins=None, alive=None, avoid=None, current="awg2"):
+        calls = []
+
+        def fake_run(cmd, timeout=5):
+            calls.append(cmd)
+            return subprocess.CompletedProcess(cmd, 0, "", "")
+
+        with mock.patch.object(failover, "run", side_effect=fake_run), \
+             mock.patch.object(failover, "current_default", return_value=current):
+            failover.apply_client_routes(
+                {(1002, "10.80.0.2"): ["awg1", "awg2"]},
+                alive or ["awg2"],
+                avoid,
+                pins,
+                ["awg1", "awg2"],
+            )
+        return calls
+
+    def test_a_pinned_degraded_exit_is_used(self):
+        # awg1 is alive but degraded (not in the healthy list); the owner
+        # asked for it, so the route follows the pin, not the order.
+        calls = self.routes(pins={(1002, "10.80.0.2"): "awg1"})
+        self.assertTrue(any(cmd[:3] == ["ip", "route", "replace"]
+                            and "awg1" in cmd for cmd in calls))
+
+    def test_a_pin_beats_the_account_checks(self):
+        calls = self.routes(
+            pins={(1002, "10.80.0.2"): "awg1"},
+            avoid={(1002, "10.80.0.2"): {"awg1"}},
+        )
+        self.assertTrue(any(cmd[:3] == ["ip", "route", "replace"]
+                            and "awg1" in cmd for cmd in calls))
+
+    def test_a_dead_pin_falls_back_to_the_order(self):
+        calls = self.routes(pins={(1002, "10.80.0.2"): "awg9"}, current="awg1")
+        self.assertTrue(any(cmd[:3] == ["ip", "route", "replace"]
+                            and "awg2" in cmd for cmd in calls))
+        self.assertFalse(any("awg9" in cmd for cmd in calls))
 
     def test_a_check_marks_an_exit_after_three_failures(self):
         failover.check_state.clear()
