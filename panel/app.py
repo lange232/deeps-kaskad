@@ -2565,7 +2565,6 @@ def config_page(
     live = iface_dump(c["iface"])["peers"]
     view = config_view(cl, live)
     status, routing_fresh = routing_status()
-    client_rtt = (status.get("client_ping") or {}).get(cl["ip"])
     states = status.get("exits") or {}
     known = exits_rows()
     internet_exits = config_internet_exits(cl)
@@ -2587,21 +2586,32 @@ def config_page(
     chosen_routed = {e["id"] for e in config_routed_exits(cl)}
     allowed_routed = config_routed_choices(account) if account else []
     allowed_ids = {e["id"] for e in allowed_routed}
+    routed_choices = [
+        {"id": r["id"], "name": r["comment"] or r["name"], "routes": r["routes"],
+         "iface": r["iface"], "enabled": bool(r["enabled"]), "priority": r["priority"],
+         "chosen": r["id"] in chosen_routed}
+        for r in allowed_routed
+    ]
+    # Chosen subnets stay on top, like the exits on the account page.
+    routed_choices.sort(
+        key=lambda row: (not row["chosen"], not row["enabled"], row["priority"], row["id"])
+    )
     return render_page(
         request, "config_detail.html", "configs",
         csrf=csrf(token), err=err, ok=ok, config=view, **traffic_context(cid, period),
         account=account, routed=config_routed_exits(cl),
         diagnosis=configuration_diagnosis(view, status, int(time.time()), shared),
         internet_exits=internet_exits, route=route,
-        exit_states={e["iface"]: exit_view(e, status, None) for e in internet_exits},
-        latency=latency, client_rtt=client_rtt,
+        pinned_iface=cl["pinned_iface"] or "",
+        current_iface=(selected_internet_iface(cl, status, shared)
+                       if routing_fresh else ""),
+        traffic_ip=cl["ip"], traffic_rx=view["rx"], traffic_tx=view["tx"],
+        exit_states={e["iface"]: exit_view(e, status, None)
+                     for e in internet_exits + allowed_routed},
+        latency=latency,
         conf=conf, routing_fresh=routing_fresh,
         accounts=accounts,
-        routed_choices=[
-            {"id": r["id"], "name": r["comment"] or r["name"], "routes": r["routes"],
-             "chosen": r["id"] in chosen_routed}
-            for r in allowed_routed
-        ],
+        routed_choices=routed_choices,
         ungranted_subnets=[
             e for e in exits_rows()
             if e["mode"] == "routes" and e["enabled"] and e["id"] not in allowed_ids
@@ -2799,6 +2809,76 @@ def config_order_move(
     return RedirectResponse(f"/configs/{cid}?ok=exit+order+updated", status_code=303)
 
 
+@app.post("/configs/{cid}/order/set")
+def config_order_set(
+    request: Request,
+    cid: int,
+    order: list[int] = Form([]),
+    csrf_token: str = Form(...),
+):
+    """Replace this configuration's internet exit order with the given one."""
+    token = require_admin(request)
+    if not hmac.compare_digest(csrf_token, csrf(token)):
+        raise HTTPException(status_code=400, detail="csrf")
+    cl = config_row(cid)
+    if not cl:
+        raise HTTPException(status_code=404)
+    allowed = [e["id"] for e in config_internet_exits(cl)]
+    if len(order) != len(allowed) or set(order) != set(allowed):
+        raise HTTPException(
+            status_code=400,
+            detail="order must list every exit of this configuration once",
+        )
+    with db() as conn:
+        write_config_order(conn, cid, order)
+    audit("config_exit_order", f"{cl['name']} {' '.join(str(e) for e in order)}")
+    apply_routing()
+    if request.headers.get("x-requested-with") == "fetch":
+        return JSONResponse({"ok": True})
+    return RedirectResponse(f"/configs/{cid}?ok=exit+order+updated", status_code=303)
+
+
+@app.post("/configs/{cid}/pin")
+def config_pin(
+    request: Request,
+    cid: int,
+    exit_id: int = Form(0),
+    csrf_token: str = Form(...),
+):
+    """Pin this configuration to one of its exits, or back to automatic.
+
+    The pin overrides the order only while that exit is alive; a dead tunnel
+    still falls back to the order, so a pin cannot cut the configuration off.
+    """
+    token = require_admin(request)
+    if not hmac.compare_digest(csrf_token, csrf(token)):
+        raise HTTPException(status_code=400, detail="csrf")
+    cl = config_row(cid)
+    if not cl:
+        raise HTTPException(status_code=404)
+    if exit_id == 0:
+        with db() as conn:
+            conn.execute("UPDATE clients SET pinned_iface = '' WHERE id = ?", (cid,))
+        audit("config_exit_pin_cleared", cl["name"])
+        apply_routing()
+        return RedirectResponse(
+            f"/configs/{cid}?ok=back+to+automatic", status_code=303
+        )
+    chosen = next(
+        (e for e in config_internet_exits(cl) if e["id"] == exit_id), None
+    )
+    if not chosen:
+        raise HTTPException(status_code=400, detail="exit is not available here")
+    with db() as conn:
+        conn.execute(
+            "UPDATE clients SET pinned_iface = ? WHERE id = ?",
+            (chosen["iface"], cid),
+        )
+    audit("config_exit_pin", f"{cl['name']} {chosen['iface']}")
+    apply_routing()
+    return RedirectResponse(f"/configs/{cid}?ok=exit+pinned", status_code=303)
+
+
 @app.post("/configs/{cid}/order/reset")
 def config_order_reset(request: Request, cid: int, csrf_token: str = Form(...)):
     token = require_admin(request)
@@ -2987,17 +3067,33 @@ def account_page(
     known = {e["iface"]: e for e in exits}
     for cl, view in zip(rows, configs):
         view["admin_route"] = admin_config_route(cl, view, status, fresh, known)
-    routed = [e for e in exits if e["mode"] == "routes" and e["enabled"]]
     granted = {e["id"] for e in account_exits(aid)}
     order = account_exits(aid, "internet")
+    position = {row["id"]: index for index, row in enumerate(order)}
+
+    def internet_order(row):
+        # Exits with access come first in the account order the grip edits;
+        # the unchecked ones fall to the bottom of their own table.
+        checked = row["id"] in granted
+        return (not checked,
+                position.get(row["id"], len(position) + row["priority"]),
+                row["priority"], row["id"])
+
+    def subnet_order(row):
+        checked = row["id"] in granted
+        return (not checked, not row["enabled"], row["priority"], row["id"])
+
+    routed = sorted((e for e in exits if e["mode"] == "routes"), key=subnet_order)
+    internet = sorted((e for e in exits if e["mode"] == "internet"), key=internet_order)
     return render_page(
         request, "account_detail.html", "accounts",
         csrf=csrf(token), err=err, ok=ok, account=account,
         configs=configs, routed=routed, granted=granted,
         checks=account_check_rows(aid),
-        internet_exits=[e for e in exits if e["enabled"] and e["mode"] == "internet"],
+        internet_exits=internet,
         order=order, routing_fresh=fresh,
-        exit_states={e["iface"]: exit_view(e, status, None) for e in order},
+        exit_states={e["iface"]: exit_view(e, status, None)
+                     for e in internet + routed},
         limit=max_configs_for(account),
         default_limit=setting("default_max_configs"),
         newpw=pop_secret(newpw),
@@ -3070,6 +3166,52 @@ def account_exits_update(
     audit("account_exits", f"{account['email']} exits={sorted(wanted)}")
     apply_routing()
     return RedirectResponse(f"/accounts/{aid}?ok=access+updated", status_code=303)
+
+
+@app.post("/accounts/{aid}/order/set")
+def account_order_set(
+    request: Request,
+    aid: int,
+    order: list[int] = Form([]),
+    csrf_token: str = Form(...),
+):
+    """Replace the account's internet exit order with the given one.
+
+    The list must name every granted internet exit exactly once: a partial
+    list would silently drop or duplicate positions, and the browser sends
+    the full order after a drag or a keyboard move.
+    """
+    token = require_admin(request)
+    if not hmac.compare_digest(csrf_token, csrf(token)):
+        raise HTTPException(status_code=400, detail="csrf")
+    account = account_row(aid)
+    if not account:
+        raise HTTPException(status_code=404)
+    with db() as conn:
+        granted = [
+            r["exit_id"] for r in conn.execute(
+                "SELECT ae.exit_id FROM account_exits ae "
+                "JOIN exits e ON e.id = ae.exit_id "
+                "WHERE ae.account_id = ? AND e.mode = 'internet' "
+                "ORDER BY ae.priority, e.priority, e.id",
+                (aid,),
+            )
+        ]
+        if len(order) != len(granted) or set(order) != set(granted):
+            raise HTTPException(
+                status_code=400,
+                detail="order must list every granted internet exit once",
+            )
+        for position, exit_id in enumerate(order):
+            conn.execute(
+                "UPDATE account_exits SET priority = ? "
+                "WHERE account_id = ? AND exit_id = ?",
+                ((position + 1) * 10, aid, exit_id),
+            )
+    audit("account_exit_order", f"{account['email']} {' '.join(str(e) for e in order)}")
+    if request.headers.get("x-requested-with") == "fetch":
+        return JSONResponse({"ok": True})
+    return RedirectResponse(f"/accounts/{aid}?ok=order+updated", status_code=303)
 
 
 @app.post("/accounts/{aid}/order")

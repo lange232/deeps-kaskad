@@ -340,6 +340,9 @@
           badge(el, exits[key]);
         } else if (kind === 'admin-exit') {
           badge(el, exits[key], true);
+        } else if (kind === 'active-row') {
+          item = configs[key];
+          el.hidden = !item || item.iface !== el.dataset.iface;
         } else if (kind === 'admin-route') {
           item = configs[key];
           if (item && item.admin_route) renderConfigRoute(el, item.admin_route);

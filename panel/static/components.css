@@ -891,6 +891,56 @@
   display: none;
 }
 
+/* Segmented control: 28 px tall, 6 px radius, raised active item. */
+.oc-segmented {
+  display: inline-flex;
+  align-items: center;
+  height: 28px;
+  max-width: 100%;
+  border-radius: var(--ui-radius-md);
+  background: var(--ui-bg-layer-2);
+  box-shadow: 0 0 0 0.5px var(--ui-bg-layer-2);
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.oc-segmented::-webkit-scrollbar { display: none; }
+
+.oc-segmented__item {
+  display: inline-flex;
+  align-items: center;
+  height: 28px;
+  padding: 0 12px;
+  border-radius: var(--ui-radius-md);
+  color: var(--ui-text-muted);
+  font-size: var(--ui-fs-sm);
+  font-weight: var(--ui-fw-medium);
+  letter-spacing: var(--ui-ls-tight);
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.oc-segmented__item:hover { color: var(--ui-text-base); }
+
+.oc-segmented__count {
+  margin-left: 6px;
+  color: var(--ui-text-faint);
+  font-variant-numeric: tabular-nums;
+}
+
+.oc-segmented__item:focus-visible {
+  outline: 2px solid var(--ui-border-focus);
+  outline-offset: 1px;
+}
+
+.oc-segmented__item.is-active {
+  color: var(--ui-text-base);
+  background:
+    linear-gradient(180deg, var(--ui-a-light-6) 0%, var(--ui-a-light-0) 100%),
+    var(--ui-bg-button-neutral);
+  box-shadow: var(--ui-shadow-elements);
+}
+
 /* ─────────────────────────────── Segments ─────────────────────────────── */
 
 .oc-seg {
@@ -1233,6 +1283,70 @@
 .activity-table td:last-child { overflow-wrap: anywhere; }
 .activity-pagination { margin-top: 12px; justify-content: space-between; }
 .exits-count { font-size: var(--ui-fs-xs); }
+.account-access-hint { font-size: var(--ui-fs-xs); }
+.account-subhead { margin: 14px 0 6px; }
+.config-latency { width: 1%; text-align: right; }
+.config-exits-table th:nth-child(3) { width: 100%; }
+.config-traffic { font-size: var(--ui-fs-xs); }
+/* The access table follows the reference console's model list: a 32 px header
+   row in sentence case, 48 px two-line rows, numbers and controls right. */
+.console-table th,
+.console-table td { white-space: nowrap; }
+.console-table th {
+  height: 32px;
+  padding: 0 12px;
+  color: var(--ui-text-muted);
+  font-size: var(--ui-fs-sm);
+  font-weight: var(--ui-fw-medium);
+  letter-spacing: var(--ui-ls-tight);
+  text-transform: none;
+}
+.account-access-table th:nth-child(3) { width: 100%; }
+.account-configs-table th:first-child { width: 100%; }
+.console-table tbody tr { height: 48px; }
+.console-table td {
+  padding-top: 8px;
+  padding-bottom: 8px;
+  line-height: 16px;
+}
+.console-table .cell-sub { line-height: 15px; }
+.account-access-table__check { text-align: right; }
+.exit-cell { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.exit-cell__name { display: flex; align-items: center; gap: 6px; min-width: 0; line-height: 16px; }
+.exit-cell__name .oc-link { font-weight: var(--ui-fw-medium); }
+.exit-cell__meta {
+  font-size: 12px;
+  line-height: 15px;
+  color: var(--ui-text-muted);
+  overflow-wrap: anywhere;
+}
+.account-access-table__check { width: 1%; }
+.account-access-table__grip { width: 1%; padding-right: 0; }
+.exit-grip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--ui-radius-sm);
+  background: none;
+  color: var(--ui-text-faint);
+  cursor: grab;
+  touch-action: none;
+}
+.exit-grip:hover { color: var(--ui-text-base); }
+.exit-grip:active { cursor: grabbing; }
+.exit-grip:focus-visible {
+  outline: 2px solid var(--ui-border-focus);
+  outline-offset: 1px;
+}
+.account-access-table tr.is-dragging { opacity: .5; }
+.account-access-table tr.is-dragging td { background: var(--ui-bg-layer-2); }
+.account-access-table__state { width: 1%; }
+.console-table tr.is-disabled td { opacity: .55; }
+.console-table tr.is-disabled .oc-switch { cursor: not-allowed; }
 .exits-table { table-layout: fixed; }
 .exits-table th:first-child { width: 40%; }
 .exits-identity { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; overflow-wrap: anywhere; }

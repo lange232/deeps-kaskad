@@ -7,6 +7,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `scripts/dev-ui.py` runs the panel locally with disposable demo data, an
+  automatic administrator sign-in and stubbed system calls, so the interface
+  can be checked without a server. The demo database now carries ninety days of
+  hourly traffic and a week of five-minute points, so the chart has data.
+- An administrator can pin a configuration to one of its granted exits or
+  return it to automatic, like the cabinet and the app already could.
+  `POST /configs/{id}/pin` validates the exit and refuses one the configuration
+  does not have.
+
+### Changed
+
+- Admin actions and filter fields use the 28 px control height and the neutral
+  button plate, matching the reference console. Compact 24 px controls remain
+  for dense secondary controls: pagination, the traffic period switcher, the
+  QR and config toggles, and the topbar buttons.
+- The exit list filters are a segmented control matching the reference
+  console, with the row counts kept as muted numbers inside each segment.
+- Account and configuration tables follow the reference console list: 32 px
+  sentence-case header, 48 px rows, two-line cells with the name over the
+  country and interface, numbers and controls aligned right.
+- The account page splits exit grants into two tables, internet exits and
+  subnets. Internet exits have a drag grip and both tables have a square access
+  switch. Turning a switch off dims the row, moves it to the bottom of its own
+  table and hides the grip before the form is saved; turning it back on returns
+  the row to the end of the checked group.
+- The exit order is changed by dragging a grip or with Alt plus the arrow keys,
+  Home and End. The browser posts the whole order to
+  `/accounts/{id}/order/set`; a partial or foreign order is rejected.
+- The configuration page has separate Exit order and Subnets sections instead
+  of one Routing block. Its order posts to `/configs/{id}/order/set`, and the
+  latency column shows only the server-to-exit round trip, right-aligned.
+- The configuration connection block is gone: the page header shows the
+  connection state, the exit table marks the active row, and the traffic totals
+  sit in the traffic header.
+
 ## [0.4.11] - 2026-11-22
 
 ### Added

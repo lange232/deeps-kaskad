@@ -65,94 +65,121 @@
 <div class="stack">
   <details id="access" class="manage-block" open><summary>Access and checks</summary>
   <section>
-    <h2 class="oc-section__title">Exit grants</h2>
-    <div class="oc-panel" style="padding:16px">
-      <form method="post" action="/accounts/{{ account.id }}/exits">
-        <input type="hidden" name="csrf_token" value="{{ csrf }}">
-        <p class="oc-section__title" style="margin:0 0 10px">internet exits</p>
-        {% if internet_exits %}
-        <div class="actions" style="flex-direction:column; align-items:flex-start; gap:10px">
-          {% for e in internet_exits %}
-          <label class="oc-check">
-            <input type="checkbox" name="exits" value="{{ e.id }}" {% if e.id in granted %}checked{% endif %}>
-            <span class="oc-check__box"></span>
-            {{ e.name }}
-            <span class="oc-mono oc-muted" style="margin-left:8px">{{ e.iface }}</span>
-          </label>
-          {% endfor %}
-        </div>
-        {% else %}
-        <p class="oc-muted" style="margin:0">no internet exits are configured yet</p>
-        {% endif %}
+    <h2 class="oc-section__title">Exit access and order</h2>
+    <form id="account-access" method="post" action="/accounts/{{ account.id }}/exits">
+      <input type="hidden" name="csrf_token" value="{{ csrf }}">
+    </form>
 
-        {% if routed %}
-        <p class="oc-section__title" style="margin:20px 0 10px">subnet exits</p>
-        <div class="actions" style="flex-direction:column; align-items:flex-start; gap:10px">
-          {% for e in routed %}
-          <label class="oc-check">
-            <input type="checkbox" name="exits" value="{{ e.id }}" {% if e.id in granted %}checked{% endif %}>
-            <span class="oc-check__box"></span>
-            {{ e.name }}
-            <span class="oc-mono oc-muted" style="margin-left:8px">{{ e.routes }}</span>
-          </label>
-          {% endfor %}
-        </div>
-        {% endif %}
-
-        <div class="actions" style="margin-top:18px">
-          <button class="oc-btn oc-btn--contrast">save access</button>
-        </div>
-      </form>
-    </div>
-  </section>
-
-  <section>
-    <h2 class="oc-section__title">Default internet exit order</h2>
-    <div class="oc-panel" style="padding:16px">
-      {% if order %}
-      <p class="oc-muted">Changing this order does not change existing configurations. Use “apply to all configurations” to reset their order.</p>
-      <div class="table-scroll">
-      <table class="oc-table">
-        <thead><tr><th style="width:1%">#</th><th>exit</th><th style="width:1%"></th></tr></thead>
-        <tbody>
-        {% for e in order %}
+    {% if internet_exits %}
+    <h3 class="oc-section__title account-subhead">Exits</h3>
+    <div class="oc-panel table-scroll">
+      <table class="oc-table console-table account-access-table">
+        <thead>
           <tr>
-            <td class="oc-num">{{ loop.index }}</td>
-            <td>
-              <a class="oc-link" href="/exits/{{ e.id }}">{{ e.name }}</a>
-              {% if e.country %}<div class="cell-sub">{{ e.country }}</div>{% endif %}
-              <div class="actions exit-markers">{{ exit_state(exit_states[e.iface]) }}</div>
+            <th scope="col" class="account-access-table__grip" aria-label="Reorder"></th>
+            <th scope="col" class="account-access-table__state">State</th>
+            <th scope="col">Exit</th>
+            <th scope="col" class="account-access-table__check">Access</th>
+          </tr>
+        </thead>
+        <tbody>
+        {% for e in internet_exits %}
+          {% set granted_here = e.enabled and e.id in granted %}
+          <tr data-exit-id="{{ e.id }}"{% if granted_here %} data-reorder{% endif %}{% if not granted_here %} class="is-disabled"{% endif %}>
+            <td class="account-access-table__grip">
+              <button type="button" class="exit-grip" title="Drag to reorder"
+                      aria-label="Reorder {{ e.name }}. Drag it, or press Alt with the arrow keys."
+                      {% if not granted_here %}hidden{% endif %}>
+                <svg width="12" height="16" viewBox="0 0 12 16" aria-hidden="true" fill="currentColor">
+                  <circle cx="3" cy="4" r="1.2"/><circle cx="9" cy="4" r="1.2"/>
+                  <circle cx="3" cy="8" r="1.2"/><circle cx="9" cy="8" r="1.2"/>
+                  <circle cx="3" cy="12" r="1.2"/><circle cx="9" cy="12" r="1.2"/>
+                </svg>
+              </button>
             </td>
+            <td class="account-access-table__state">{{ exit_state(exit_states[e.iface]) }}</td>
             <td>
-              <div class="actions" style="flex-wrap:nowrap">
-                <form method="post" action="/accounts/{{ account.id }}/order">
-                  <input type="hidden" name="csrf_token" value="{{ csrf }}">
-                  <input type="hidden" name="exit_id" value="{{ e.id }}">
-                  <input type="hidden" name="direction" value="up">
-                  <button class="oc-btn oc-btn--neutral oc-btn--sm" {{ 'disabled' if loop.first }}>up</button>
-                </form>
-                <form method="post" action="/accounts/{{ account.id }}/order">
-                  <input type="hidden" name="csrf_token" value="{{ csrf }}">
-                  <input type="hidden" name="exit_id" value="{{ e.id }}">
-                  <input type="hidden" name="direction" value="down">
-                  <button class="oc-btn oc-btn--neutral oc-btn--sm" {{ 'disabled' if loop.last }}>down</button>
-                </form>
+              <div class="exit-cell">
+                <div class="exit-cell__name">
+                  <a class="oc-link" href="/exits/{{ e.id }}">{{ e.name }}</a>
+                </div>
+                <div class="exit-cell__meta">
+                  {% if e.country %}{{ e.country }} · {% endif %}<span class="oc-mono">{{ e.iface }}</span>
+                </div>
               </div>
+            </td>
+            <td class="account-access-table__check">
+              <label class="oc-switch" title="{{ 'Disabled exit' if not e.enabled else 'Access for this account' }}">
+                <input form="account-access" type="checkbox" name="exits" value="{{ e.id }}"
+                       aria-label="Access to {{ e.name }}"
+                       {% if granted_here %}checked{% endif %} {% if not e.enabled %}disabled{% endif %}>
+                <span class="oc-switch__track"><span class="oc-switch__thumb"></span></span>
+              </label>
             </td>
           </tr>
         {% endfor %}
         </tbody>
       </table>
-      </div>
-      <form method="post" action="/accounts/{{ account.id }}/order/apply" style="margin-top:14px"
+    </div>
+    {% endif %}
+
+    {% if routed %}
+    <h3 class="oc-section__title account-subhead">Subnets</h3>
+    <div class="oc-panel table-scroll">
+      <table class="oc-table console-table account-subnets-table">
+        <thead>
+          <tr>
+            <th scope="col" class="account-access-table__state">State</th>
+            <th scope="col">Exit</th>
+            <th scope="col" class="account-access-table__check">Access</th>
+          </tr>
+        </thead>
+        <tbody>
+        {% for e in routed %}
+          {% set granted_here = e.enabled and e.id in granted %}
+          <tr data-subnet-id="{{ e.id }}"{% if not granted_here %} class="is-disabled"{% endif %}>
+            <td class="account-access-table__state">{{ exit_state(exit_states[e.iface]) }}</td>
+            <td>
+              <div class="exit-cell">
+                <div class="exit-cell__name">
+                  <a class="oc-link" href="/exits/{{ e.id }}">{{ e.name }}</a>
+                  <span class="oc-badge oc-badge--subtle">Subnets</span>
+                </div>
+                <div class="exit-cell__meta oc-mono">{{ e.routes }}</div>
+              </div>
+            </td>
+            <td class="account-access-table__check">
+              <label class="oc-switch" title="{{ 'Disabled exit' if not e.enabled else 'Access for this account' }}">
+                <input form="account-access" type="checkbox" name="exits" value="{{ e.id }}"
+                       aria-label="Access to {{ e.name }}"
+                       {% if granted_here %}checked{% endif %} {% if not e.enabled %}disabled{% endif %}>
+                <span class="oc-switch__track"><span class="oc-switch__thumb"></span></span>
+              </label>
+            </td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% endif %}
+
+    {% if not internet_exits and not routed %}
+    <div class="oc-empty">No exits are configured yet</div>
+    {% endif %}
+
+    <div class="actions" style="margin-top:12px">
+      <button form="account-access" class="oc-btn oc-btn--neutral">save access</button>
+      <form method="post" action="/accounts/{{ account.id }}/order/apply"
             onsubmit="return confirm('reset the exit order of every configuration to the account order?')">
         <input type="hidden" name="csrf_token" value="{{ csrf }}">
-        <button class="oc-btn oc-btn--neutral oc-btn--sm">apply to all configurations</button>
+        <button class="oc-btn oc-btn--neutral">apply order to all configurations</button>
       </form>
-      {% else %}
-      <p class="oc-muted" style="margin:0">no internet exits to order</p>
-      {% endif %}
     </div>
+    <span id="order-status" class="oc-hint" role="status" aria-live="polite"></span>
+    <p class="oc-hint" style="margin-top:8px">
+      Order changes apply to new configurations only. “Apply order” resets every
+      configuration of this account to the order above.
+    </p>
   </section>
 
   <details class="manage-block"><summary>Checks ({{ checks | length }})</summary>
@@ -190,7 +217,7 @@
     </div>
     {% if configs %}
     <div class="oc-panel table-scroll">
-      <table class="oc-table">
+      <table class="oc-table console-table account-configs-table">
         <thead><tr><th scope="col">Configuration</th><th scope="col">Current exit</th><th scope="col">Access</th></tr></thead>
         <tbody>
         {% for c in configs %}
@@ -222,9 +249,9 @@
     <form method="post" action="/accounts/{{ account.id }}/configs" class="actions"
           style="margin-top:12px; max-width:520px">
       <input type="hidden" name="csrf_token" value="{{ csrf }}">
-      <input class="oc-input oc-input--sm" type="text" name="name" maxlength="32"
+      <input class="oc-input" type="text" name="name" maxlength="32"
              aria-label="Configuration name" placeholder="Name (optional)" spellcheck="false" style="flex:1">
-      <button class="oc-btn oc-btn--contrast oc-btn--sm">Add configuration</button>
+      <button class="oc-btn oc-btn--neutral">Add configuration</button>
     </form>
     {% else %}
     <p class="oc-hint" style="margin-top:10px">Configuration limit reached</p>
@@ -238,9 +265,9 @@
       <form method="post" action="/accounts/{{ account.id }}/max-configs"
             class="actions" style="max-width:420px">
         <input type="hidden" name="csrf_token" value="{{ csrf }}">
-        <input class="oc-input oc-input--sm" type="number" name="max_configs" min="1"
+        <input class="oc-input" type="number" name="max_configs" min="1"
                value="{{ account.max_configs or '' }}" placeholder="{{ default_limit }}" style="flex:1">
-        <button class="oc-btn oc-btn--neutral oc-btn--sm">save limit</button>
+        <button class="oc-btn oc-btn--neutral">save limit</button>
       </form>
     </div>
   </section>
@@ -259,16 +286,16 @@
       <div class="actions" style="margin-top:16px">
         <form method="post" action="/accounts/{{ account.id }}/password">
           <input type="hidden" name="csrf_token" value="{{ csrf }}">
-          <button class="oc-btn oc-btn--neutral oc-btn--sm">reset password</button>
+          <button class="oc-btn oc-btn--neutral">reset password</button>
         </form>
         <form method="post" action="/accounts/{{ account.id }}/toggle">
           <input type="hidden" name="csrf_token" value="{{ csrf }}">
-          <button class="oc-btn oc-btn--neutral oc-btn--sm">{{ 'disable login' if account.enabled else 'enable login' }}</button>
+          <button class="oc-btn oc-btn--neutral">{{ 'disable login' if account.enabled else 'enable login' }}</button>
         </form>
         <form method="post" action="/accounts/{{ account.id }}/delete"
               data-confirm="Delete {{ account.email }}? {{ configs | length }} {{ 'configuration' if configs | length == 1 else 'configurations' }} will be deleted, their .conf files will stop working, and all sessions will end.">
           <input type="hidden" name="csrf_token" value="{{ csrf }}">
-          <button class="oc-btn oc-btn--ghost-danger oc-btn--sm">delete account</button>
+          <button class="oc-btn oc-btn--ghost-danger">delete account</button>
         </form>
       </div>
     </div>
@@ -334,5 +361,142 @@
 })();
 
 kaskadLive(20);
+</script>
+
+<script>
+(function () {
+  // Exits: drag a row by its grip, or focus the grip and press Alt with the
+  // arrow keys, Home or End. Toggling a switch moves the row to the bottom of
+  // its own table and hides the grip straight away; the access form saves the
+  // checkboxes, the order is posted as soon as it changes.
+  const internet = document.querySelector('.account-access-table');
+  const subnets = document.querySelector('.account-subnets-table');
+  const status = document.getElementById('order-status');
+  const csrf = document.querySelector('#account-access input[name="csrf_token"]');
+  if (!status || !csrf) return;
+  const accountId = {{ account.id }};
+  let dragged = null;
+  let startOrder = '';
+
+  function ordered() {
+    return internet
+      ? Array.from(internet.tBodies[0].querySelectorAll('tr[data-reorder]'))
+      : [];
+  }
+
+  function snapshot() {
+    return ordered().map(row => row.dataset.exitId).join(',');
+  }
+
+  function firstDimmed(table) {
+    return Array.from(table.tBodies[0].rows)
+      .find(row => row.classList.contains('is-disabled')) || null;
+  }
+
+  function place(list) {
+    const tbody = internet.tBodies[0];
+    const anchor = firstDimmed(internet);
+    list.forEach(row => tbody.insertBefore(row, anchor));
+  }
+
+  function save() {
+    const form = new URLSearchParams();
+    form.append('csrf_token', csrf.value);
+    ordered().forEach(row => form.append('order', row.dataset.exitId));
+    fetch('/accounts/' + accountId + '/order/set', {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: {'Content-Type': 'application/x-www-form-urlencoded',
+                'X-Requested-With': 'fetch'},
+      body: form.toString()
+    }).then(response => {
+      if (!response.ok) throw new Error('save failed');
+      status.textContent = 'Order saved';
+      window.setTimeout(() => {
+        if (status.textContent === 'Order saved') status.textContent = '';
+      }, 2000);
+    }).catch(() => { status.textContent = 'Could not save the order'; });
+  }
+
+  function finish() {
+    if (!dragged) return;
+    dragged.classList.remove('is-dragging');
+    dragged = null;
+    if (snapshot() !== startOrder) save();
+  }
+
+  if (internet) {
+    internet.addEventListener('pointerdown', event => {
+      const grip = event.target.closest('.exit-grip');
+      if (!grip || grip.hidden || (event.pointerType === 'mouse' && event.button > 0)) return;
+      event.preventDefault();
+      dragged = grip.closest('tr');
+      startOrder = snapshot();
+      dragged.classList.add('is-dragging');
+      if (grip.setPointerCapture) grip.setPointerCapture(event.pointerId);
+    });
+
+    internet.addEventListener('pointermove', event => {
+      if (!dragged) return;
+      const others = ordered().filter(row => row !== dragged);
+      const before = others.find(row => {
+        const box = row.getBoundingClientRect();
+        return event.clientY < box.top + box.height / 2;
+      });
+      const list = others.slice();
+      list.splice(before ? others.indexOf(before) : others.length, 0, dragged);
+      place(list);
+    });
+
+    ['pointerup', 'pointercancel'].forEach(name => {
+      internet.addEventListener(name, finish);
+    });
+
+    internet.addEventListener('keydown', event => {
+      const grip = event.target.closest('.exit-grip');
+      if (!grip || grip.hidden || !event.altKey) return;
+      const row = grip.closest('tr');
+      const list = ordered();
+      const index = list.indexOf(row);
+      let target = -1;
+      if (event.key === 'ArrowUp') target = index - 1;
+      else if (event.key === 'ArrowDown') target = index + 1;
+      else if (event.key === 'Home') target = 0;
+      else if (event.key === 'End') target = list.length - 1;
+      else return;
+      event.preventDefault();
+      if (target < 0 || target > list.length - 1 || target === index) return;
+      list.splice(index, 1);
+      list.splice(target, 0, row);
+      place(list);
+      grip.focus({preventScroll: true});
+      save();
+    });
+  }
+
+  // Both tables react to the switch at once: dim, and move within this table.
+  if (subnets) {
+    subnets.addEventListener('change', handleToggle);
+  }
+  if (internet) {
+    internet.addEventListener('change', handleToggle);
+  }
+
+  function handleToggle(event) {
+    const box = event.target.closest('input[name="exits"]');
+    if (!box) return;
+    const row = box.closest('tr');
+    const table = row.closest('table');
+    const checked = box.checked;
+    row.classList.toggle('is-disabled', !checked);
+    if (table === internet) {
+      row.toggleAttribute('data-reorder', checked);
+      const grip = row.querySelector('.exit-grip');
+      if (grip) grip.hidden = !checked;
+    }
+    if (checked) table.tBodies[0].insertBefore(row, firstDimmed(table));
+    else table.tBodies[0].appendChild(row);
+  }
+})();
 </script>
 {% endblock %}

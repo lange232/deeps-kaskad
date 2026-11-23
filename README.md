@@ -374,6 +374,24 @@ The panel shows the version and the commit it runs; the commit comes from
 `git rev-parse --short` with a `-dirty` suffix when the tree has uncommitted
 changes, so a deploy from an unclean tree is visible.
 
+## Local preview
+
+The panel can be run on a workstation without touching `/etc/kaskad` or the
+real database:
+
+```bash
+scripts/dev-ui.py                  # http://127.0.0.1:8081
+scripts/dev-ui.py --scenario down  # exits down, traffic moved to awg2
+scripts/dev-ui.py --reset          # rebuild the demo data
+```
+
+It uses a separate SQLite database under `~/.local/share/kaskad-dev`, signs in
+as the administrator automatically, and replaces `awg`, `ip`, `systemctl` and
+the failover status with stubs. Templates and static files are re-read on
+every request; changes to `panel/*.py` restart it. This is a preview, not a
+second panel: there is no real login, no TLS, and every change goes to the
+disposable demo database.
+
 ## Panel
 
 `https://<host>:<port>`, FastAPI + SQLite. The port is `kaskad_panel_port`

@@ -1209,6 +1209,135 @@ class AccountTests(PanelTestCase):
             self.assertEqual(conn.execute(
                 "SELECT count(*) FROM accounts").fetchone()[0], 1)
 
+    def test_exits_and_subnets_are_separate_tables(self):
+        aid, _ = self.seed_client()
+        self.seed_exit("north", "awg1")
+        self.seed_exit("subnet-lab", "awg2", mode="routes",
+                       routes="10.5.0.0/24")
+        self.login_admin()
+        page = self.client.get(f"/accounts/{aid}").text
+        self.assertIn('class="oc-table console-table account-access-table"', page)
+        self.assertIn('class="oc-table console-table account-subnets-table"', page)
+        self.assertIn(">Exits</h3>", page)
+        self.assertIn(">Subnets</h3>", page)
+        self.assertNotIn("?access=", page)
+
+    def test_unchecked_rows_sink_and_lose_the_grip(self):
+        aid, cid = self.seed_client()
+        wanted = self.seed_exit("wanted", "awg1", priority=50)
+        spare = self.seed_exit("spare", "awg2", priority=1)
+        self.grant(aid, cid, wanted)
+        self.login_admin()
+        with mock.patch.object(app, "read_status", return_value={"ts": int(time.time())}):
+            page = self.client.get(f"/accounts/{aid}").text
+        # The granted exit comes first even though its priority is higher.
+        self.assertLess(page.index(">wanted<"), page.index(">spare<"))
+        spare_row = re.search(
+            rf'<tr data-exit-id="{spare}"[^>]*>(.*?)</tr>', page, re.S).group(1)
+        self.assertIn("is-disabled", re.search(
+            rf'<tr data-exit-id="{spare}"[^>]*>', page).group(0))
+        self.assertRegex(spare_row, r'class="exit-grip"[^>]*hidden')
+
+    def test_exit_order_is_replaced_in_one_request(self):
+        aid, cid = self.seed_client()
+        first = self.seed_exit("first", "awg1", priority=10)
+        second = self.seed_exit("second", "awg2", priority=20)
+        third = self.seed_exit("third", "awg3", priority=30)
+        for exit_id, priority in ((first, 10), (second, 20), (third, 30)):
+            self.grant(aid, cid, exit_id, priority)
+        self.login_admin()
+        csrf = self.csrf(f"/accounts/{aid}")
+        response = self.client.post(f"/accounts/{aid}/order/set", data={
+            "order": [third, first, second], "csrf_token": csrf,
+        })
+        self.assertEqual(response.status_code, 303)
+        self.assertEqual([e for e, _ in self.account_grants(aid)],
+                         [third, first, second])
+        # Existing configurations keep their own order until "apply order".
+        self.assertEqual([e for e, _ in self.grants(cid)], [first, second, third])
+        # The table lists the granted exits in that same order.
+        page = self.client.get(f"/accounts/{aid}").text
+        self.assertLess(page.index(">third<"), page.index(">first<"))
+        self.assertLess(page.index(">first<"), page.index(">second<"))
+
+    def test_exit_order_must_list_every_granted_exit_once(self):
+        aid, cid = self.seed_client()
+        first = self.seed_exit("first", "awg1")
+        second = self.seed_exit("second", "awg2")
+        stranger = self.seed_exit("stranger", "awg3")
+        self.grant(aid, cid, first, 10)
+        self.grant(aid, cid, second, 20)
+        self.login_admin()
+        csrf = self.csrf(f"/accounts/{aid}")
+        for order in ([first], [first, second, stranger], [first, first]):
+            with self.subTest(order=order):
+                response = self.client.post(f"/accounts/{aid}/order/set", data={
+                    "order": order, "csrf_token": csrf,
+                })
+                self.assertEqual(response.status_code, 400)
+        self.assertEqual([e for e, _ in self.account_grants(aid)], [first, second])
+        self.assertEqual([e for e, _ in self.grants(cid)], [first, second])
+
+    def test_exit_order_answers_the_drag_script_with_json(self):
+        aid, cid = self.seed_client()
+        first = self.seed_exit("first", "awg1")
+        second = self.seed_exit("second", "awg2")
+        self.grant(aid, cid, first, 10)
+        self.grant(aid, cid, second, 20)
+        self.login_admin()
+        csrf = self.csrf(f"/accounts/{aid}")
+        response = self.client.post(
+            f"/accounts/{aid}/order/set",
+            data={"order": [second, first], "csrf_token": csrf},
+            headers={"X-Requested-With": "fetch"},
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {"ok": True})
+        self.assertEqual([e for e, _ in self.account_grants(aid)], [second, first])
+
+    def test_admin_account_offers_a_grip_instead_of_move_buttons(self):
+        aid, cid = self.seed_client()
+        granted = self.seed_exit("granted", "awg1")
+        self.seed_exit("spare", "awg2")
+        self.grant(aid, cid, granted)
+        self.login_admin()
+        with mock.patch.object(app, "read_status", return_value={"ts": int(time.time())}):
+            page = self.client.get(f"/accounts/{aid}").text
+        self.assertIn('class="exit-grip"', page)
+        self.assertIn(f'data-exit-id="{granted}"', page)
+        self.assertNotIn('>up</button>', page)
+        self.assertNotIn('>down</button>', page)
+        self.assertIn('id="order-status"', page)
+        self.assertIn("aria-live=\"polite\"", page)
+
+    def test_rows_without_access_are_dimmed_like_the_console(self):
+        aid, cid = self.seed_client()
+        self.grant(aid, cid, self.seed_exit("granted", "awg1"))
+        self.seed_exit("spare", "awg2")
+        self.login_admin()
+        with mock.patch.object(app, "read_status", return_value={"ts": int(time.time())}):
+            page = self.client.get(f"/accounts/{aid}").text
+        self.assertEqual(page.count('class="is-disabled"'), 1)
+        self.assertRegex(page, rf'<tr data-exit-id="\d+" class="is-disabled">[\s\S]*?hidden')
+
+    def test_admin_account_lists_disabled_exits_last_and_dimmed(self):
+        aid, cid = self.seed_client()
+        live = self.seed_exit("live", "awg2", priority=50)
+        retired = self.seed_exit("retired", "awg1", priority=1, enabled=0)
+        self.grant(aid, cid, live)
+        self.login_admin()
+        with mock.patch.object(app, "read_status", return_value={"ts": int(time.time())}):
+            page = self.client.get(f"/accounts/{aid}").text
+        self.assertIn('class="is-disabled"', page)
+        self.assertIn('aria-label="Access to retired"', page)
+        self.assertLess(page.index(">live<"), page.index(">retired<"))
+        with app.db() as conn:
+            disabled_input = re.search(
+                rf'<input form="account-access"[^>]*name="exits" value="{retired}"[^>]*>',
+                page).group(0)
+        self.assertIn("disabled", disabled_input)
+        self.assertNotIn("checked", disabled_input)
+
     def test_delete_account_removes_its_configs(self):
         aid, _ = self.seed_client()
         self.login_admin()
@@ -1326,7 +1455,7 @@ class RoutedChoiceTests(PanelTestCase):
         self.login_admin()
         text = self.client.get(f"/configs/{cid}").text
         self.assertIn(f'/accounts/{aid}#access', text)
-        self.assertIn("0 of 1 allowed subnets included", text)
+        self.assertIn("0 of 1 selected", text)
         self.assertIn("ungranted-subnet", text)
         self.assertNotIn(f'name="exits" value="{foreign}"', text)
         self.login("c1@example.com", USER_PASSWORD)
@@ -1817,23 +1946,24 @@ class ConfigPingTests(PanelTestCase):
         self.assertEqual(response.status_code, 200)
         return response.text
 
-    def test_card_shows_the_total_latency(self):
+    def test_card_shows_only_the_server_to_exit_latency(self):
         text = self.card({
             "ts": int(time.time()),
             "exits": {"awg1": {"alive": True, "rtt_ms": 40}},
             "client_ping": {"10.80.0.2": 10},
         })
-        self.assertIn("≈ 50 ms", text)
-        self.assertIn("client 10 + exit 40 ms", text)
+        self.assertIn('data-live="exit-rtt|awg1">40 ms</span>', text)
+        self.assertNotIn("≈ 50 ms", text)
+        self.assertNotIn("client 10 + exit", text)
 
-    def test_card_falls_back_to_the_exit_latency(self):
+    def test_card_shows_exit_latency_without_client_ping(self):
         text = self.card({
             "ts": int(time.time()),
             "exits": {"awg1": {"alive": True, "rtt_ms": 40}},
             "client_ping": {},
         })
-        self.assertIn("exit 40 ms", text)
-        self.assertIn("S1 to exit only", text)
+        self.assertIn('data-live="exit-rtt|awg1">40 ms</span>', text)
+        self.assertNotIn("S1 to exit only", text)
 
     def test_card_does_not_claim_a_stale_exit_is_up(self):
         text = self.card({
@@ -1841,7 +1971,7 @@ class ConfigPingTests(PanelTestCase):
             "exits": {"awg1": {"alive": True, "rtt_ms": 40}},
         })
         self.assertIn('data-live="admin-exit|awg1">No data</span>', text)
-        self.assertIn("data-route-current hidden", text)
+        self.assertIn('data-iface="awg1" hidden>Active</span>', text)
         self.assertNotIn(">Up</span>", text)
         self.assertNotIn("40 ms", text)
 
@@ -1858,12 +1988,15 @@ class ConfigPingTests(PanelTestCase):
                   "clients": {"10.80.0.2": "awg2"}}
         with mock.patch.object(app, "read_status", return_value=status):
             routes = self.client.get("/status.json").json()["configs"]
-            for path in ("/configs", f"/configs/{cid}", f"/accounts/{aid}"):
+            for path in ("/configs", f"/accounts/{aid}"):
                 with self.subTest(path=path):
                     page = self.client.get(path)
                     self.assertEqual(page.status_code, 200)
                     self.assertIn(f'data-route-current href="/exits/{current}">fallback', page.text)
                     self.assertIn(f'Pinned · <a class="oc-link" href="/exits/{pinned}">preferred', page.text)
+            detail = self.client.get(f"/configs/{cid}").text
+            self.assertIn(f'data-iface="awg2">Active', detail)
+            self.assertIn('oc-badge--subtle">Pinned', detail)
         self.assertEqual(routes["10.80.0.2"]["admin_route"]["current"]["id"], current)
         self.assertEqual(routes["10.80.0.2"]["admin_route"]["pinned"]["id"], pinned)
 
@@ -2022,6 +2155,114 @@ class GrantTests(PanelTestCase):
         expected = {first: 10, second: 20}
         self.assertEqual(dict(self.account_grants(aid)), expected)
         self.assertEqual(dict(self.grants(cid)), expected)
+
+    def test_config_exit_order_is_replaced_in_one_request(self):
+        aid, cid = self.seed_client()
+        first = self.seed_exit("e1", "awg1", priority=10)
+        second = self.seed_exit("e2", "awg2", priority=20)
+        third = self.seed_exit("e3", "awg3", priority=30)
+        for exit_id, priority in ((first, 10), (second, 20), (third, 30)):
+            self.grant(aid, cid, exit_id, priority)
+        self.login_admin()
+        csrf = self.csrf(f"/configs/{cid}")
+        response = self.client.post(f"/configs/{cid}/order/set", data={
+            "order": [third, second, first], "csrf_token": csrf,
+        })
+        self.assertEqual(response.status_code, 303)
+        self.assertEqual([e for e, _ in self.grants(cid)], [third, second, first])
+        # The account order is untouched until "apply to all".
+        self.assertEqual([e for e, _ in self.account_grants(aid)],
+                         [first, second, third])
+
+    def test_config_exit_order_rejects_a_partial_or_foreign_list(self):
+        aid, cid = self.seed_client()
+        first = self.seed_exit("e1", "awg1")
+        second = self.seed_exit("e2", "awg2")
+        stranger = self.seed_exit("e3", "awg3")
+        self.grant(aid, cid, first, 10)
+        self.grant(aid, cid, second, 20)
+        self.login_admin()
+        csrf = self.csrf(f"/configs/{cid}")
+        for order in ([first], [second, first, stranger], [first, first]):
+            with self.subTest(order=order):
+                response = self.client.post(f"/configs/{cid}/order/set", data={
+                    "order": order, "csrf_token": csrf,
+                })
+                self.assertEqual(response.status_code, 400)
+        self.assertEqual([e for e, _ in self.grants(cid)], [first, second])
+
+    def test_admin_can_pin_and_unpin_a_configuration_exit(self):
+        aid, cid = self.seed_client()
+        first = self.seed_exit("e1", "awg1")
+        second = self.seed_exit("e2", "awg2")
+        self.grant(aid, cid, first, 10)
+        self.grant(aid, cid, second, 20)
+        self.login_admin()
+        csrf = self.csrf(f"/configs/{cid}")
+        response = self.client.post(f"/configs/{cid}/pin", data={
+            "exit_id": second, "csrf_token": csrf,
+        })
+        self.assertEqual(response.status_code, 303)
+        with app.db() as conn:
+            self.assertEqual(conn.execute(
+                "SELECT pinned_iface FROM clients WHERE id = ?", (cid,)).fetchone()[0],
+                "awg2")
+        page = self.client.get(f"/configs/{cid}").text
+        self.assertIn(f'value="{second}" selected', page)
+        self.assertIn('oc-badge--subtle">Pinned', page)
+        self.client.post(f"/configs/{cid}/pin", data={
+            "exit_id": 0, "csrf_token": csrf,
+        })
+        with app.db() as conn:
+            self.assertEqual(conn.execute(
+                "SELECT pinned_iface FROM clients WHERE id = ?", (cid,)).fetchone()[0],
+                "")
+
+    def test_admin_cannot_pin_an_exit_the_configuration_lacks(self):
+        aid, cid = self.seed_client()
+        granted = self.seed_exit("e1", "awg1")
+        stranger = self.seed_exit("e2", "awg2")
+        self.grant(aid, cid, granted, 10)
+        self.login_admin()
+        csrf = self.csrf(f"/configs/{cid}")
+        response = self.client.post(f"/configs/{cid}/pin", data={
+            "exit_id": stranger, "csrf_token": csrf,
+        })
+        self.assertEqual(response.status_code, 400)
+        with app.db() as conn:
+            self.assertEqual(conn.execute(
+                "SELECT pinned_iface FROM clients WHERE id = ?", (cid,)).fetchone()[0],
+                "")
+
+    def test_config_page_marks_the_exit_the_traffic_uses(self):
+        aid, cid = self.seed_client()
+        self.grant(aid, cid, self.seed_exit("e1", "awg1"), 10)
+        self.grant(aid, cid, self.seed_exit("e2", "awg2"), 20)
+        self.login_admin()
+        status = {"ts": int(time.time()), "clients": {"10.80.0.2": "awg2"}}
+        with mock.patch.object(app, "read_status", return_value=status):
+            page = self.client.get(f"/configs/{cid}").text
+        self.assertRegex(page, r'data-iface="awg2">Active</span>')
+        self.assertRegex(page, r'data-iface="awg1"\s+hidden>Active</span>')
+
+    def test_config_page_uses_grips_and_switches(self):
+        aid, cid = self.seed_client()
+        self.grant(aid, cid, self.seed_exit("e1", "awg1"))
+        routed = self.seed_exit("sub", "awg2", mode="routes",
+                                routes="10.5.0.0/24")
+        with app.db() as conn:
+            conn.execute("INSERT INTO account_exits VALUES (?, ?, 20)",
+                         (aid, routed))
+            conn.execute("INSERT INTO client_exits VALUES (?, ?)",
+                         (cid, routed))
+        self.login_admin()
+        with mock.patch.object(app, "read_status", return_value={"ts": int(time.time())}):
+            page = self.client.get(f"/configs/{cid}").text
+        self.assertIn('class="oc-table console-table config-exits-table"', page)
+        self.assertIn('class="exit-grip"', page)
+        self.assertIn('class="oc-switch"', page)
+        self.assertNotIn('>up</button>', page)
+        self.assertNotIn('>down</button>', page)
 
     def test_disabled_exit_cannot_be_granted(self):
         aid, cid = self.seed_client()

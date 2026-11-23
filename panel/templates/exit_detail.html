@@ -63,11 +63,11 @@
       <div class="actions">
         <form method="post" action="/exits/{{ exit.id }}/activate">
           <input type="hidden" name="csrf_token" value="{{ csrf }}">
-          <button class="oc-btn oc-btn--outline oc-btn--sm" data-live="global-pin-button|{{ exit.iface }}" {{ 'disabled' if (exit.active and exit.pinned) or not exit.enabled }}>Make global exit</button>
+          <button class="oc-btn oc-btn--outline" data-live="global-pin-button|{{ exit.iface }}" {{ 'disabled' if (exit.active and exit.pinned) or not exit.enabled }}>Make global exit</button>
         </form>
         <form method="post" action="/exits/auto" data-live="global-auto-button|{{ exit.iface }}"{% if not exit.pinned %} hidden{% endif %}>
           <input type="hidden" name="csrf_token" value="{{ csrf }}">
-          <button class="oc-btn oc-btn--neutral oc-btn--sm">Return to auto</button>
+          <button class="oc-btn oc-btn--neutral">Return to auto</button>
         </form>
       </div>
     </div>
@@ -123,7 +123,7 @@
         <input class="oc-input" type="text" name="comment" maxlength="120"
                value="{{ exit.comment }}" placeholder="Amsterdam, 2 Gbit/s">
       </label>
-      <button class="oc-btn oc-btn--outline oc-btn--sm" style="margin-top:10px">save</button>
+      <button class="oc-btn oc-btn--outline" style="margin-top:10px">save</button>
     </form>
 
     </div>
@@ -134,12 +134,12 @@
     <div class="actions">
       <form method="post" action="/exits/{{ exit.id }}/toggle">
         <input type="hidden" name="csrf_token" value="{{ csrf }}">
-        <button class="oc-btn oc-btn--neutral oc-btn--sm">{{ 'disable' if exit.enabled else 'enable' }}</button>
+        <button class="oc-btn oc-btn--neutral">{{ 'disable' if exit.enabled else 'enable' }}</button>
       </form>
       <form method="post" action="/exits/{{ exit.id }}/delete"
             data-confirm="Delete exit {{ exit.name }}? {% if exit.mode == 'routes' %}Configurations will lose access to its subnets.{% else %}Configurations using it will need another healthy, allowed internet exit.{% endif %}">
         <input type="hidden" name="csrf_token" value="{{ csrf }}">
-        <button class="oc-btn oc-btn--ghost-danger oc-btn--sm">delete</button>
+        <button class="oc-btn oc-btn--ghost-danger">delete</button>
       </form>
     </div>
   </details>

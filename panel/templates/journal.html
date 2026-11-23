@@ -10,14 +10,14 @@
 <div class="toolbar">
   <form method="get" action="/journal" class="actions activity-filter">
     <label for="activity-action">Event type</label>
-    <select id="activity-action" name="action" class="oc-input oc-input--sm">
+    <select id="activity-action" name="action" class="oc-input">
       <option value="">All events</option>
       {% for code in actions %}
       <option value="{{ code }}"{% if action == code %} selected{% endif %}>{{ code | audit_label }}</option>
       {% endfor %}
     </select>
-    <button class="oc-btn oc-btn--neutral oc-btn--sm">Filter</button>
-    {% if action %}<a class="oc-btn oc-btn--ghost oc-btn--sm" href="/journal">Clear filter</a>{% endif %}
+    <button class="oc-btn oc-btn--neutral">Filter</button>
+    {% if action %}<a class="oc-btn oc-btn--ghost" href="/journal">Clear filter</a>{% endif %}
   </form>
   <span class="oc-muted oc-num">{{ total }} {{ 'event' if total == 1 else 'events' }}</span>
 </div>

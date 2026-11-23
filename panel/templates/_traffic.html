@@ -1,11 +1,19 @@
 <section id="traffic">
     <div class="toolbar">
       <h2 class="oc-section__title" style="margin:0">traffic</h2>
-      <div class="actions" style="gap:4px">
+      <div class="actions" style="gap:10px">
+        {% if traffic_ip %}
+        <span class="oc-muted oc-mono config-traffic">
+          <span class="oc-num" data-live="rx|{{ traffic_ip }}">{{ (traffic_rx / 1048576) | round(1) }}</span> MiB in ·
+          <span class="oc-num" data-live="tx|{{ traffic_ip }}">{{ (traffic_tx / 1048576) | round(1) }}</span> MiB out
+        </span>
+        {% endif %}
+        <div class="actions" style="gap:4px">
         {% for key in ranges %}
         <a class="oc-btn oc-btn--sm {{ 'oc-btn--contrast' if key == period else 'oc-btn--ghost' }}"
            {% if key == period %}aria-current="true"{% endif %} href="{{ chart_url }}?range={{ key }}#traffic">{{ key }}</a>
         {% endfor %}
+        </div>
       </div>
     </div>
     <div class="oc-panel" style="padding:16px">

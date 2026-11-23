@@ -25,3 +25,6 @@ internal/
 files/awg/*.deb
 files/app/
 inventory.exit.yml
+
+# Reference screenshots and exported pages kept locally, never published.
+artifacts/

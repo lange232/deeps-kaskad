@@ -4,19 +4,19 @@
 {% block body %}
 <div class="page-head toolbar">
   <h1>Configurations</h1>
-  <a class="oc-btn oc-btn--contrast oc-btn--sm" href="/configs/new">Add configuration</a>
+  <a class="oc-btn oc-btn--neutral" href="/configs/new">Add configuration</a>
 </div>
 
 <div class="toolbar toolbar--list">
   <form method="get" action="/configs" class="actions list-search">
-    <input class="oc-input oc-input--sm" type="search" name="q" value="{{ q }}" aria-label="Search configurations" placeholder="Search by name, address or email">
-    <select class="oc-input oc-input--sm" name="state" aria-label="Configuration status">
+    <input class="oc-input" type="search" name="q" value="{{ q }}" aria-label="Search configurations" placeholder="Search by name, address or email">
+    <select class="oc-input" name="state" aria-label="Configuration status">
       {% for value, label in filters.items() %}
       <option value="{{ value }}" {% if value == state %}selected{% endif %}>{{ label }}</option>
       {% endfor %}
     </select>
-    <button class="oc-btn oc-btn--neutral oc-btn--sm">search</button>
-    {% if q or state %}<a class="oc-btn oc-btn--ghost oc-btn--sm" href="/configs">reset</a>{% endif %}
+    <button class="oc-btn oc-btn--neutral">search</button>
+    {% if q or state %}<a class="oc-btn oc-btn--ghost" href="/configs">reset</a>{% endif %}
   </form>
 </div>
 
