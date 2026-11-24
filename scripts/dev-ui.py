@@ -92,6 +92,35 @@ def seed_traffic(conn, configs) -> None:
                 )
 
 
+def top_up_traffic(conn, configs) -> None:
+    """Extends the demo history to now, so a database made yesterday still charts."""
+    import math
+    import time as _time
+
+    now = int(_time.time())
+    hour = 3600
+    for index, cid in enumerate(configs):
+        base = 1_800_000 + index * 700_000
+        for size, span in ((300, 7 * 86400), (3600, 90 * 86400)):
+            last = conn.execute(
+                "SELECT max(ts) FROM traffic WHERE client_id = ? AND step = ?",
+                (cid, size),
+            ).fetchone()[0]
+            if last is None:
+                continue
+            for ts in range(max(last + size, now - span), now, size):
+                point = ts - ts % size
+                night = 0.25 if 2 <= (point // hour) % 24 < 7 else 1.0
+                wave = 1 + 0.55 * math.sin(point / 2600.0 + index)
+                tx = int(base * night * wave)
+                rx = int(tx * 0.22)
+                conn.execute(
+                    "INSERT OR REPLACE INTO traffic (client_id, ts, step, rx, tx) "
+                    "VALUES (?, ?, ?, ?, ?)",
+                    (cid, point, size, rx, tx),
+                )
+
+
 def seed(app) -> None:
     """A small but varied dataset: three configs, four exits, one orphan."""
     with app.db() as conn:
@@ -255,6 +284,11 @@ def build_app(port: int, scenario: str, reset: bool):
     elif stale_seed:
         print("dev-ui: demo data is from an older seed; run with --reset "
               "to add the newer exits", flush=True)
+    with panel.db() as conn:
+        ids = [row[0] for row in conn.execute("SELECT id FROM clients ORDER BY id")]
+        if ids:
+            panel.traffic.ensure_schema(conn)
+            top_up_traffic(conn, ids)
 
     status = failover_status(scenario)
     live = peers(panel)

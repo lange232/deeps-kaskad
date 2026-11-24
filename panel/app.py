@@ -798,8 +798,8 @@ def remote_ip(endpoint: str) -> str:
 
 
 TRAFFIC_RANGES = {"1h": 1, "24h": 24, "7d": 7 * 24, "30d": 30 * 24, "90d": 90 * 24}
-CHART_WIDTH = 720
-CHART_HEIGHT = 180
+CHART_WIDTH = 960
+CHART_HEIGHT = 245
 CHART_COLUMNS = 240
 
 
@@ -840,11 +840,10 @@ def config_traffic_rows(cid: int, hours: int):
 
 
 def build_traffic_chart(step: int, since: int, now: int, rows) -> dict | None:
-    """Downsampled series and totals for the cabinet chart.
+    """Downsampled series, grid and totals for the traffic chart.
 
-    The stored buckets are summed into at most CHART_COLUMNS columns and drawn
-    as bytes per second, so a five-minute point and an hourly point look the
-    same on the time axis.
+    Buckets are summed into at most CHART_COLUMNS points and drawn as bytes per
+    second. Missing buckets break the line instead of drawing through the gap.
     """
     span = max(int(now) - int(since), 1)
     bucket = max(step, math.ceil(span / CHART_COLUMNS / step) * step)
@@ -861,26 +860,69 @@ def build_traffic_chart(step: int, since: int, now: int, rows) -> dict | None:
     if not sums:
         return None
     peak = max(max(pair) for pair in sums.values()) / bucket
+    top, bottom, gutter = 10, CHART_HEIGHT - 5, 36
+    plot = bottom - top
     scale = peak or 1
-    # Two adjacent bars per time bucket. Missing buckets stay blank.
-    slot = CHART_WIDTH * bucket / span
-    bars = []
+
+    def x_at(key: int) -> float:
+        return gutter + ((key * bucket + bucket / 2) / span) * (CHART_WIDTH - gutter)
+
+    def y_at(value: float) -> float:
+        return bottom - (value / scale) * plot
+
+    points: list[dict] = []
+    paths: list[dict] = []
+    run: list[dict] = []
+
+    def close_run() -> None:
+        if not run:
+            return
+        xs = ",".join(f"{point['x']},{point['down']}" for point in run)
+        ups = ",".join(f"{point['x']},{point['up']}" for point in run)
+        def closed(points: str) -> str:
+            return (f"M {run[0]['x']},{bottom} L {points} "
+                    f"L {run[-1]['x']},{bottom} Z")
+
+        paths.append({
+            "down": f"M {xs}",
+            "up": f"M {ups}",
+            "area": closed(xs) if len(run) > 1 else "",
+            "area_up": closed(ups) if len(run) > 1 else "",
+            "dots": [{"x": point["x"], "down": point["down"], "up": point["up"]}
+                     for point in run] if len(run) == 1 else [],
+        })
+        run.clear()
+
+    previous = None
     for key, (rx, tx) in sorted(sums.items()):
-        x = key * slot
-        width = min(slot, CHART_WIDTH - x)
-        bars.append({"x": round(x, 2),
-                     "up_x": round(x + width / 2, 2), "width": round(width * .43, 2),
-                     "down": round(tx / bucket / scale * (CHART_HEIGHT - 4), 2),
-                     "up": round(rx / bucket / scale * (CHART_HEIGHT - 4), 2)})
-    intervals = []
-    for key in range(math.ceil(span / bucket)):
-        start = since + key * bucket
-        end = min(now, start + bucket)
-        rx, tx = sums.get(key, (None, None))
-        intervals.append({"from": start, "to": end, "rx": rx, "tx": tx})
+        if previous is not None and key - previous > 1:
+            close_run()
+        point = {
+            "x": round(x_at(key), 2),
+            "down": round(y_at(tx / bucket), 2),
+            "up": round(y_at(rx / bucket), 2),
+            "rx": rx,
+            "tx": tx,
+            "from": since + key * bucket,
+            "to": min(now, since + (key + 1) * bucket),
+        }
+        points.append(point)
+        run.append(point)
+        previous = key
+    close_run()
+
+    grid = []
+    for fraction in (1, 2 / 3, 1 / 3, 0):
+        y = round(top + (1 - fraction) * plot, 2)
+        grid.append({
+            "y": y,
+            "text_y": round(y + 4, 2),
+            "label": human_rate(peak * fraction) if fraction else "0",
+        })
     return {
         "width": CHART_WIDTH, "height": CHART_HEIGHT,
-        "bars": bars, "intervals": intervals, "interval_fraction": bucket / span,
+        "top": top, "bottom": bottom, "gutter": gutter,
+        "grid": grid, "paths": paths, "points": points,
         "from_ts": since, "to_ts": now,
         "total_rx": human_bytes(total_rx),
         "total_tx": human_bytes(total_tx),

@@ -379,21 +379,22 @@ class TrafficChartTests(unittest.TestCase):
         chart = app.build_traffic_chart(300, now - 3600, now, rows)
         self.assertEqual(chart["total_rx"], "300 B")
         self.assertEqual(chart["total_tx"], "2.9 KiB")
-        self.assertEqual(len(chart["bars"]), 2)
-        self.assertGreater(chart["bars"][0]["down"], chart["bars"][0]["up"])
-        self.assertGreater(chart["bars"][1]["x"], chart["bars"][0]["x"])
+        self.assertEqual(len(chart["points"]), 2)
+        first, second = chart["points"]
+        # The download series is drawn above the upload one, so its y is smaller.
+        self.assertLess(first["down"], first["up"])
+        self.assertGreater(second["x"], first["x"])
 
     def test_isolated_buckets_do_not_fill_the_gap(self):
         chart = app.build_traffic_chart(300, 0, 3600, [
             {"ts": 300, "rx": 0, "tx": 10}, {"ts": 2700, "rx": 20, "tx": 0}])
-        a, b = chart["bars"]
-        self.assertGreater(a["down"], 0)
-        self.assertGreater(b["up"], 0)
-        self.assertEqual(b["x"] - a["x"], chart["width"] * 2400 / 3600)
-        self.assertLess(a["up_x"] + a["width"], b["x"])
-        self.assertEqual(chart["intervals"][1]["tx"], 10)
-        self.assertIsNone(chart["intervals"][0]["rx"])
-        self.assertIsNone(chart["intervals"][2]["rx"])
+        self.assertEqual(len(chart["paths"]), 2)  # the gap breaks the line
+        a, b = chart["points"]
+        self.assertEqual(a["tx"], 10)
+        self.assertEqual(b["rx"], 20)
+        self.assertAlmostEqual(b["x"] - a["x"],
+                               (chart["width"] - chart["gutter"]) * 2400 / 3600,
+                               places=1)
         self.assertEqual(chart["from_ts"], 0)
         self.assertEqual(chart["to_ts"], 3600)
 
@@ -403,10 +404,9 @@ class TrafficChartTests(unittest.TestCase):
     def test_zero_traffic_is_a_sample_not_a_gap(self):
         rows = [{"ts": 300, "rx": 0, "tx": 0}]
         chart = app.build_traffic_chart(300, 0, 3600, rows)
-        self.assertEqual(chart["intervals"][1]["tx"], 0)
-        self.assertEqual(chart["intervals"][1]["rx"], 0)
-        self.assertIsNone(chart["intervals"][0]["rx"])
-        self.assertIsNone(chart["intervals"][0]["tx"])
+        self.assertEqual(len(chart["points"]), 1)
+        point = chart["points"][0]
+        self.assertEqual((point["tx"], point["rx"]), (0, 0))
 
 
 @unittest.skipUnless(app, "fastapi is not installed")

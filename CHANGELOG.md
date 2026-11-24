@@ -12,7 +12,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `scripts/dev-ui.py` runs the panel locally with disposable demo data, an
   automatic administrator sign-in and stubbed system calls, so the interface
   can be checked without a server. The demo database now carries ninety days of
-  hourly traffic and a week of five-minute points, so the chart has data.
+  hourly traffic and a week of five-minute points extended to the current
+  moment on every start, so the chart has data.
 - An administrator can pin a configuration to one of its granted exits or
   return it to automatic, like the cabinet and the app already could.
   `POST /configs/{id}/pin` validates the exit and refuses one the configuration
@@ -32,17 +33,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The account page splits exit grants into two tables, internet exits and
   subnets. Internet exits have a drag grip and both tables have a square access
   switch. Turning a switch off dims the row, moves it to the bottom of its own
-  table and hides the grip before the form is saved; turning it back on returns
-  the row to the end of the checked group.
+  table and hides the grip before saving; turning it back on returns the row to
+  the end of the checked group. One `save` button applies both the switches and
+  the order.
 - The exit order is changed by dragging a grip or with Alt plus the arrow keys,
-  Home and End. The browser posts the whole order to
-  `/accounts/{id}/order/set`; a partial or foreign order is rejected.
+  Home and End. On both pages the change is only marked unsaved until the
+  `save` button on the account page (which applies the switches and the order
+  in one go) or `save order` on the configuration page posts the whole list; a
+  partial or foreign order is rejected, and leaving with unsaved changes asks
+  for confirmation.
 - The configuration page has separate Exit order and Subnets sections instead
-  of one Routing block. Its order posts to `/configs/{id}/order/set`, and the
-  latency column shows only the server-to-exit round trip, right-aligned.
+  of one Routing block. Dragging the order only marks it unsaved; `save order`
+  posts the list to `/configs/{id}/order/set`, and leaving with unsaved changes
+  asks for confirmation. Traffic now sits at the top of the page, above the
+  exit order. The latency column shows only the server-to-exit round
+  trip, right-aligned. The Subnets heading carries its hint inline, without a
+  selected counter or a link to the account page.
 - The configuration connection block is gone: the page header shows the
   connection state, the exit table marks the active row, and the traffic totals
   sit in the traffic header.
+- The traffic chart follows the Activity page: a grid with rate labels,
+  download and upload lines, each with a soft fill, a hover guide with a
+  tooltip and a bordered axis strip. The interval slider is gone.
 
 ## [0.4.11] - 2026-11-22
 

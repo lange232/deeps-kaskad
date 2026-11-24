@@ -168,7 +168,8 @@
     {% endif %}
 
     <div class="actions" style="margin-top:12px">
-      <button form="account-access" class="oc-btn oc-btn--neutral">save access</button>
+      <noscript><button form="account-access" class="oc-btn oc-btn--neutral">save access</button></noscript>
+      <button type="button" id="account-save" class="oc-btn oc-btn--neutral" disabled>save</button>
       <form method="post" action="/accounts/{{ account.id }}/order/apply"
             onsubmit="return confirm('reset the exit order of every configuration to the account order?')">
         <input type="hidden" name="csrf_token" value="{{ csrf }}">
@@ -399,30 +400,76 @@ kaskadLive(20);
     list.forEach(row => tbody.insertBefore(row, anchor));
   }
 
-  function save() {
-    const form = new URLSearchParams();
-    form.append('csrf_token', csrf.value);
-    ordered().forEach(row => form.append('order', row.dataset.exitId));
-    fetch('/accounts/' + accountId + '/order/set', {
+  const saveButton = document.getElementById('account-save');
+  let dirty = false;
+
+  function markDirty() {
+    dirty = true;
+    status.textContent = 'Unsaved changes';
+    if (saveButton) saveButton.disabled = false;
+  }
+
+  // Checked rows of one table, internet or subnets, in the order shown.
+  function checkedIds(table) {
+    if (!table) return [];
+    return Array.from(table.tBodies[0].rows)
+      .filter(row => row.dataset.exitId || row.dataset.subnetId)
+      .filter(row => {
+        const box = row.querySelector('input[name="exits"]');
+        return !box || box.checked;
+      })
+      .map(row => row.dataset.exitId || row.dataset.subnetId);
+  }
+
+  function saveAll() {
+    // The order endpoint needs every granted internet exit; the access form
+    // needs the subnets too, so it receives both lists.
+    const orderIds = checkedIds(internet);
+    const grantIds = orderIds.concat(checkedIds(subnets));
+    const grants = new URLSearchParams();
+    grants.append('csrf_token', csrf.value);
+    grantIds.forEach(id => grants.append('exits', id));
+    fetch('/accounts/' + accountId + '/exits', {
       method: 'POST',
       credentials: 'same-origin',
       headers: {'Content-Type': 'application/x-www-form-urlencoded',
                 'X-Requested-With': 'fetch'},
-      body: form.toString()
+      body: grants.toString()
     }).then(response => {
-      if (!response.ok) throw new Error('save failed');
-      status.textContent = 'Order saved';
+      if (!response.ok && response.status !== 303) throw new Error('access');
+      const order = new URLSearchParams();
+      order.append('csrf_token', csrf.value);
+      orderIds.forEach(id => order.append('order', id));
+      return fetch('/accounts/' + accountId + '/order/set', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: {'Content-Type': 'application/x-www-form-urlencoded',
+                  'X-Requested-With': 'fetch'},
+        body: order.toString()
+      });
+    }).then(response => {
+      if (!response.ok) throw new Error('order');
+      dirty = false;
+      if (saveButton) saveButton.disabled = true;
+      status.textContent = 'Saved';
       window.setTimeout(() => {
-        if (status.textContent === 'Order saved') status.textContent = '';
+        if (status.textContent === 'Saved') status.textContent = '';
       }, 2000);
-    }).catch(() => { status.textContent = 'Could not save the order'; });
+    }).catch(() => { status.textContent = 'Could not save the changes'; });
   }
+
+  if (saveButton) saveButton.addEventListener('click', saveAll);
+  window.addEventListener('beforeunload', event => {
+    if (!dirty) return;
+    event.preventDefault();
+    event.returnValue = '';
+  });
 
   function finish() {
     if (!dragged) return;
     dragged.classList.remove('is-dragging');
     dragged = null;
-    if (snapshot() !== startOrder) save();
+    if (snapshot() !== startOrder) markDirty();
   }
 
   if (internet) {
@@ -470,7 +517,7 @@ kaskadLive(20);
       list.splice(target, 0, row);
       place(list);
       grip.focus({preventScroll: true});
-      save();
+      markDirty();
     });
   }
 
@@ -496,6 +543,7 @@ kaskadLive(20);
     }
     if (checked) table.tBodies[0].insertBefore(row, firstDimmed(table));
     else table.tBodies[0].appendChild(row);
+    markDirty();
   }
 })();
 </script>

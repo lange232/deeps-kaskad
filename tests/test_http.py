@@ -1308,7 +1308,31 @@ class AccountTests(PanelTestCase):
         self.assertNotIn('>up</button>', page)
         self.assertNotIn('>down</button>', page)
         self.assertIn('id="order-status"', page)
+        self.assertIn('id="account-save"', page)
+        self.assertIn('disabled>save</button>', page)
         self.assertIn("aria-live=\"polite\"", page)
+
+    def test_saving_access_then_order_together_keeps_both(self):
+        aid, cid = self.seed_client()
+        first = self.seed_exit("first", "awg1")
+        second = self.seed_exit("second", "awg2")
+        subnet = self.seed_exit("subnet", "awg5", mode="routes",
+                                routes="192.168.70.0/24")
+        self.grant(aid, cid, first, 10)
+        self.login_admin()
+        csrf = self.csrf(f"/accounts/{aid}")
+        # The combined button saves the switches first, sending the subnets as
+        # well, then posts the internet order.
+        response = self.client.post(f"/accounts/{aid}/exits", data={
+            "exits": [second, first, subnet], "csrf_token": csrf,
+        })
+        self.assertEqual(response.status_code, 303)
+        response = self.client.post(f"/accounts/{aid}/order/set", data={
+            "order": [second, first], "csrf_token": csrf,
+        })
+        self.assertEqual(response.status_code, 303)
+        self.assertEqual([e for e, _ in self.account_grants(aid)],
+                         [second, first, subnet])
 
     def test_rows_without_access_are_dimmed_like_the_console(self):
         aid, cid = self.seed_client()
@@ -1454,8 +1478,9 @@ class RoutedChoiceTests(PanelTestCase):
             conn.execute("DELETE FROM client_exits WHERE client_id = ?", (cid,))
         self.login_admin()
         text = self.client.get(f"/configs/{cid}").text
-        self.assertIn(f'/accounts/{aid}#access', text)
-        self.assertIn("0 of 1 selected", text)
+        self.assertNotIn(f'/accounts/{aid}#access', text)
+        self.assertNotIn("selected</span>", text)
+        self.assertIn("Only subnets granted to the account can be enabled here", text)
         self.assertIn("ungranted-subnet", text)
         self.assertNotIn(f'name="exits" value="{foreign}"', text)
         self.login("c1@example.com", USER_PASSWORD)
@@ -2260,6 +2285,8 @@ class GrantTests(PanelTestCase):
             page = self.client.get(f"/configs/{cid}").text
         self.assertIn('class="oc-table console-table config-exits-table"', page)
         self.assertIn('class="exit-grip"', page)
+        self.assertIn('id="config-save-order"', page)
+        self.assertIn('disabled>save order</button>', page)
         self.assertIn('class="oc-switch"', page)
         self.assertNotIn('>up</button>', page)
         self.assertNotIn('>down</button>', page)
@@ -2688,8 +2715,8 @@ class CabinetTrafficTests(PanelTestCase):
         response = self.client.get(f"/me/configs/{cid}?range=24h")
         self.assertEqual(response.status_code, 200, response.text)
         self.assertIn("traffic-chart", response.text)
-        self.assertIn("traffic-down", response.text)
-        self.assertIn("traffic-up", response.text)
+        self.assertIn("traffic-line--down", response.text)
+        self.assertIn("traffic-line--up", response.text)
         self.assertIn("downloaded", response.text)
         self.assertIn(
             f'href="/me/configs/{cid}?range=7d#traffic"', response.text

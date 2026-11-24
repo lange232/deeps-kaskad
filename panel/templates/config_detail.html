@@ -47,6 +47,9 @@
 {% endif %}
 
 <div class="stack">
+  {% set chart_url = '/configs/' ~ config.id %}
+  {% include '_traffic.html' %}
+
   <section>
     <div class="toolbar" style="margin-bottom:6px">
       <div class="actions" style="gap:10px">
@@ -115,6 +118,7 @@
       </table>
     </div>
     <div class="actions" style="margin-top:12px">
+      <button type="button" id="config-save-order" class="oc-btn oc-btn--neutral" disabled>save order</button>
       {% if account %}
       <form method="post" action="/configs/{{ config.id }}/order/reset">
         <input type="hidden" name="csrf_token" value="{{ csrf }}">
@@ -130,11 +134,10 @@
 
   {% if account %}
   <section>
-    <div class="toolbar" style="margin-bottom:6px">
+    <div class="actions" style="gap:10px; margin-bottom:6px">
       <h2 class="oc-section__title" style="margin:0">Subnets</h2>
-      <span class="oc-muted" id="config-subnet-count">{{ routed_choices | selectattr('chosen') | list | length }} of {{ routed_choices | length }} selected</span>
+      <span class="oc-hint">Only subnets granted to the account can be enabled here</span>
     </div>
-    <p class="oc-hint">Only subnets granted to the account can be enabled here</p>
     {% if routed_choices %}
     <form id="config-subnets" method="post" action="/configs/{{ config.id }}/routed">
       <input type="hidden" name="csrf_token" value="{{ csrf }}">
@@ -175,7 +178,6 @@
       </div>
       <div class="actions" style="margin-top:12px">
         <button form="config-subnets" class="oc-btn oc-btn--neutral">save subnets</button>
-        <a class="oc-btn oc-btn--outline" href="/accounts/{{ account.id }}#access">Edit account access</a>
       </div>
     </form>
     {% else %}
@@ -194,8 +196,6 @@
   </section>
   {% endif %}
 
-  {% set chart_url = '/configs/' ~ config.id %}
-  {% include '_traffic.html' %}
   <section>
     <h2 class="oc-section__title">Configuration files and keys</h2>
     <div class="oc-panel" style="padding:16px">
@@ -279,6 +279,15 @@
     list.forEach(row => tbody.appendChild(row));
   }
 
+  const saveButton = document.getElementById('config-save-order');
+  let dirty = false;
+
+  function markDirty() {
+    dirty = true;
+    status.textContent = 'Unsaved order';
+    if (saveButton) saveButton.disabled = false;
+  }
+
   function save() {
     const form = new URLSearchParams();
     form.append('csrf_token', csrfInput.value);
@@ -291,6 +300,8 @@
       body: form.toString()
     }).then(response => {
       if (!response.ok) throw new Error('save failed');
+      dirty = false;
+      if (saveButton) saveButton.disabled = true;
       status.textContent = 'Order saved';
       window.setTimeout(() => {
         if (status.textContent === 'Order saved') status.textContent = '';
@@ -298,11 +309,18 @@
     }).catch(() => { status.textContent = 'Could not save the order'; });
   }
 
+  if (saveButton) saveButton.addEventListener('click', save);
+  window.addEventListener('beforeunload', event => {
+    if (!dirty) return;
+    event.preventDefault();
+    event.returnValue = '';
+  });
+
   function finish() {
     if (!dragged) return;
     dragged.classList.remove('is-dragging');
     dragged = null;
-    if (snapshot() !== startOrder) save();
+    if (snapshot() !== startOrder) markDirty();
   }
 
   exits.addEventListener('pointerdown', event => {
@@ -349,7 +367,7 @@
     list.splice(target, 0, row);
     place(list);
     grip.focus({preventScroll: true});
-    save();
+    markDirty();
   });
 
   if (subnets) {
@@ -363,12 +381,6 @@
         .find(candidate => candidate.classList.contains('is-disabled')) || null;
       if (box.checked) table.tBodies[0].insertBefore(row, firstDimmed);
       else table.tBodies[0].appendChild(row);
-      const counter = document.getElementById('config-subnet-count');
-      if (counter) {
-        const total = table.tBodies[0].rows.length;
-        const chosen = table.tBodies[0].querySelectorAll('input[name="exits"]:checked').length;
-        counter.textContent = chosen + ' of ' + total + ' selected';
-      }
     });
   }
 })();

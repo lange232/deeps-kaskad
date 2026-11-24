@@ -1,6 +1,6 @@
 <section id="traffic">
     <div class="toolbar">
-      <h2 class="oc-section__title" style="margin:0">traffic</h2>
+      <h2 class="oc-section__title" style="margin:0">Traffic</h2>
       <div class="actions" style="gap:10px">
         {% if traffic_ip %}
         <span class="oc-muted oc-mono config-traffic">
@@ -25,36 +25,57 @@
         <span class="oc-muted">uploaded</span><span class="oc-num">{{ chart.total_rx }}</span>
         <span class="oc-muted" style="margin-left:auto">peak {{ chart.peak }}</span>
       </div>
-      <svg id="traffic-chart" class="traffic-chart" viewBox="0 0 {{ chart.width }} {{ chart.height }}"
-           preserveAspectRatio="none" role="img" aria-label="traffic">
-        {% for bar in chart.bars %}
-        <rect class="traffic-down" x="{{ bar.x }}" y="{{ chart.height - bar.down }}" width="{{ bar.width }}" height="{{ bar.down }}"/>
-        <rect class="traffic-up" x="{{ bar.up_x }}" y="{{ chart.height - bar.up }}" width="{{ bar.width }}" height="{{ bar.up }}"/>
-        {% endfor %}
-        <rect id="traffic-selection" class="traffic-selection" height="{{ chart.height }}" visibility="hidden"/>
-      </svg>
-      <div class="traffic-axis"><span>{{ chart.from }}</span><span>{{ chart.to }}</span></div>
-      <div class="traffic-inspector" hidden>
-        <label class="oc-muted" for="traffic-interval">Interval</label>
-        <input id="traffic-interval" type="range" min="0" max="{{ chart.intervals | length - 1 }}" value="0">
-        <output id="traffic-reading" for="traffic-interval"></output>
+      <div class="traffic-wrap">
+        <svg id="traffic-chart" class="traffic-chart" viewBox="0 0 {{ chart.width }} {{ chart.height }}"
+             role="img" aria-label="Traffic: {{ chart.total_tx }} downloaded, {{ chart.total_rx }} uploaded, peak {{ chart.peak }}">
+          <defs>
+            <linearGradient id="traffic-fill" x1="0" y1="0" x2="0" y2="1">
+              <stop stop-color="var(--ui-state-info-fg)" stop-opacity="0.12"/>
+              <stop offset="1" stop-color="var(--ui-state-info-fg)" stop-opacity="0"/>
+            </linearGradient>
+            <linearGradient id="traffic-fill-up" x1="0" y1="0" x2="0" y2="1">
+              <stop stop-color="var(--ui-state-success-fg)" stop-opacity="0.12"/>
+              <stop offset="1" stop-color="var(--ui-state-success-fg)" stop-opacity="0"/>
+            </linearGradient>
+          </defs>
+          {% for row in chart.grid %}
+          <g>
+            <line class="traffic-grid" x1="{{ chart.gutter }}" x2="{{ chart.width }}" y1="{{ row.y }}" y2="{{ row.y }}"/>
+            <text x="0" y="{{ row.text_y }}">{{ row.label }}</text>
+          </g>
+          {% endfor %}
+          {% for path in chart.paths %}
+          {% if path.area %}<path class="traffic-area" d="{{ path.area }}" fill="url(#traffic-fill)"/>{% endif %}
+          {% if path.area_up %}<path class="traffic-area" d="{{ path.area_up }}" fill="url(#traffic-fill-up)"/>{% endif %}
+          <path class="traffic-line traffic-line--down" d="{{ path.down }}"/>
+          <path class="traffic-line traffic-line--up" d="{{ path.up }}"/>
+          {% for dot in path.dots %}
+          <circle class="traffic-dot traffic-dot--down" cx="{{ dot.x }}" cy="{{ dot.down }}" r="2.5"/>
+          <circle class="traffic-dot traffic-dot--up" cx="{{ dot.x }}" cy="{{ dot.up }}" r="2.5"/>
+          {% endfor %}
+          {% endfor %}
+          <line id="traffic-guide" class="traffic-guide" x1="0" x2="0" y1="{{ chart.top }}" y2="{{ chart.bottom }}" visibility="hidden"/>
+          <circle id="traffic-dot-down" class="traffic-dot traffic-dot--down" r="3.5" visibility="hidden"/>
+          <circle id="traffic-dot-up" class="traffic-dot traffic-dot--up" r="3.5" visibility="hidden"/>
+        </svg>
+        <div id="traffic-tooltip" class="traffic-tooltip" role="status" aria-live="polite" hidden></div>
       </div>
+      <div class="traffic-axis"><span data-ts="{{ chart.from_ts }}">{{ chart.from }}</span><span data-ts="{{ chart.to_ts }}">{{ chart.to }}</span></div>
       <script>
       (function () {
-        const intervals = {{ chart.intervals | tojson }};
-        const fraction = {{ chart.interval_fraction | tojson }};
-        const width = {{ chart.width }};
-        const chart = document.getElementById('traffic-chart');
-        const selection = document.getElementById('traffic-selection');
-        const interval = document.getElementById('traffic-interval');
-        const reading = document.getElementById('traffic-reading');
+        const points = {{ chart.points | tojson }};
+        const svg = document.getElementById('traffic-chart');
+        const tip = document.getElementById('traffic-tooltip');
+        const guide = document.getElementById('traffic-guide');
+        const dotDown = document.getElementById('traffic-dot-down');
+        const dotUp = document.getElementById('traffic-dot-up');
+        if (!points.length) return;
         const pad = n => String(n).padStart(2, '0');
-        // Timestamps arrive as epochs: the reader's timezone, not the server's.
         function clock(ts) {
           const d = new Date(ts * 1000);
-          const hhmm = pad(d.getHours()) + ':' + pad(d.getMinutes());
+          const hm = pad(d.getHours()) + ':' + pad(d.getMinutes());
           return d.toDateString() === new Date().toDateString()
-            ? hhmm : pad(d.getDate()) + '.' + pad(d.getMonth() + 1) + ' ' + hhmm;
+            ? hm : pad(d.getDate()) + '.' + pad(d.getMonth() + 1) + ' ' + hm;
         }
         function size(value) {
           const units = ['B', 'KiB', 'MiB', 'GiB', 'TiB'];
@@ -62,37 +83,46 @@
           while (n >= 1024 && i < units.length - 1) { n /= 1024; i++; }
           return (i === 0 ? String(Math.round(n)) : n.toFixed(1)) + ' ' + units[i];
         }
-        function label(item) {
-          if (item.rx === null) return clock(item.from) + ' – ' + clock(item.to) + ' · No sample';
-          return clock(item.from) + ' – ' + clock(item.to)
-            + ' · Downloaded ' + size(item.tx) + ' · Uploaded ' + size(item.rx);
+        document.querySelectorAll('.traffic-axis span').forEach(span => {
+          if (span.dataset.ts) span.textContent = clock(Number(span.dataset.ts));
+        });
+        function show(point) {
+          guide.setAttribute('x1', point.x);
+          guide.setAttribute('x2', point.x);
+          guide.setAttribute('visibility', 'visible');
+          dotDown.setAttribute('cx', point.x);
+          dotDown.setAttribute('cy', point.down);
+          dotDown.setAttribute('visibility', 'visible');
+          dotUp.setAttribute('cx', point.x);
+          dotUp.setAttribute('cy', point.up);
+          dotUp.setAttribute('visibility', 'visible');
+          tip.textContent = clock(point.from) + ' · ↓ ' + size(point.tx)
+            + ' ↑ ' + size(point.rx);
+          tip.hidden = false;
+          const box = svg.getBoundingClientRect();
+          const scale = box.width / {{ chart.width }};
+          tip.style.left = Math.max(0,
+            Math.min(point.x * scale - tip.offsetWidth / 2,
+                     box.width - tip.offsetWidth)) + 'px';
         }
-        function select(index) {
-          index = Math.max(0, Math.min(intervals.length - 1, index));
-          const start = index * fraction;
-          const text = label(intervals[index]);
-          interval.value = index;
-          interval.setAttribute('aria-valuetext', text);
-          if (reading.textContent !== text) reading.textContent = text;
-          selection.setAttribute('x', start * width);
-          selection.setAttribute('width', Math.min(fraction, 1 - start) * width);
-          selection.setAttribute('visibility', 'visible');
+        function hide() {
+          guide.setAttribute('visibility', 'hidden');
+          dotDown.setAttribute('visibility', 'hidden');
+          dotUp.setAttribute('visibility', 'hidden');
+          tip.hidden = true;
         }
-        function selectAt(event) {
-          const bounds = chart.getBoundingClientRect();
-          if (bounds.width) select(Math.floor((event.clientX - bounds.left) / bounds.width / fraction));
-        }
-        const axis = document.querySelector('.traffic-axis span:last-child');
-        const axisStart = document.querySelector('.traffic-axis span:first-child');
-        if (axisStart && axis) {
-          axisStart.textContent = clock({{ chart.from_ts }});
-          axis.textContent = clock({{ chart.to_ts }});
-        }
-        chart.addEventListener('pointermove', event => { if (event.pointerType === 'mouse') selectAt(event); });
-        chart.addEventListener('click', selectAt);
-        interval.addEventListener('input', () => select(Number(interval.value)));
-        select(intervals.length - 1);
-        interval.parentElement.hidden = false;
+        svg.addEventListener('pointermove', event => {
+          if (event.pointerType && event.pointerType !== 'mouse'
+              && event.pointerType !== 'pen') return;
+          const box = svg.getBoundingClientRect();
+          const x = (event.clientX - box.left) * {{ chart.width }} / box.width;
+          let best = points[0];
+          for (const point of points) {
+            if (Math.abs(point.x - x) < Math.abs(best.x - x)) best = point;
+          }
+          show(best);
+        });
+        svg.addEventListener('pointerleave', hide);
       })();
       </script>
       {% else %}

@@ -1245,25 +1245,81 @@
   background: var(--ui-state-success-fg);
 }
 
+.traffic-wrap { position: relative; }
+
 .traffic-chart {
   width: 100%;
-  height: 180px;
+  height: auto;
   display: block;
+  overflow: visible;
 }
 
-.traffic-down { fill: var(--ui-state-info-fg); }
-.traffic-up { fill: var(--ui-state-success-fg); }
-.traffic-selection { fill: var(--ui-border-strong); pointer-events: none; }
-.traffic-inspector:not([hidden]) { display: grid; gap: 6px; margin-top: 12px; }
-.traffic-inspector input { width: 100%; margin: 0; accent-color: var(--ui-text-accent); }
-.traffic-inspector input:focus-visible { outline: 2px solid var(--ui-border-focus); }
+.traffic-chart text {
+  fill: var(--ui-text-muted);
+  font: 530 11px var(--ui-font-sans);
+}
+
+.traffic-grid {
+  stroke: var(--ui-border-muted);
+  stroke-width: 0.5px;
+}
+
+.traffic-line {
+  fill: none;
+  stroke-width: 1.5px;
+}
+
+.traffic-line--down { stroke: var(--ui-state-info-fg); }
+.traffic-line--up { stroke: var(--ui-state-success-fg); }
+.traffic-area { stroke: none; }
+
+.traffic-guide {
+  stroke: var(--ui-text-muted);
+  stroke-opacity: 0.5;
+  stroke-width: 1px;
+}
+
+.traffic-dot { stroke-width: 1.5px; }
+.traffic-dot--down {
+  fill: var(--ui-state-info-fg);
+  stroke: var(--ui-state-info-fg);
+}
+.traffic-dot--up {
+  fill: var(--ui-state-success-fg);
+  stroke: var(--ui-state-success-fg);
+}
+
+.traffic-tooltip {
+  position: absolute;
+  top: 4px;
+  left: 0;
+  z-index: 2;
+  padding: 6px 8px;
+  border: 0.5px solid var(--ui-border-base);
+  border-radius: var(--ui-radius-md);
+  background: var(--ui-bg-layer-2);
+  box-shadow: var(--ui-shadow-elements);
+  color: var(--ui-text-muted);
+  font-size: 11px;
+  font-weight: 530;
+  white-space: nowrap;
+  pointer-events: none;
+}
+.traffic-tooltip[hidden] { display: none; }
 
 .traffic-axis {
   display: flex;
   justify-content: space-between;
-  margin-top: 6px;
-  font-size: var(--ui-fs-xs);
-  color: var(--ui-text-faint);
+  align-items: center;
+  height: 21px;
+  margin-top: 12px;
+  padding: 0 8px;
+  border: 0.5px solid var(--ui-border-muted);
+  border-radius: var(--ui-radius-md);
+  background: var(--ui-bg-layer-1);
+  color: var(--ui-text-muted);
+  font-size: 11px;
+  font-weight: 530;
 }
 
 /* The theme is switched by an attribute on <html>: data-theme="light" | "dark" */
