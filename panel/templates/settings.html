@@ -2,11 +2,6 @@
 {% from "_admin_ui.html" import notices %}
 {% block title %}System — deeps kaskad{% endblock %}
 {% block body %}
-<div class="page-head">
-  <h1>System</h1>
-  <p class="oc-muted">Service health, panel settings, and stored data</p>
-</div>
-
 {{ notices(err, ok) }}
 
 <div class="stack">
@@ -96,8 +91,8 @@
     </div>
   </section>
 
-  <details class="manage-block">
-    <summary>Panel password recovery</summary>
+  <section>
+    <h2 class="oc-section__title">Panel password recovery</h2>
     <div class="oc-panel exit-section">
       <div class="oc-muted">
         Stored as a hash in <code class="oc-mono">/etc/kaskad/panel.env</code>. Reset: delete the file,
@@ -105,7 +100,7 @@
         <code class="oc-mono">kaskad-panel</code> — the new password is printed once.
       </div>
     </div>
-  </details>
+  </section>
 </div>
 <script>kaskadLive(20);</script>
 {% endblock %}

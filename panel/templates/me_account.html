@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% block title %}Account — deeps kaskad{% endblock %}
+{% block topbar_title %}<span class="oc-topbar__title oc-mono">{{ email }}</span>{% endblock %}
 {% block body %}
-<div class="page-head"><h1>Account</h1><span class="oc-muted">{{ email }}</span></div>
 {% if err %}<div class="oc-alert oc-alert--danger" style="margin-bottom:16px"><span class="oc-dot" style="margin-top:7px"></span><div class="oc-alert__body">{{ err }}</div></div>{% endif %}
 {% if ok %}<div class="oc-alert oc-alert--success" style="margin-bottom:16px"><span class="oc-dot" style="margin-top:7px"></span><div class="oc-alert__body">{{ ok }}</div></div>{% endif %}
 

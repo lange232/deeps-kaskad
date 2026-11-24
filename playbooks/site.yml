@@ -82,9 +82,13 @@
       tags: [base]
     - role: amneziawg
       tags: [amneziawg]
+
+# Facts are gathered once, in the Base layer play, and reused here: on a slow
+# 1-vCPU stand each extra setup run costs seconds.
 - name: Panel
   hosts: all
   become: true
+  gather_facts: false
   roles:
     - role: panel
       tags: [panel]
@@ -92,6 +96,7 @@
 - name: Network and firewall
   hosts: all
   become: true
+  gather_facts: false
   roles:
     - role: entry
       tags: [entry]

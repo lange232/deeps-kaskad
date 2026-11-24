@@ -1,18 +1,14 @@
 {% extends "base.html" %}
 {% from "_admin_ui.html" import config_route, exit_state, notices %}
 {% block title %}{{ account.email }} — deeps kaskad{% endblock %}
-{% block topbar %}<a class="oc-mono topbar-link" href="/accounts/{{ account.id }}">{{ account.email }}</a>{% endblock %}
+{% block topbar_title %}<span class="oc-topbar__title oc-mono">{{ account.email }}</span>{% endblock %}
 {% block body %}
 <div class="crumbs"><a href="/accounts">Accounts</a><span>/</span><span>{{ account.email }}</span></div>
-<div class="page-head">
-  <div class="name-cell">
-    <h1 style="margin:0" class="oc-mono">{{ account.email }}</h1>
-    {% if account.enabled %}<span class="oc-badge oc-badge--success"><span class="oc-dot"></span>login enabled</span>
-    {% else %}<span class="oc-badge oc-badge--subtle">login disabled</span>{% endif %}
-  </div>
-  <p class="oc-muted" style="margin-top:6px">
-    {{ configs | length }} of {{ limit }} configurations · last login {{ account.last_login | ts }}
-  </p>
+<div class="page-meta">
+  {% if account.enabled %}<span class="oc-badge oc-badge--success"><span class="oc-dot"></span>login enabled</span>
+  {% else %}<span class="oc-badge oc-badge--subtle">login disabled</span>{% endif %}
+  <span>{{ configs | length }} of {{ limit }} configurations</span>
+  <span>· last login {{ account.last_login | ts }}</span>
 </div>
 
 {{ notices(err, ok) }}
@@ -63,9 +59,7 @@
 {% endif %}
 
 <div class="stack">
-  <details id="access" class="manage-block" open><summary>Access and checks</summary>
-  <section>
-    <h2 class="oc-section__title">Exit access and order</h2>
+  <section id="access">
     <form id="account-access" method="post" action="/accounts/{{ account.id }}/exits">
       <input type="hidden" name="csrf_token" value="{{ csrf }}">
     </form>
@@ -176,40 +170,37 @@
         <button class="oc-btn oc-btn--neutral">apply order to all configurations</button>
       </form>
     </div>
-    <span id="order-status" class="oc-hint" role="status" aria-live="polite"></span>
+    <span id="order-status" class="sr-only" role="status" aria-live="polite"></span>
     <p class="oc-hint" style="margin-top:8px">
       Order changes apply to new configurations only. “Apply order” resets every
       configuration of this account to the order above.
     </p>
   </section>
 
-  <details class="manage-block"><summary>Checks ({{ checks | length }})</summary>
-    <section>
-      <h2 class="oc-section__title">Destinations this account checks</h2>
-      {% if checks %}
-      <div class="oc-panel">
-        <div class="table-scroll">
-        <table class="oc-table">
-          <tbody>
-          {% for c in checks %}
-          <tr>
-            <td>{{ c.label or c.target }}
-              {% if not c.enabled %}<span class="oc-badge oc-badge--subtle">disabled</span>{% endif %}
-              <div class="cell-sub oc-mono" style="word-break:break-all">{{ c.target }}</div>
-            </td>
-            <td style="width:1%"><span class="oc-badge oc-badge--subtle">{{ c.kind }}</span></td>
-          </tr>
-          {% endfor %}
-          </tbody>
-        </table>
-        </div>
+  <section>
+    <h2 class="oc-section__title">Destinations this account checks</h2>
+    {% if checks %}
+    <div class="oc-panel">
+      <div class="table-scroll">
+      <table class="oc-table">
+        <tbody>
+        {% for c in checks %}
+        <tr>
+          <td>{{ c.label or c.target }}
+            {% if not c.enabled %}<span class="oc-badge oc-badge--subtle">disabled</span>{% endif %}
+            <div class="cell-sub oc-mono" style="word-break:break-all">{{ c.target }}</div>
+          </td>
+          <td style="width:1%"><span class="oc-badge oc-badge--subtle">{{ c.kind }}</span></td>
+        </tr>
+        {% endfor %}
+        </tbody>
+      </table>
       </div>
-      {% else %}
-      <div class="oc-empty">none</div>
-      {% endif %}
-    </section>
-  </details>
-  </details>
+    </div>
+    {% else %}
+    <div class="oc-empty">none</div>
+    {% endif %}
+  </section>
 
   <section>
     <div class="toolbar">
@@ -259,7 +250,6 @@
     {% endif %}
   </section>
 
-  <details class="manage-block"><summary>Account settings</summary>
   <section>
     <h2 class="oc-section__title">limit</h2>
     <div class="oc-panel" style="padding:16px">
@@ -301,7 +291,6 @@
       </div>
     </div>
   </section>
-  </details>
 </div>
 
 <script>
@@ -450,7 +439,10 @@ kaskadLive(20);
     }).then(response => {
       if (!response.ok) throw new Error('order');
       dirty = false;
-      if (saveButton) saveButton.disabled = true;
+      if (saveButton) {
+        saveButton.disabled = true;
+        window.kaskadSaved(saveButton, 'save');
+      }
       status.textContent = 'Saved';
       window.setTimeout(() => {
         if (status.textContent === 'Saved') status.textContent = '';

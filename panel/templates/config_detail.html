@@ -1,28 +1,24 @@
 {% extends "base.html" %}
 {% from "_admin_ui.html" import config_route, exit_state, notices %}
 {% block title %}{{ config.name }} — deeps kaskad{% endblock %}
-{% block topbar %}<a class="oc-mono topbar-link" href="/configs/{{ config.id }}">{{ config.ip }}</a>{% endblock %}
+{% block topbar_title %}<span class="oc-topbar__title">{{ config.name }}</span>{% endblock %}
 {% block body %}
 <div class="crumbs"><a href="/configs">Configurations</a><span>/</span><span>{{ config.name }}</span></div>
-<div class="page-head">
-  <div class="name-cell">
-    <h1 style="margin:0">{{ config.name }}</h1>
-    {% if config.enabled %}<span class="oc-badge oc-badge--success"><span class="oc-dot"></span>enabled</span>
-    {% else %}<span class="oc-badge oc-badge--subtle">disabled</span>{% endif %}
-  </div>
-  <p class="oc-muted" style="margin-top:6px">
-    <span class="oc-mono">{{ config.ip }}/32</span> ·
-    {% if account %}
-    <a class="oc-link oc-link--muted oc-mono" href="/accounts/{{ account.id }}">{{ account.email }}</a>
-    {% else %}<span class="oc-badge oc-badge--warning">no account</span>{% endif %}
-    ·
-    {% if config.internet %}<span class="oc-badge oc-badge--subtle">internet</span>{% endif %}
-    {% for e in routed %}<span class="oc-badge oc-badge--subtle">{{ e.name }}</span>{% endfor %}
-    {% if not config.internet and not routed %}<span class="oc-badge oc-badge--danger">no access</span>{% endif %}
-  </p>
-  {% set diagnosis_ip = config.ip %}
-  {% include '_config_diagnosis.html' %}
+<div class="page-meta">
+  <span class="oc-mono">{{ config.ip }}/32</span>
+  <span>·</span>
+  {% if account %}
+  <a class="oc-link oc-link--muted oc-mono" href="/accounts/{{ account.id }}">{{ account.email }}</a>
+  {% else %}<span class="oc-badge oc-badge--warning">no account</span>{% endif %}
+  <span>·</span>
+  {% if config.enabled %}<span class="oc-badge oc-badge--success"><span class="oc-dot"></span>enabled</span>
+  {% else %}<span class="oc-badge oc-badge--subtle">disabled</span>{% endif %}
+  {% if config.internet %}<span class="oc-badge oc-badge--subtle">internet</span>{% endif %}
+  {% for e in routed %}<span class="oc-badge oc-badge--subtle">{{ e.name }}</span>{% endfor %}
+  {% if not config.internet and not routed %}<span class="oc-badge oc-badge--danger">no access</span>{% endif %}
 </div>
+{% set diagnosis_ip = config.ip %}
+{% include '_config_diagnosis.html' %}
 
 {{ notices(err, ok) }}
 
@@ -126,7 +122,7 @@
       </form>
       {% endif %}
     </div>
-    <span id="config-order-status" class="oc-hint" role="status" aria-live="polite"></span>
+    <span id="config-order-status" class="sr-only" role="status" aria-live="polite"></span>
     {% else %}
     <p class="oc-muted" style="margin:0">{{ 'Uses the global exit order' if config.internet else 'No internet exits granted' }}</p>
     {% endif %}
@@ -184,14 +180,14 @@
     <p class="oc-muted">No subnets allowed for this account</p>
     {% endif %}
     {% if ungranted_subnets %}
-    <details class="manage-block" style="margin-top:16px">
-      <summary>Not allowed for this account ({{ ungranted_subnets | length }})</summary>
+    <div style="margin-top:16px">
+      <h3 class="oc-section__title">Not allowed for this account ({{ ungranted_subnets | length }})</h3>
       <ul>
         {% for e in ungranted_subnets %}
         <li>{{ e.comment or e.name }} · <span class="oc-mono oc-muted">{{ e.routes }}</span></li>
         {% endfor %}
       </ul>
-    </details>
+    </div>
     {% endif %}
   </section>
   {% endif %}
@@ -232,8 +228,8 @@
     </div>
   </section>
 
-  <details class="manage-block">
-    <summary>Manage configuration</summary>
+  <section>
+    <h2 class="oc-section__title">Manage configuration</h2>
     <div class="oc-panel" style="padding:16px">
       <div class="actions">
         <form method="post" action="/configs/{{ config.id }}/toggle">
@@ -247,7 +243,7 @@
         </form>
       </div>
     </div>
-  </details>
+  </section>
 </div>
 
 <script>kaskadLive(20);</script>
@@ -301,7 +297,10 @@
     }).then(response => {
       if (!response.ok) throw new Error('save failed');
       dirty = false;
-      if (saveButton) saveButton.disabled = true;
+      if (saveButton) {
+        saveButton.disabled = true;
+        window.kaskadSaved(saveButton, 'save order');
+      }
       status.textContent = 'Order saved';
       window.setTimeout(() => {
         if (status.textContent === 'Order saved') status.textContent = '';

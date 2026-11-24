@@ -1,5 +1,6 @@
 ---
 - name: Product version
+  tags: [code, panel]
   ansible.builtin.set_fact:
     kaskad_version: "{{ lookup('file', kaskad_repo_dir ~ '/VERSION') | trim }}"
     kaskad_commit: >-
@@ -9,6 +10,7 @@
 
 - name: Panel packages
   ansible.builtin.apt:
+    lock_timeout: 300
     state: present
     name:
       - python3-venv
@@ -20,6 +22,7 @@
 
 - name: Fail2ban
   ansible.builtin.apt:
+    lock_timeout: 300
     name:
       - fail2ban
       - python3-systemd
@@ -90,6 +93,7 @@
 # small transfer takes seconds. The archive excludes bytecode so a stale
 # __pycache__ never lands on the host.
 - name: Panel source archive
+  tags: [code, panel]
   ansible.builtin.command:
     cmd: >-
       tar -czf /tmp/kaskad-panel.tgz --exclude=__pycache__
@@ -100,6 +104,7 @@
   changed_when: false
 
 - name: Copy the panel archive
+  tags: [code, panel]
   ansible.builtin.copy:
     src: /tmp/kaskad-panel.tgz
     dest: /tmp/kaskad-panel.tgz
@@ -107,6 +112,7 @@
   register: kaskad_panel_archive
 
 - name: Unpack the panel code
+  tags: [code, panel]
   ansible.builtin.unarchive:
     src: /tmp/kaskad-panel.tgz
     dest: /opt/kaskad/app
@@ -114,35 +120,39 @@
     extra_opts:
       - --overwrite
       - --no-same-owner
-  when: kaskad_panel_archive.changed
+  when:
+    - kaskad_panel_archive.changed
+    - not ansible_check_mode
   changed_when: kaskad_panel_archive.changed
   notify:
     - Restart panel
     - Restart failover
 
 - name: Panel archive on the host
+  tags: [code, panel]
   ansible.builtin.file:
     path: /tmp/kaskad-panel.tgz
     state: absent
 
 # Dependencies are installed only when requirements.txt changed: the pip run
 # talks to PyPI, and on a slow or lossy link it is what made a code deploy
-# hang for minutes. The tag lets a code-only deploy skip the step entirely.
+# hang for minutes. The checks ride along with the code tag so a code deploy
+# stays correct when requirements.txt changed; --skip-tags deps drops them.
 - name: Requirements file on the host
-  tags: [deps]
+  tags: [deps, code]
   ansible.builtin.stat:
     path: /opt/kaskad/app/requirements.txt
     checksum_algorithm: sha256
   register: kaskad_panel_requirements
 
 - name: Installed requirements marker
-  tags: [deps]
+  tags: [deps, code]
   ansible.builtin.stat:
     path: /opt/kaskad/venv/.requirements.sha256
   register: kaskad_panel_requirements_marker
 
 - name: Installed requirements checksum
-  tags: [deps]
+  tags: [deps, code]
   ansible.builtin.slurp:
     src: /opt/kaskad/venv/.requirements.sha256
   register: kaskad_panel_requirements_installed
@@ -150,7 +160,7 @@
   failed_when: false
 
 - name: Virtual environment
-  tags: [deps]
+  tags: [deps, code]
   ansible.builtin.pip:
     requirements: /opt/kaskad/app/requirements.txt
     virtualenv: /opt/kaskad/venv
@@ -162,7 +172,7 @@
        != kaskad_panel_requirements.stat.checksum
 
 - name: Remember installed requirements
-  tags: [deps]
+  tags: [deps, code]
   ansible.builtin.copy:
     content: "{{ kaskad_panel_requirements.stat.checksum }}\n"
     dest: /opt/kaskad/venv/.requirements.sha256
@@ -237,6 +247,7 @@
     - kaskad_panel_password is changed
 
 - name: Panel config
+  tags: [code, panel]
   ansible.builtin.template:
     src: panel.json.j2
     dest: /etc/kaskad/panel.json
@@ -358,6 +369,7 @@
   when: not ansible_check_mode
 
 - name: Apply pending restarts before the first backup
+  tags: [code, panel]
   # Handlers run at the end of the play by default, which would make the first
   # archive contain the database and code of the previous release.
   ansible.builtin.meta: flush_handlers

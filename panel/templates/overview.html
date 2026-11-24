@@ -2,11 +2,6 @@
 {% from "_admin_ui.html" import notices, activity_table %}
 {% block title %}overview — deeps kaskad{% endblock %}
 {% block body %}
-<div class="page-head">
-  <h1>Overview</h1>
-  <p class="oc-muted">Exit health and configuration activity</p>
-</div>
-
 {{ notices(err, ok) }}
 
 <div class="stack">
@@ -18,7 +13,6 @@
     {% for issue in health.issues %}
     <div class="actions">
       <a class="oc-link oc-link--alert" href="{{ issue.url }}">{{ issue.text }}</a>
-      {% if issue.usage_url %}<a class="oc-link" href="{{ issue.usage_url }}">{{ issue.usage_text }}</a>{% endif %}
     </div>
     {% else %}
     <span>All systems operational</span>
@@ -57,10 +51,10 @@
     {% if events %}{{ activity_table(events) }}
     {% else %}<div class="oc-empty">No events recorded</div>{% endif %}
   </section>
-  <details class="manage-block">
-    <summary>Diagnostics</summary>
+  <section>
+    <h2 class="oc-section__title">Diagnostics</h2>
     <p class="oc-muted">Device to panel: <span class="oc-mono oc-num" id="client-rtt">measuring…</span></p>
-  </details>
+  </section>
 </div>
 
 <script>

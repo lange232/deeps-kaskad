@@ -1658,26 +1658,6 @@ def shared_internet_configs(rows) -> set[int]:
             and not config_internet_exits(cl)}
 
 
-def exit_configurations(exit_row, configs, status, fresh):
-    """Separate reported users from eligible alternatives for one exit."""
-    current, reserve = [], []
-    for cl in configs:
-        if not cl["enabled"]:
-            continue
-        if exit_row["mode"] == "routes":
-            if exit_row["enabled"] and any(e["id"] == exit_row["id"] for e in config_routed_exits(cl)):
-                current.append(cl)
-            continue
-        choices = config_internet_exits(cl)
-        shared = not cl["account_id"] and bool(cl["internet"]) and not choices
-        if fresh and selected_internet_iface(cl, status, shared) == exit_row["iface"]:
-            current.append(cl)
-        elif (exit_row["enabled"] and (cl["account_id"] or cl["internet"])
-              and (shared or any(e["id"] == exit_row["id"] for e in choices))):
-            reserve.append(cl)
-    return current, reserve
-
-
 def admin_config_route(cl, view, status, fresh, exits, shared=False):
     def link(iface):
         row = exits.get(iface)
@@ -1940,8 +1920,7 @@ def overview(request: Request, err: str | None = None, ok: str | None = None):
     online = sum(1 for cl in configs if cl["handshake"] and now - cl["handshake"] < 180)
     rx = sum(cl["rx"] for cl in configs)
     tx = sum(cl["tx"] for cl in configs)
-    usage = exit_usage(rows, status, shared_internet_configs(rows)) if fresh else {}
-    health = overview_health(exits, fresh, usage)
+    health = overview_health(exits, fresh)
     return render_page(
         request, "overview.html", "overview",
         csrf=csrf(token), err=err, ok=ok,
@@ -1951,7 +1930,7 @@ def overview(request: Request, err: str | None = None, ok: str | None = None):
     )
 
 
-def overview_health(exits: list[dict], status_fresh: bool, usage: dict) -> dict:
+def overview_health(exits: list[dict], status_fresh: bool) -> dict:
     active = next((e for e in exits if e["active"] and e["enabled"]
                    and e["mode"] == "internet"), None)
     issues = []
@@ -1974,10 +1953,6 @@ def overview_health(exits: list[dict], status_fresh: bool, usage: dict) -> dict:
             else:
                 continue
             issue = {"url": f"/exits/{e['id']}", "text": f"{e['name']} {problem}"}
-            count = usage.get(e["iface"], 0)
-            if count and e["mode"] == "internet":
-                issue.update(usage_url=f"/exits/{e['id']}#exit-configurations",
-                             usage_text=f"{count} using this exit")
             issues.append(issue)
     states = services()
     for key, state in states.items():
@@ -2034,20 +2009,17 @@ def exit_page(request: Request, eid: int, err: str | None = None, ok: str | None
     token = require_admin(request)
     with db() as conn:
         row = conn.execute("SELECT * FROM exits WHERE id = ?", (eid,)).fetchone()
-        configs = conn.execute("SELECT * FROM clients WHERE enabled = 1 ORDER BY name").fetchall()
     if not row:
         raise HTTPException(status_code=404)
     status, fresh = routing_status()
     active = run_dir("active-exit") if fresh else None
     manual = setting("manual_exit") or ""
-    current, reserve = exit_configurations(row, configs, status, fresh)
     return render_page(
         request, "exit_detail.html", "exits",
         csrf=csrf(token), err=err, ok=ok,
         exit=exit_view(row, status, active, manual),
         conf=mask_conf(awgconf.render(row["conf"], cfg()["exit_mtu"],
                                       [x.strip() for x in (row["routes"] or "").split(",") if x.strip()] or None)),
-        current_configs=current, reserve_configs=reserve, routing_fresh=fresh,
         clients_net=cfg()["clients_net"],
     )
 
@@ -3778,18 +3750,12 @@ def me_config_page(
     live = iface_dump(c["iface"])["peers"]
     status, routing_fresh = routing_status()
     granted = config_internet_exits(cl)
-    current_iface = (status.get("clients") or {}).get(cl["ip"]) or ""
+    shared = not cl["account_id"] and bool(cl["internet"]) and not granted
+    current_iface = (selected_internet_iface(cl, status, shared)
+                     if routing_fresh else "")
     current = next((e for e in granted if e["iface"] == current_iface), None)
     states = status.get("exits") or {}
     known = exits_rows()
-    alive = {
-        e["iface"]: (bool(states.get(e["iface"], {}).get("alive")) if routing_fresh else None)
-        for e in known
-    }
-    degraded = {
-        e["iface"]: (bool(states.get(e["iface"], {}).get("degraded")) if routing_fresh else False)
-        for e in known
-    }
     latency = {
         e["iface"]: (states.get(e["iface"], {}).get("rtt_ms") if routing_fresh else None)
         for e in known
@@ -3799,21 +3765,31 @@ def me_config_page(
     except ValueError:
         conf = None
     chosen_routed = {e["id"] for e in config_routed_exits(cl)}
+    allowed_routed = config_routed_choices(account)
+    routed_choices = [
+        {"id": r["id"], "name": r["comment"] or r["name"], "routes": r["routes"],
+         "iface": r["iface"], "enabled": bool(r["enabled"]), "priority": r["priority"],
+         "chosen": r["id"] in chosen_routed}
+        for r in allowed_routed
+    ]
+    # Chosen subnets stay on top, like the exits on the account page.
+    routed_choices.sort(
+        key=lambda row: (not row["chosen"], not row["enabled"], row["priority"], row["id"])
+    )
     view = config_view(cl, live)
     return render_page(
         request, "me_config.html", "me", role="user",
         csrf=csrf(token), err=err, ok=ok, email=account["email"],
         cl=view, diagnosis=configuration_diagnosis(view, status, int(time.time())),
         conf=conf, internet_exits=granted, current_exit=current,
-        pinned=cl["pinned_iface"],
-        alive=alive, degraded=degraded, latency=latency, has_app=ANDROID_APK.exists(),
+        pinned=cl["pinned_iface"], pinned_iface=cl["pinned_iface"] or "",
+        current_iface=current_iface,
+        latency=latency, has_app=ANDROID_APK.exists(),
+        exit_states={e["iface"]: exit_view(e, status, None)
+                     for e in granted + allowed_routed},
         routing_fresh=routing_fresh,
         **traffic_context(cid, period),
-        routed_choices=[
-            {"id": r["id"], "name": r["comment"] or r["name"], "routes": r["routes"],
-             "chosen": r["id"] in chosen_routed}
-            for r in config_routed_choices(account)
-        ],
+        routed_choices=routed_choices,
     )
 
 
@@ -3866,6 +3842,37 @@ def me_config_order(request: Request, cid: int, exit_id: int = Form(...),
     return RedirectResponse(
         f"/me/configs/{cid}?ok=exit+order+updated", status_code=303
     )
+
+
+@app.post("/me/configs/{cid}/order/set")
+def me_config_order_set(
+    request: Request,
+    cid: int,
+    order: list[int] = Form([]),
+    csrf_token: str = Form(...),
+):
+    """Replace this configuration's internet exit order with the given one.
+
+    The cabinet drag-and-drop posts the whole order, like the admin page; the
+    list must name every granted exit exactly once.
+    """
+    token, account = require_user(request)
+    if not hmac.compare_digest(csrf_token, csrf(token)):
+        raise HTTPException(status_code=400, detail="csrf")
+    cl = user_config(account, cid)
+    allowed = [e["id"] for e in config_internet_exits(cl)]
+    if len(order) != len(allowed) or set(order) != set(allowed):
+        raise HTTPException(
+            status_code=400,
+            detail="order must list every exit of this configuration once",
+        )
+    with db() as conn:
+        write_config_order(conn, cid, order)
+    audit("user_exit_order", f"{account['email']} {cl['name']} {' '.join(str(e) for e in order)}")
+    apply_routing()
+    if request.headers.get("x-requested-with") == "fetch":
+        return JSONResponse({"ok": True})
+    return RedirectResponse(f"/me/configs/{cid}?ok=exit+order+updated", status_code=303)
 
 
 @app.post("/me/configs/{cid}/pin")
@@ -4625,25 +4632,9 @@ def status_json(request: Request, overview: bool = False):
             cl["ip"]: admin_config_route(cl, view, status, status_fresh, known, cl["id"] in shared)
             for cl, view in zip(rows, views)
         }
-        if request.query_params.get("exit_configurations"):
-            health["exit_configurations"] = {}
-            wanted = request.query_params["exit_configurations"]
-            for e in exit_rows_all:
-                if e["iface"] == wanted and e["mode"] == "internet":
-                    current_rows, reserve_rows = exit_configurations(
-                        e, sorted(rows, key=lambda cl: cl["name"]), status, status_fresh
-                    )
-                    def compact(items):
-                        return [{"id": cl["id"], "name": cl["name"], "ip": cl["ip"]}
-                                for cl in items]
-                    health["exit_configurations"] = {
-                        "current": compact(current_rows), "reserve": compact(reserve_rows),
-                    }
-                    break
     if overview and role == "admin":
         health["overview"] = overview_health(
             [exit_view(e, status, active) for e in exit_rows_all], status_fresh,
-            health["exit_usage"],
         )
     return {
         **health,

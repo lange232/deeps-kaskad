@@ -1,9 +1,12 @@
 ---
+# Tagged always so a notified restart still runs under --tags code: the fast
+# path must restart the panel after new code lands.
 - name: Restart panel
   ansible.builtin.systemd:
     name: kaskad-panel
     state: restarted
     daemon_reload: true
+  tags: [always]
   when: not ansible_check_mode
 
 - name: Restart failover
@@ -11,6 +14,7 @@
     name: kaskad-failover
     state: restarted
     daemon_reload: true
+  tags: [always]
   when: not ansible_check_mode
 
 - name: Restart fail2ban

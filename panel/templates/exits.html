@@ -2,18 +2,16 @@
 {% from "_admin_ui.html" import exit_state, exit_roles %}
 {% block title %}exits — deeps kaskad{% endblock %}
 {% block body %}
-<div class="page-head toolbar">
-  <h1>Exits</h1>
-  <a class="oc-btn oc-btn--neutral" href="/exits/new">Add exit</a>
-</div>
-
 <div class="toolbar">
   <nav class="oc-segmented" aria-label="Filter exits">
     <a class="oc-segmented__item{{ ' is-active' if not mode }}" {% if not mode %}aria-current="page"{% endif %} href="/exits">All<span class="oc-segmented__count">{{ counts.all }}</span></a>
     <a class="oc-segmented__item{{ ' is-active' if mode == 'internet' }}" {% if mode == 'internet' %}aria-current="page"{% endif %} href="/exits?mode=internet">Internet<span class="oc-segmented__count">{{ counts.internet }}</span></a>
     <a class="oc-segmented__item{{ ' is-active' if mode == 'routes' }}" {% if mode == 'routes' %}aria-current="page"{% endif %} href="/exits?mode=routes">Subnets<span class="oc-segmented__count">{{ counts.routes }}</span></a>
   </nav>
-  <span class="oc-muted exits-count">{{ exits | selectattr('enabled') | list | length }} of {{ exits | length }} shown enabled</span>
+  <div class="actions">
+    <span class="oc-muted exits-count">{{ exits | selectattr('enabled') | list | length }} of {{ exits | length }} shown enabled</span>
+    <a class="oc-btn oc-btn--neutral" href="/exits/new">Add exit</a>
+  </div>
 </div>
 
 {% if exits %}

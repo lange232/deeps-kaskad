@@ -1,16 +1,14 @@
 {% extends "base.html" %}
 {% from "_admin_ui.html" import notices, exit_state, exit_roles %}
 {% block title %}{{ exit.name }} — deeps kaskad{% endblock %}
-{% block topbar %}<a class="oc-mono topbar-link" href="/exits/{{ exit.id }}">{{ exit.iface }}</a>{% endblock %}
+{% block topbar_title %}<span class="oc-topbar__title">{{ exit.name }}</span>{% endblock %}
 {% block body %}
 <div class="crumbs"><a href="/exits">Exits</a><span>/</span><span>{{ exit.name }}</span></div>
-<div class="page-head">
-  <div class="name-cell">
-    <h1 style="margin:0">{{ exit.name }}</h1>
-    {{ exit_state(exit) }}
-  </div>
-  {% if exit.country %}<p class="oc-muted">{{ exit.country }}</p>{% endif %}
-  {% if exit.mode == 'internet' %}<div class="actions exit-markers">{{ exit_roles(exit) }}</div>{% endif %}
+<div class="page-meta">
+  {{ exit_state(exit) }}
+  <span class="oc-mono">{{ exit.iface }}</span>
+  {% if exit.country %}<span>· {{ exit.country }}</span>{% endif %}
+  {% if exit.mode == 'internet' %}<span class="exit-markers">{{ exit_roles(exit) }}</span>{% endif %}
 </div>
 
 {{ notices(err, ok) }}
@@ -33,26 +31,6 @@
       </ul>
       {% endif %}
     </div>
-  </section>
-
-  <section id="exit-configurations" tabindex="-1">
-    {% if exit.mode == 'routes' %}
-    <h2 class="oc-section__title">Selected for subnets</h2>
-    {% with clients = current_configs %}{% include '_exit_configurations.html' %}{% endwith %}
-    {% else %}
-    <h2 class="oc-section__title">Uses this exit</h2>
-    <div data-live="exit-config-current|{{ exit.iface }}">
-      {% if routing_fresh %}
-      {% with clients = current_configs %}{% include '_exit_configurations.html' %}{% endwith %}
-      {% else %}
-      <p class="oc-muted">Current routing status unavailable</p>
-      {% endif %}
-    </div>
-    <details class="manage-block exit-alternatives">
-      <summary data-live="exit-config-summary|{{ exit.iface }}">{{ 'Available as an alternative' if routing_fresh else 'Eligible configurations' }} ({{ reserve_configs | length }})</summary>
-      <div data-live="exit-config-reserve|{{ exit.iface }}">{% with clients = reserve_configs %}{% include '_exit_configurations.html' %}{% endwith %}</div>
-    </details>
-    {% endif %}
   </section>
 
   {% if exit.mode == 'internet' %}
@@ -129,8 +107,8 @@
     </div>
   </section>
 
-  <details class="manage-block">
-    <summary>Manage exit</summary>
+  <section>
+    <h2 class="oc-section__title">Manage exit</h2>
     <div class="actions">
       <form method="post" action="/exits/{{ exit.id }}/toggle">
         <input type="hidden" name="csrf_token" value="{{ csrf }}">
@@ -142,7 +120,7 @@
         <button class="oc-btn oc-btn--ghost-danger">delete</button>
       </form>
     </div>
-  </details>
+  </section>
 
   <section>
     <h2 class="oc-section__title">config</h2>

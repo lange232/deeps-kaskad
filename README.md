@@ -313,7 +313,20 @@ ansible-playbook playbooks/site.yml
 scripts/check.sh demo
 ```
 
-Tags: `base`, `amneziawg`, `panel`, `entry`.
+Tags: `base`, `amneziawg`, `panel`, `entry`, plus `code` and `deps`.
+
+For a code-only change on an already-deployed host, use the fast path:
+
+```bash
+ansible-playbook -i inventory.libra.yml playbooks/site.yml --tags code -T 60
+```
+
+`code` runs just the panel archive, its unpack, the config template and the
+restart handlers — a handful of tasks instead of the whole role. It skips apt,
+fail2ban, certbot, the systemd units and backups, which is what made a full
+`site.yml` run take tens of minutes on a slow 1-vCPU stand. Add `deps`
+(`--tags code,deps`) when `requirements.txt` changed; pip still runs only on a
+change. Use a full run for a fresh host or after touching base/entry/TLS.
 
 Addresses, the panel port and TLS belong in the inventory, which is
 gitignored; `group_vars/all.yml` holds only shared defaults and is the same
@@ -558,10 +571,10 @@ replacement is visible at `/api/android` and
 answers 404 until the file exists; the client's `/me` page then shows an
 "android app" button.
 
-A code-only deploy on a slow link skips the step that touches the network:
-`--tags panel --skip-tags deps`. `deps` installs Python requirements, and even
-without the tag it runs only when `requirements.txt` changed, because pip to
-PyPI is what made those deploys hang.
+A code-only deploy on a slow link uses `--tags code` (see Deployment). The
+`deps` checks ride along and install Python requirements only when
+`requirements.txt` changed, because pip to PyPI is what made those deploys
+hang; `--skip-tags deps` drops them entirely.
 
 The file must be the published build: users update in place, so a different
 signing key or a lower `versionCode` than the installed client means a
@@ -602,7 +615,10 @@ Certbot validates over HTTP-01 on port 80, which is free while the panel
 listens on its own port; issuance does not interrupt the panel. Renewal is
 handled by `certbot.timer`, and a deploy hook in
 `/etc/letsencrypt/renewal-hooks/deploy/` restarts `kaskad-panel` after a new
-certificate is issued.
+certificate is issued. A deploy only calls certbot when there is no
+certificate, it is within 30 days of expiry, or a staging certificate must be
+replaced by a real one; otherwise it leaves the fresh certificate alone, so a
+routine deploy does not depend on the ACME server.
 
 The certificate is issued for the domain only, so clients opening the panel by
 IP will still see the self-signed warning; use the domain name.

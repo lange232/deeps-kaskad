@@ -17,6 +17,7 @@
 
 - name: Certbot
   ansible.builtin.apt:
+    lock_timeout: 300
     name: certbot
     state: present
   when: not ansible_check_mode
@@ -72,6 +73,22 @@
   check_mode: false
   when: not ansible_check_mode
 
+# Renewal is certbot.timer's job; a deploy must not call the ACME server every
+# time. Issue only when there is no certificate, it is close to expiry, or a
+# staging certificate has to be replaced by a real one.
+- name: Certificate needs issuance
+  ansible.builtin.set_fact:
+    kaskad_le_days_left: >-
+      {{ (kaskad_le_existing.stdout | default('')
+          | regex_findall('VALID: (\\d+) day') | first | default('0')) | int }}
+    kaskad_le_issue_needed: >-
+      {{ (kaskad_le_existing.rc | default(1)) != 0
+         or (kaskad_le_existing.stdout | default('')
+             | regex_findall('VALID: (\\d+) day') | first | default('0') | int) < 30
+         or (not (kaskad_le_staging | bool)
+             and 'TEST_CERT' in (kaskad_le_existing.stdout | default(''))) }}
+  when: not ansible_check_mode
+
 # certbot keeps a staging certificate until it is close to expiry, so
 # --keep-until-expiring would never replace it with a real one. A test
 # certificate is deleted explicitly before the real run.
@@ -92,7 +109,9 @@
          + (['--staging'] if kaskad_le_staging | bool else []) }}
   register: kaskad_le_issue
   changed_when: "'Certificate not yet due for renewal' not in kaskad_le_issue.stdout"
-  when: not ansible_check_mode
+  when:
+    - not ansible_check_mode
+    - kaskad_le_issue_needed | bool
 
 - name: Renewal hook directory
   ansible.builtin.file:

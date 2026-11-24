@@ -1,17 +1,13 @@
 {% extends "base.html" %}
 {% block title %}accounts — deeps kaskad{% endblock %}
 {% block body %}
-<div class="page-head toolbar">
-  <h1>Accounts</h1>
-  <a class="oc-btn oc-btn--neutral" href="/accounts/new">Add account</a>
-</div>
-
 <div class="toolbar toolbar--list">
   <form method="get" action="/accounts" class="actions list-search">
     <input class="oc-input" type="search" name="q" value="{{ q }}" aria-label="Search accounts" placeholder="Search by email">
     <button class="oc-btn oc-btn--neutral">search</button>
     {% if q %}<a class="oc-btn oc-btn--ghost" href="/accounts">reset</a>{% endif %}
   </form>
+  <a class="oc-btn oc-btn--neutral" href="/accounts/new">Add account</a>
 </div>
 
 {% if accounts %}
@@ -25,7 +21,7 @@
     {% for a in accounts %}
       <tr data-href="/accounts/{{ a.id }}">
         <td>
-          <a class="oc-link oc-mono" href="/accounts/{{ a.id }}">{{ a.email }}</a>
+          <a class="oc-link oc-mono list-name" href="/accounts/{{ a.id }}">{{ a.email }}</a>
           {% if not a.enabled %}<span class="oc-badge oc-badge--subtle">login off</span>{% endif %}
           <div class="cell-sub">
             last login {{ a.last_login | ts }}

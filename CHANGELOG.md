@@ -29,13 +29,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   console, with the row counts kept as muted numbers inside each segment.
 - Account and configuration tables follow the reference console list: 32 px
   sentence-case header, 48 px rows, two-line cells with the name over the
-  country and interface, numbers and controls aligned right.
+  country and interface, numbers and controls aligned right. The account email
+  and the configuration name carry the same emphasis as the exit names.
 - The account page splits exit grants into two tables, internet exits and
   subnets. Internet exits have a drag grip and both tables have a square access
   switch. Turning a switch off dims the row, moves it to the bottom of its own
   table and hides the grip before saving; turning it back on returns the row to
   the end of the checked group. One `save` button applies both the switches and
-  the order.
+  the order. The tables are labelled Exits and Subnets directly, without a
+  redundant "Exit access and order" heading above them.
 - The exit order is changed by dragging a grip or with Alt plus the arrow keys,
   Home and End. On both pages the change is only marked unsaved until the
   `save` button on the account page (which applies the switches and the order
@@ -55,6 +57,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The traffic chart follows the Activity page: a grid with rate labels,
   download and upload lines, each with a soft fill, a hover guide with a
   tooltip and a bordered axis strip. The interval slider is gone.
+- Collapsible blocks are gone: diagnostics, password recovery, account checks
+  and settings, exit management and configuration management are shown
+  outright instead of hiding behind a summary line. Only the QR and config
+  reveal toggles remain.
+- Page headers that repeated the highlighted nav item are gone: list pages
+  start with their search and actions, and the object name (account email,
+  configuration or exit name, and the cabinet's account) sits in the middle of
+  the top bar. The old heading line is replaced by a compact row of badges and
+  counts.
+- The exit page no longer lists the configurations that use the exit or could
+  use it, and `/status.json` no longer carries that data. The usage count in
+  the exits table stays.
+- The cabinet configuration page follows the admin console: exit order is a
+  drag-and-drop table with state, Active/Pinned badges and latency, saved with
+  a `save order` button (`POST /me/configs/{id}/order/set`); subnets are square
+  switches in a table instead of checkboxes. The pin is a select, like the
+  admin page.
+- Empty states are compact one-line notes instead of tall blank panels; the
+  "no accounts yet" state keeps room for its create button.
+- Saving access or an exit order confirms inside the button: it flashes a
+  green checkmark for a moment at a fixed width, so neither the row nor the
+  page moves. The full wording still reaches screen readers via the live
+  region.
+- Deploying panel code is a fast path: `--tags code` runs only the archive,
+  unpack, config and restarts (~40 s on the stand) instead of the whole role.
+  Facts are gathered once, certbot is called only when a certificate is missing
+  or near expiry, apt waits longer for the dpkg lock, and the SSH connection is
+  multiplexed for the whole run. `--check` no longer fails on the unpack step.
 
 ## [0.4.11] - 2026-11-22
 

@@ -1,23 +1,20 @@
 {% extends "base.html" %}
+{% from "_admin_ui.html" import exit_state %}
 {% block title %}{{ cl.name }} — deeps kaskad{% endblock %}
 {% block topbar %}<a class="oc-mono topbar-link" href="/me">{{ email }}</a>{% endblock %}
+{% block topbar_title %}<span class="oc-topbar__title">{{ cl.name }}</span>{% endblock %}
 {% block body %}
 <div class="crumbs"><a href="/me">My configurations</a><span>/</span><span>{{ cl.name }}</span></div>
-<div class="page-head">
-  <div class="name-cell">
-    <h1 style="margin:0">{{ cl.name }}</h1>
-    {% if cl.enabled %}<span class="oc-badge oc-badge--success"><span class="oc-dot"></span>enabled</span>
-    {% else %}<span class="oc-badge oc-badge--subtle">disabled</span>{% endif %}
-  </div>
-  <p class="oc-muted" style="margin-top:6px">
-    <span class="oc-mono">{{ cl.ip }}/32</span> ·
-    {% if cl.internet %}<span class="oc-badge oc-badge--subtle">internet</span>{% endif %}
-    {% for name in cl.exits %}<span class="oc-badge oc-badge--subtle">{{ name }}</span>{% endfor %}
-    {% if not cl.internet and not cl.exits %}<span class="oc-badge oc-badge--danger">no access</span>{% endif %}
-  </p>
-  {% set diagnosis_ip = cl.ip %}
-  {% include '_config_diagnosis.html' %}
+<div class="page-meta">
+  {% if cl.enabled %}<span class="oc-badge oc-badge--success"><span class="oc-dot"></span>enabled</span>
+  {% else %}<span class="oc-badge oc-badge--subtle">disabled</span>{% endif %}
+  <span class="oc-mono">{{ cl.ip }}/32</span>
+  {% if cl.internet %}<span class="oc-badge oc-badge--subtle">internet</span>{% endif %}
+  {% for name in cl.exits %}<span class="oc-badge oc-badge--subtle">{{ name }}</span>{% endfor %}
+  {% if not cl.internet and not cl.exits %}<span class="oc-badge oc-badge--danger">no access</span>{% endif %}
 </div>
+{% set diagnosis_ip = cl.ip %}
+{% include '_config_diagnosis.html' %}
 
 {% if err %}<div class="oc-alert oc-alert--danger" style="margin-bottom:16px"><span class="oc-dot" style="margin-top:7px"></span><div class="oc-alert__body">{{ err }}</div></div>{% endif %}
 {% if ok %}<div class="oc-alert oc-alert--success" style="margin-bottom:16px"><span class="oc-dot" style="margin-top:7px"></span><div class="oc-alert__body">{{ ok }}</div></div>{% endif %}
@@ -48,135 +45,150 @@
   {% set chart_url = '/me/configs/' ~ cl.id %}
   {% include '_traffic.html' %}
 
-  <details class="manage-block"><summary>Routing{% if current_exit %} · {{ current_exit.comment or current_exit.name }}{% endif %}</summary>
   {% if internet_exits and cl.internet %}
   <section>
-    <h2 class="oc-section__title">exit priority</h2>
-    <div class="oc-panel" style="padding:16px">
-      {% if not routing_fresh %}
-      <p style="margin:0 0 12px">
-        <span class="oc-badge oc-badge--subtle">no data</span>
-        exit status unavailable
-      </p>
-      {% elif current_exit %}
-      <p style="margin:0 0 12px">
-        in use now: <span class="oc-badge oc-badge--accent">{{ current_exit.comment or current_exit.name }}</span>
-      </p>
-      {% else %}
-      <p style="margin:0 0 12px">
-        <span class="oc-badge oc-badge--danger">no internet</span>
-        none of the granted exits is up
-      </p>
-      {% endif %}
-      <div class="table-scroll">
-      <table class="oc-table">
+    <div class="toolbar" style="margin-bottom:6px">
+      <div class="actions" style="gap:10px">
+        <h2 class="oc-section__title" style="margin:0">Exit order</h2>
+        <span class="oc-hint">The first working exit is used; a pin wins while that exit is alive</span>
+      </div>
+      <form method="post" action="/me/configs/{{ cl.id }}/pin" class="actions" style="margin:0">
+        <input type="hidden" name="csrf_token" value="{{ csrf }}">
+        <select class="oc-input" name="exit_id" aria-label="Pinned exit"
+                style="width:auto; max-width:220px">
+          <option value="0">Pinned exit: automatic</option>
+          {% for e in internet_exits %}
+          <option value="{{ e.id }}" {% if e.iface == pinned_iface %}selected{% endif %}>Pinned exit: {{ e.comment or e.name }}</option>
+          {% endfor %}
+        </select>
+        <button class="oc-btn oc-btn--neutral">apply</button>
+      </form>
+    </div>
+    <div class="oc-panel table-scroll">
+      <table class="oc-table console-table me-exits-table">
         <thead>
-          <tr><th style="width:1%">#</th><th>exit</th><th style="width:1%"></th></tr>
+          <tr>
+            <th scope="col" class="account-access-table__grip" aria-label="Reorder"></th>
+            <th scope="col" class="account-access-table__state">State</th>
+            <th scope="col">Exit</th>
+            <th scope="col" class="oc-num config-latency">Latency</th>
+          </tr>
         </thead>
         <tbody>
         {% for e in internet_exits %}
-          <tr>
-            <td class="oc-num">{{ loop.index }}</td>
+          <tr data-exit-id="{{ e.id }}" data-reorder>
+            <td class="account-access-table__grip">
+              <button type="button" class="exit-grip" title="Drag to reorder"
+                      aria-label="Reorder {{ e.comment or e.name }}. Drag it, or press Alt with the arrow keys.">
+                <svg width="12" height="16" viewBox="0 0 12 16" aria-hidden="true" fill="currentColor">
+                  <circle cx="3" cy="4" r="1.2"/><circle cx="9" cy="4" r="1.2"/>
+                  <circle cx="3" cy="8" r="1.2"/><circle cx="9" cy="8" r="1.2"/>
+                  <circle cx="3" cy="12" r="1.2"/><circle cx="9" cy="12" r="1.2"/>
+                </svg>
+              </button>
+            </td>
+            <td class="account-access-table__state">{{ exit_state(exit_states[e.iface]) }}</td>
             <td>
-              {{ e.comment or e.name }}
-              <div class="actions" style="margin-top:4px; gap:8px">
-                {% if pinned == e.iface %}<span class="oc-badge oc-badge--accent">pinned</span>{% elif current_exit and current_exit.id == e.id %}<span class="oc-badge oc-badge--accent">in use</span>{% endif %}
-                {% set exit_state = alive.get(e.iface) %}
-                <span class="oc-badge {% if exit_state is none %}oc-badge--subtle{% elif degraded.get(e.iface) %}oc-badge--warning{% elif exit_state %}oc-badge--success{% else %}oc-badge--subtle{% endif %}" data-live="exit|{{ e.iface }}">{% if exit_state is none %}no data{% elif degraded.get(e.iface) %}degraded{% elif exit_state %}up{% else %}down{% endif %}</span>
-                <span class="ping">
-                  <span class="oc-mono ping__total" data-live="ping|{{ e.iface }}">—</span>
-                  <span class="cell-sub oc-mono" data-live="pingparts|{{ e.iface }}">&nbsp;</span>
-                </span>
+              <div class="exit-cell">
+                <div class="exit-cell__name">
+                  {{ e.comment or e.name }}
+                  <span class="oc-badge oc-badge--accent" data-live="active-row|{{ cl.ip }}"
+                        data-iface="{{ e.iface }}"{% if e.iface != current_iface %} hidden{% endif %}>Active</span>
+                  {% if e.iface == pinned_iface %}<span class="oc-badge oc-badge--subtle">Pinned</span>{% endif %}
+                </div>
+                <div class="exit-cell__meta">
+                  {% if e.country %}{{ e.country }} · {% endif %}<span class="oc-mono">{{ e.iface }}</span>
+                </div>
               </div>
             </td>
-            <td>
-              <div class="actions" style="flex-wrap:nowrap">
-                <form method="post" action="/me/configs/{{ cl.id }}/order">
-                  <input type="hidden" name="csrf_token" value="{{ csrf }}">
-                  <input type="hidden" name="exit_id" value="{{ e.id }}">
-                  <input type="hidden" name="direction" value="up">
-                  <button class="oc-btn oc-btn--neutral oc-btn--sm" {{ 'disabled' if loop.first }}>up</button>
-                </form>
-                <form method="post" action="/me/configs/{{ cl.id }}/order">
-                  <input type="hidden" name="csrf_token" value="{{ csrf }}">
-                  <input type="hidden" name="exit_id" value="{{ e.id }}">
-                  <input type="hidden" name="direction" value="down">
-                  <button class="oc-btn oc-btn--neutral oc-btn--sm" {{ 'disabled' if loop.last }}>down</button>
-                </form>
-                {% if pinned != e.iface %}
-                <form method="post" action="/me/configs/{{ cl.id }}/pin">
-                  <input type="hidden" name="csrf_token" value="{{ csrf }}">
-                  <input type="hidden" name="exit_id" value="{{ e.id }}">
-                  <input type="hidden" name="action" value="pin">
-                  <button class="oc-btn oc-btn--ghost oc-btn--sm"
-                          title="keep this exit even when the failover marks it degraded">use</button>
-                </form>
-                {% endif %}
-              </div>
+            <td class="oc-num config-latency">
+              <span class="ping">
+                <span class="oc-mono ping__total" data-live="ping|{{ e.iface }}">—</span>
+                <span class="cell-sub oc-mono" data-live="pingparts|{{ e.iface }}">&nbsp;</span>
+              </span>
             </td>
           </tr>
         {% endfor %}
         </tbody>
       </table>
-      </div>
-      <p class="oc-hint" style="margin-top:12px">
-        A pinned exit is used even when the failover marks it degraded, as long
-        as its tunnel is alive; if it dies, the order above takes over until it
-        returns.
-      </p>
-      <div class="actions" style="margin-top:10px">
-        <form method="post" action="/me/configs/{{ cl.id }}/order/reset">
-          <input type="hidden" name="csrf_token" value="{{ csrf }}">
-          <button class="oc-btn oc-btn--neutral oc-btn--sm">reset to account order</button>
-        </form>
-        {% if pinned %}
-        <form method="post" action="/me/configs/{{ cl.id }}/pin">
-          <input type="hidden" name="csrf_token" value="{{ csrf }}">
-          <input type="hidden" name="action" value="auto">
-          <button class="oc-btn oc-btn--contrast oc-btn--sm">back to automatic</button>
-        </form>
-        {% endif %}
-      </div>
     </div>
+    <div class="actions" style="margin-top:12px">
+      <button type="button" id="me-save-order" class="oc-btn oc-btn--neutral" disabled>save order</button>
+      <form method="post" action="/me/configs/{{ cl.id }}/order/reset">
+        <input type="hidden" name="csrf_token" value="{{ csrf }}">
+        <button class="oc-btn oc-btn--neutral">reset to account order</button>
+      </form>
+    </div>
+    <span id="me-order-status" class="sr-only" role="status" aria-live="polite"></span>
   </section>
   {% endif %}
 
   <section>
-    <h2 class="oc-section__title">subnets</h2>
-    <div class="oc-panel" style="padding:16px">
-      {% if routed_choices %}
-      <p class="oc-muted">{{ routed_choices | selectattr('chosen') | list | length }} of {{ routed_choices | length }} allowed subnets included</p>
-      <form method="post" action="/me/configs/{{ cl.id }}/routed">
-        <input type="hidden" name="csrf_token" value="{{ csrf }}">
-        <div class="actions" style="flex-direction:column; align-items:flex-start; gap:10px">
-          {% for e in routed_choices %}
-          <label class="oc-check">
-            <input type="checkbox" name="exits" value="{{ e.id }}" {% if e.chosen %}checked{% endif %}>
-            <span class="oc-check__box"></span>
-            {{ e.name }}
-            <span class="oc-mono oc-muted" style="margin-left:8px">{{ e.routes }}</span>
-          </label>
-          {% endfor %}
-        </div>
-        <button class="oc-btn oc-btn--neutral oc-btn--sm" style="margin-top:12px">save subnets</button>
-      </form>
-      {% else %}
-      <p class="oc-muted">No subnets allowed for this account</p>
-      {% endif %}
+    <div class="actions" style="gap:10px; margin-bottom:6px">
+      <h2 class="oc-section__title" style="margin:0">Subnets</h2>
+      <span class="oc-hint">Only subnets granted to the account can be enabled here</span>
     </div>
+    {% if routed_choices %}
+    <form id="me-subnets" method="post" action="/me/configs/{{ cl.id }}/routed">
+      <input type="hidden" name="csrf_token" value="{{ csrf }}">
+      <div class="oc-panel table-scroll">
+        <table class="oc-table console-table me-subnets-table">
+          <thead>
+            <tr>
+              <th scope="col" class="account-access-table__state">State</th>
+              <th scope="col">Subnet</th>
+              <th scope="col" class="account-access-table__check">Access</th>
+            </tr>
+          </thead>
+          <tbody>
+          {% for e in routed_choices %}
+            <tr data-subnet-id="{{ e.id }}"{% if not e.chosen %} class="is-disabled"{% endif %}>
+              <td class="account-access-table__state">{{ exit_state(exit_states[e.iface]) }}</td>
+              <td>
+                <div class="exit-cell">
+                  <div class="exit-cell__name">
+                    {{ e.name }}
+                    <span class="oc-badge oc-badge--subtle">Subnets</span>
+                  </div>
+                  <div class="exit-cell__meta oc-mono">{{ e.routes }}</div>
+                </div>
+              </td>
+              <td class="account-access-table__check">
+                <label class="oc-switch" title="Use this subnet with the configuration">
+                  <input form="me-subnets" type="checkbox" name="exits" value="{{ e.id }}"
+                         aria-label="Use {{ e.name }} with this configuration"
+                         {% if e.chosen %}checked{% endif %} {% if not e.enabled %}disabled{% endif %}>
+                  <span class="oc-switch__track"><span class="oc-switch__thumb"></span></span>
+                </label>
+              </td>
+            </tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      <div class="actions" style="margin-top:12px">
+        <button form="me-subnets" class="oc-btn oc-btn--neutral">save subnets</button>
+      </div>
+    </form>
+    {% else %}
+    <p class="oc-muted">No subnets allowed for this account</p>
+    {% endif %}
   </section>
 
-  </details>
-  <details class="manage-block"><summary>Manage configuration</summary>
-    {% if cl.device_id %}<p class="oc-muted">Device ID · <span class="oc-mono">{{ cl.device_id }}</span></p>{% endif %}
+  <section>
+    <h2 class="oc-section__title">Manage configuration</h2>
+    <div class="oc-panel" style="padding:16px">
+      {% if cl.device_id %}<p class="oc-muted">Device ID · <span class="oc-mono">{{ cl.device_id }}</span></p>{% endif %}
       <form method="post" action="/me/configs/{{ cl.id }}/name"
-            class="actions" style="margin-bottom:14px">
+            class="actions" style="margin:0">
         <input type="hidden" name="csrf_token" value="{{ csrf }}">
         <input class="oc-input oc-input--sm" type="text" name="name"
                value="{{ cl.name }}" maxlength="32" spellcheck="false"
                aria-label="name" style="max-width:220px">
         <button class="oc-btn oc-btn--outline oc-btn--sm">rename</button>
       </form>
+    </div>
+  </section>
 
 
   {% if conf %}
@@ -209,8 +221,144 @@
       </div>
     </div>
   </section>
-  </details>
 </div>
+
+<script>
+(function () {
+  // Same controls as the admin configuration page: drag a grip (or Alt +
+  // arrows) to order this configuration's exits, and let a subnet switch dim
+  // and move its row before "save subnets".
+  const exits = document.querySelector('.me-exits-table');
+  const subnets = document.querySelector('.me-subnets-table');
+  const status = document.getElementById('me-order-status');
+  const csrfInput = document.querySelector('input[name="csrf_token"]');
+  if (!exits || !status || !csrfInput) return;
+  const configId = {{ cl.id }};
+  let dragged = null;
+  let startOrder = '';
+
+  function rows() {
+    return Array.from(exits.tBodies[0].querySelectorAll('tr[data-exit-id]'));
+  }
+
+  function snapshot() {
+    return rows().map(row => row.dataset.exitId).join(',');
+  }
+
+  function place(list) {
+    const tbody = exits.tBodies[0];
+    list.forEach(row => tbody.appendChild(row));
+  }
+
+  const saveButton = document.getElementById('me-save-order');
+  let dirty = false;
+
+  function markDirty() {
+    dirty = true;
+    status.textContent = 'Unsaved order';
+    if (saveButton) saveButton.disabled = false;
+  }
+
+  function save() {
+    const form = new URLSearchParams();
+    form.append('csrf_token', csrfInput.value);
+    rows().forEach(row => form.append('order', row.dataset.exitId));
+    fetch('/me/configs/' + configId + '/order/set', {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: {'Content-Type': 'application/x-www-form-urlencoded',
+                'X-Requested-With': 'fetch'},
+      body: form.toString()
+    }).then(response => {
+      if (!response.ok) throw new Error('save failed');
+      dirty = false;
+      if (saveButton) {
+        saveButton.disabled = true;
+        window.kaskadSaved(saveButton, 'save order');
+      }
+      status.textContent = 'Order saved';
+      window.setTimeout(() => {
+        if (status.textContent === 'Order saved') status.textContent = '';
+      }, 2000);
+    }).catch(() => { status.textContent = 'Could not save the order'; });
+  }
+
+  if (saveButton) saveButton.addEventListener('click', save);
+  window.addEventListener('beforeunload', event => {
+    if (!dirty) return;
+    event.preventDefault();
+    event.returnValue = '';
+  });
+
+  function finish() {
+    if (!dragged) return;
+    dragged.classList.remove('is-dragging');
+    dragged = null;
+    if (snapshot() !== startOrder) markDirty();
+  }
+
+  exits.addEventListener('pointerdown', event => {
+    const grip = event.target.closest('.exit-grip');
+    if (!grip || (event.pointerType === 'mouse' && event.button > 0)) return;
+    event.preventDefault();
+    dragged = grip.closest('tr');
+    startOrder = snapshot();
+    dragged.classList.add('is-dragging');
+    if (grip.setPointerCapture) grip.setPointerCapture(event.pointerId);
+  });
+
+  exits.addEventListener('pointermove', event => {
+    if (!dragged) return;
+    const others = rows().filter(row => row !== dragged);
+    const before = others.find(row => {
+      const box = row.getBoundingClientRect();
+      return event.clientY < box.top + box.height / 2;
+    });
+    const list = others.slice();
+    list.splice(before ? others.indexOf(before) : others.length, 0, dragged);
+    place(list);
+  });
+
+  ['pointerup', 'pointercancel'].forEach(name => {
+    exits.addEventListener(name, finish);
+  });
+
+  exits.addEventListener('keydown', event => {
+    const grip = event.target.closest('.exit-grip');
+    if (!grip || !event.altKey) return;
+    const row = grip.closest('tr');
+    const list = rows();
+    const index = list.indexOf(row);
+    let target = -1;
+    if (event.key === 'ArrowUp') target = index - 1;
+    else if (event.key === 'ArrowDown') target = index + 1;
+    else if (event.key === 'Home') target = 0;
+    else if (event.key === 'End') target = list.length - 1;
+    else return;
+    event.preventDefault();
+    if (target < 0 || target > list.length - 1 || target === index) return;
+    list.splice(index, 1);
+    list.splice(target, 0, row);
+    place(list);
+    grip.focus({preventScroll: true});
+    markDirty();
+  });
+
+  if (subnets) {
+    subnets.addEventListener('change', event => {
+      const box = event.target.closest('input[name="exits"]');
+      if (!box) return;
+      const row = box.closest('tr');
+      const table = row.closest('table');
+      row.classList.toggle('is-disabled', !box.checked);
+      const firstDimmed = Array.from(table.tBodies[0].rows)
+        .find(candidate => candidate.classList.contains('is-disabled')) || null;
+      if (box.checked) table.tBodies[0].insertBefore(row, firstDimmed);
+      else table.tBodies[0].appendChild(row);
+    });
+  }
+})();
+</script>
 
 <script>
 (function () {

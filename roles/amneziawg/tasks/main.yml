@@ -1,11 +1,13 @@
 ---
 - name: Kernel headers
   ansible.builtin.apt:
+    lock_timeout: 300
     state: present
     name: "linux-headers-{{ ansible_kernel }}"
 
 - name: DKMS dependencies
   ansible.builtin.apt:
+    lock_timeout: 300
     state: present
     name:
       - dkms
@@ -23,6 +25,7 @@
 
     - name: Install amneziawg (dkms + tools)
       ansible.builtin.apt:
+        lock_timeout: 300
         state: present
         name: amneziawg
 
@@ -44,6 +47,7 @@
 
     - name: Install packages
       ansible.builtin.apt:
+        lock_timeout: 300
         deb: "/var/cache/kaskad/{{ item }}"
       loop: "{{ kaskad_awg_local_packages }}"
       when: not ansible_check_mode

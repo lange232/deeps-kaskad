@@ -45,9 +45,8 @@
   .side a.is-active { background: var(--ui-bg-layer-2); color: var(--ui-text-base); font-weight: 530; }
   .side a .oc-dot { background: currentColor; opacity: .5; }
   .side__sep { height: 1px; background: var(--ui-border-base); margin: 8px 10px; }
-  .page-head { margin: 6px 0 24px; }
-  .page-head h1 { margin: 0 0 4px; min-width: 0; overflow-wrap: anywhere; font-size: 20px; font-weight: 670; letter-spacing: -0.02em; }
-  .page-head p { margin: 0; }
+  .page-meta { display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; margin: 2px 0 18px; font-size: 12px; color: var(--ui-text-muted); }
+  .page-meta p { margin: 0; }
   .crumbs { display: flex; flex-wrap: wrap; overflow-wrap: anywhere; gap: 6px; align-items: center; font-size: 12px; color: var(--ui-text-faint); margin-bottom: 6px; }
   .crumbs a { color: var(--ui-text-muted); text-decoration: none; }
   .crumbs a:hover { color: var(--ui-text-base); }
@@ -60,7 +59,6 @@
   .form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; }
   .full { grid-column: 1 / -1; }
   .oc-textarea { min-height: 180px; resize: vertical; font-family: var(--ui-font-mono, ui-monospace, monospace); font-size: 12px; }
-  .name-cell { display: flex; flex-wrap: wrap; min-width: 0; align-items: center; gap: 8px; }
   .cell-sub { font-size: 12px; color: var(--ui-text-muted); }
   .admin-config-route { display: grid; gap: 4px; overflow-wrap: anywhere; }
   .admin-config-route [hidden] { display: none; }
@@ -70,7 +68,6 @@
   .exit-section { padding: 16px; }
   .exit-section > p { margin: 0 0 12px; }
   .exit-section form[hidden] { display: none; }
-  .exit-alternatives { margin-top: 12px; }
   .probe-list { list-style: none; padding: 0; margin: 12px 0 0; display: grid; gap: 8px; }
   .probe-list li { display: flex; align-items: baseline; gap: 8px; overflow-wrap: anywhere; }
   /* The latency is two lines: the total, then how it splits. */
@@ -124,10 +121,18 @@
     .side nav { flex-direction: row; flex-wrap: wrap; }
     .side__sep { display: none; }
     .side a { white-space: nowrap; }
-    /* The brand, the badge and the two buttons do not fit 360 px in one
-       row; wrap instead of clipping the actions. */
-    .oc-topbar { flex-wrap: wrap; row-gap: 8px; padding: 8px 12px; }
-    .oc-topbar__spacer { min-width: 8px; }
+    /* Brand and controls share the first row; the page name drops to a second
+       row instead of squeezing the buttons off a 360 px screen. */
+    .oc-topbar {
+      grid-template-columns: auto minmax(0, 1fr);
+      grid-template-areas: "left right" "center center";
+      row-gap: 6px; padding: 8px 12px;
+    }
+    .oc-topbar__left { grid-area: left; }
+    .oc-topbar__right { grid-area: right; overflow: hidden; }
+    .oc-topbar__center { grid-area: center; justify-content: flex-start; }
+    .oc-topbar__title { max-width: 100%; }
+    .oc-topbar__right .topbar-link { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .oc-topbar .oc-badge--subtle { display: none; }
     .oc-panel__head { flex-wrap: wrap; }
     .toolbar--list { flex-direction: column; align-items: stretch; }
@@ -146,6 +151,23 @@
     if (d < 3600) return Math.floor(d / 60) + 'm ago';
     if (d < 86400) return Math.floor(d / 3600) + 'h ago';
     return Math.floor(d / 86400) + 'd ago';
+  };
+
+  // Confirm a save inside the button itself: the label becomes a checkmark for
+  // a moment. The width is pinned to the button's natural size so neither the
+  // row nor the page reflows; the full wording still reaches screen readers
+  // through the page's live region.
+  window.kaskadSaved = function (button, label) {
+    if (!button) return;
+    var original = label || button.textContent;
+    button.style.width = button.offsetWidth + 'px';
+    button.textContent = '✓';
+    button.classList.add('is-saved');
+    window.setTimeout(function () {
+      button.textContent = original;
+      button.classList.remove('is-saved');
+      button.style.width = '';
+    }, 1500);
   };
 
   // Live numbers without a page reload: fetch /status.json and rewrite only
@@ -184,7 +206,6 @@
           var row = document.createElement('div');
           row.className = 'actions';
           row.append(link(issue.url, issue.text, true));
-          if (issue.usage_url) row.append(link(issue.usage_url, issue.usage_text, false));
           return row;
         }) : ['All systems operational']));
       }
@@ -238,52 +259,6 @@
       put(note, route.note);
       setLink(current, route.current);
       setLink(pin.querySelector('a'), route.pinned);
-    }
-    function renderExitConfigs(el, items, available) {
-      var snapshot = JSON.stringify([items, available]);
-      if (el.dataset.snapshot === snapshot) return;
-      var focused = el.contains(document.activeElement) ? document.activeElement : null;
-      var focusHref = focused && focused.getAttribute('href');
-      var section = el.closest('section');
-      el.dataset.snapshot = snapshot;
-      if (!available || !items.length) {
-        var empty = document.createElement(available ? 'div' : 'p');
-        empty.className = available ? 'oc-empty' : 'oc-muted';
-        empty.textContent = available ? 'No configurations' : 'Current routing status unavailable';
-        el.replaceChildren(empty);
-        if (focused && section) section.focus({preventScroll: true});
-        return;
-      }
-      var panel = document.createElement('div');
-      panel.className = 'oc-panel table-scroll';
-      var table = document.createElement('table');
-      table.className = 'oc-table';
-      var body = document.createElement('tbody');
-      items.forEach(function (item) {
-        var row = document.createElement('tr');
-        var name = document.createElement('td');
-        var link = document.createElement('a');
-        var ip = document.createElement('td');
-        row.dataset.href = '/configs/' + item.id;
-        link.className = 'oc-link';
-        link.href = row.dataset.href;
-        link.textContent = item.name;
-        ip.className = 'oc-mono oc-muted';
-        ip.textContent = item.ip;
-        name.append(link);
-        row.append(name, ip);
-        body.append(row);
-      });
-      table.append(body);
-      panel.append(table);
-      el.replaceChildren(panel);
-      if (focused) {
-        var replacement = Array.from(el.querySelectorAll('a')).find(function (link) {
-          return link.getAttribute('href') === focusHref;
-        });
-        if (replacement) replacement.focus({preventScroll: true});
-        else if (section) section.focus({preventScroll: true});
-      }
     }
     var ping = function (el, exit) {
       if (!exit || !exit.enabled || !exit.alive || !exit.rtt_ms) {
@@ -357,16 +332,6 @@
           el.hidden = data.global_pin !== key;
         } else if (kind === 'exit-usage') {
           put(el, data.status_fresh ? String((data.exit_usage || {})[key] || 0) : '—');
-        } else if (kind === 'exit-config-current' || kind === 'exit-config-reserve') {
-          item = data.exit_configurations;
-          if (item && item.current && item.reserve) {
-            renderExitConfigs(el, kind === 'exit-config-current' ? item.current : item.reserve,
-              kind === 'exit-config-reserve' || data.status_fresh);
-          }
-        } else if (kind === 'exit-config-summary') {
-          item = data.exit_configurations;
-          if (item && item.reserve) put(el, (data.status_fresh ? 'Available as an alternative' :
-            'Eligible configurations') + ' (' + item.reserve.length + ')');
         } else if (kind === 'exit-rtt') {
           item = exits[key];
           put(el, item && item.enabled && item.alive && item.rtt_ms != null ? item.rtt_ms + ' ms' : '—');
@@ -406,9 +371,7 @@
       if (document.visibilityState === 'visible') {
         var controller = new AbortController();
         var deadline = setTimeout(function () { controller.abort(); }, 10000);
-        var detail = document.querySelector('[data-live^="exit-config-current|"]');
         var statusUrl = health || systemStale ? '/status.json?overview=true' : '/status.json';
-        if (detail) statusUrl += '?exit_configurations=' + encodeURIComponent(detail.dataset.live.split('|')[1]);
         fetch(statusUrl,
           {cache: 'no-store', credentials: 'same-origin', signal: controller.signal})
           .then(function (r) {
@@ -453,17 +416,21 @@
 </head>
 <body class="oc-shell">
 <header class="oc-topbar">
-  <a class="oc-brand" href="{{ '/me' if role == 'user' else '/' }}" style="text-decoration:none">
-    <span class="oc-brand__dim">deeps</span><span class="oc-brand__mark">kaskad</span>
-  </a>
-  <span class="oc-topbar__spacer"></span>
-  {% block topbar %}{% endblock %}
-  <button class="oc-btn oc-btn--ghost-muted oc-btn--sm" id="theme-toggle" type="button">light theme</button>
-  {% if not hide_nav %}
-  <form method="post" action="/logout" style="margin:0">
-    <button class="oc-btn oc-btn--ghost oc-btn--sm">sign out</button>
-  </form>
-  {% endif %}
+  <div class="oc-topbar__left">
+    <a class="oc-brand" href="{{ '/me' if role == 'user' else '/' }}" style="text-decoration:none">
+      <span class="oc-brand__dim">deeps</span><span class="oc-brand__mark">kaskad</span>
+    </a>
+  </div>
+  <div class="oc-topbar__center">{% block topbar_title %}{% endblock %}</div>
+  <div class="oc-topbar__right">
+    {% block topbar %}{% endblock %}
+    <button class="oc-btn oc-btn--ghost-muted oc-btn--sm" id="theme-toggle" type="button">light theme</button>
+    {% if not hide_nav %}
+    <form method="post" action="/logout" style="margin:0">
+      <button class="oc-btn oc-btn--ghost oc-btn--sm">sign out</button>
+    </form>
+    {% endif %}
+  </div>
 </header>
 
 <div class="app {{ 'app--centered' if hide_nav }}{{ ' app--wide' if role == 'user' and not hide_nav }}">

@@ -2,11 +2,6 @@
 {% from "_admin_ui.html" import config_route %}
 {% block title %}configs — deeps kaskad{% endblock %}
 {% block body %}
-<div class="page-head toolbar">
-  <h1>Configurations</h1>
-  <a class="oc-btn oc-btn--neutral" href="/configs/new">Add configuration</a>
-</div>
-
 <div class="toolbar toolbar--list">
   <form method="get" action="/configs" class="actions list-search">
     <input class="oc-input" type="search" name="q" value="{{ q }}" aria-label="Search configurations" placeholder="Search by name, address or email">
@@ -18,6 +13,7 @@
     <button class="oc-btn oc-btn--neutral">search</button>
     {% if q or state %}<a class="oc-btn oc-btn--ghost" href="/configs">reset</a>{% endif %}
   </form>
+  <a class="oc-btn oc-btn--neutral" href="/configs/new">Add configuration</a>
 </div>
 
 {% if configs %}
@@ -31,7 +27,7 @@
     {% for c in configs %}
       <tr data-href="/configs/{{ c.id }}">
         <td>
-          <a class="oc-link" href="/configs/{{ c.id }}">{{ c.name }}</a>
+          <a class="oc-link list-name" href="/configs/{{ c.id }}">{{ c.name }}</a>
           {% if not c.enabled %}<span class="oc-badge oc-badge--subtle">disabled</span>{% endif %}
           <div class="cell-sub oc-mono">{{ c.ip }}</div>
           </td><td class="config-owner">

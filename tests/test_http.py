@@ -673,9 +673,47 @@ class ExitPinTests(PanelTestCase):
         self.assertEqual(self.post("pin", self.second).status_code, 303)
         self.assertEqual(self.pinned(), "awg2")
         page = self.client.get(f"/me/configs/{self.cid}").text
-        self.assertIn("pinned", page)
+        self.assertIn("Pinned", page)
         self.assertEqual(self.post("auto").status_code, 303)
         self.assertEqual(self.pinned(), "")
+
+    def order(self):
+        with app.db() as conn:
+            return [r[0] for r in conn.execute(
+                "SELECT exit_id FROM client_internet_exits "
+                "WHERE client_id = ? ORDER BY priority, exit_id", (self.cid,))]
+
+    def test_the_cabinet_saves_a_full_order(self):
+        csrf = self.csrf(f"/me/configs/{self.cid}")
+        response = self.client.post(f"/me/configs/{self.cid}/order/set", data={
+            "order": [self.second, self.first], "csrf_token": csrf,
+        }, headers={"X-Requested-With": "fetch"})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {"ok": True})
+        self.assertEqual(self.order(), [self.second, self.first])
+
+    def test_the_cabinet_rejects_a_partial_or_foreign_order(self):
+        csrf = self.csrf(f"/me/configs/{self.cid}")
+        partial = self.client.post(f"/me/configs/{self.cid}/order/set", data={
+            "order": [self.first], "csrf_token": csrf,
+        })
+        self.assertEqual(partial.status_code, 400)
+        foreign = self.seed_exit("spare", "awg3", priority=30)
+        bad = self.client.post(f"/me/configs/{self.cid}/order/set", data={
+            "order": [self.first, foreign], "csrf_token": csrf,
+        })
+        self.assertEqual(bad.status_code, 400)
+        self.assertEqual(self.order(), [self.first, self.second])
+
+    def test_the_cabinet_offers_a_grip_and_save_order(self):
+        with mock.patch.object(app, "read_status", return_value={"ts": int(time.time())}):
+            page = self.client.get(f"/me/configs/{self.cid}").text
+        self.assertIn('class="oc-table console-table me-exits-table"', page)
+        self.assertIn('class="exit-grip"', page)
+        self.assertIn('id="me-save-order"', page)
+        self.assertIn('disabled>save order</button>', page)
+        self.assertNotIn('>up</button>', page)
+        self.assertNotIn('>down</button>', page)
 
     def test_only_a_granted_exit_can_be_pinned(self):
         foreign = self.seed_exit("spare", "awg3", priority=30)
@@ -1000,25 +1038,6 @@ class AdminPingTests(PanelTestCase):
                                  ({"handshake": now - 200}, "Last handshake")):
             self.assertEqual(app.configuration_diagnosis(view | fields, status, now)["state"],
                              expected)
-
-    def test_exit_details_separate_current_and_alternative_configurations(self):
-        aid, cid = self.seed_client(name="current-peer")
-        other_aid, other_cid = self.seed_client(name="alternative-peer", ip="10.80.0.9",
-                                                email="other@example.com")
-        eid = self.seed_exit()
-        self.grant(aid, cid, eid)
-        self.grant(other_aid, other_cid, eid)
-        self.login_admin()
-        status = {"ts": int(time.time()), "clients": {"10.80.0.2": "awg1",
-                                                     "10.80.0.9": "awg2"}}
-        with mock.patch.object(app, "read_status", return_value=status), \
-                mock.patch.object(app.awgconf, "render", return_value=""):
-            text = self.client.get(f"/exits/{eid}").text
-        current, reserve = text.split('<section id="exit-configurations" tabindex="-1">', 1)[1].split(
-            '<summary data-live="exit-config-summary|awg1">', 1)
-        self.assertIn("current-peer", current)
-        self.assertNotIn("alternative-peer", current)
-        self.assertIn("alternative-peer", reserve)
 
     def test_overview_measures_the_device_round_trip(self):
         self.seed_exit("e1", "awg1", mode="internet")
@@ -1485,7 +1504,9 @@ class RoutedChoiceTests(PanelTestCase):
         self.assertNotIn(f'name="exits" value="{foreign}"', text)
         self.login("c1@example.com", USER_PASSWORD)
         text = self.client.get(f"/me/configs/{cid}").text
-        self.assertIn("0 of 1 allowed subnets included", text)
+        self.assertIn("Only subnets granted to the account can be enabled here", text)
+        self.assertIn('class="oc-table console-table me-subnets-table"', text)
+        self.assertNotIn("allowed subnets included", text)
         self.assertNotIn("ungranted-subnet", text)
 
     """Subnets are granted to the account and chosen per configuration."""
@@ -1700,11 +1721,10 @@ class AdminRouteConsistencyTests(PanelTestCase):
         self.login_admin()
         with mock.patch.object(app, "read_status", return_value=status), \
                 mock.patch.object(app.awgconf, "render", return_value=""):
-            live = self.client.get("/status.json?exit_configurations=awg1").json()
+            live = self.client.get("/status.json").json()
             detail = self.client.get(f"/exits/{eid}").text
         self.assertEqual(live["exit_usage"]["awg1"], 1)
         self.assertEqual(live["configs"]["10.80.0.2"]["admin_route"]["current"]["id"], eid)
-        self.assertEqual([x["id"] for x in live["exit_configurations"]["current"]], [cid])
         self.assertIn('data-live="admin-exit|awg1">Disabled</span>', detail)
 
     def test_global_pin_fallback_and_shared_routes_are_consistent(self):
@@ -1716,7 +1736,7 @@ class AdminRouteConsistencyTests(PanelTestCase):
         self.grant(aid, cid, fallback_id, 20)
         with app.db() as conn:
             conn.execute("UPDATE clients SET pinned_iface = 'awg2' WHERE id = ?", (cid,))
-            orphan = conn.execute(
+            conn.execute(
                 "INSERT INTO clients (name, ip, public_key, private_key, preshared_key, "
                 "enabled, created_at, internet, table_num) "
                 "VALUES ('shared', '10.80.0.9', 'pub2', 'priv', 'psk', 1, 'now', 1, 0)"
@@ -1730,33 +1750,27 @@ class AdminRouteConsistencyTests(PanelTestCase):
                 mock.patch.object(app, "run_dir", return_value="awg1"), \
                 mock.patch.object(app, "services", return_value={}), \
                 mock.patch.object(app.awgconf, "render", return_value=""):
-            global_data = self.client.get("/status.json?exit_configurations=awg1").json()
-            fallback_data = self.client.get("/status.json?overview=true&exit_configurations=awg3").json()
+            global_data = self.client.get("/status.json").json()
+            fallback_data = self.client.get("/status.json?overview=true").json()
             listing = self.client.get("/exits").text
-            detail = self.client.get(f"/exits/{fallback_id}").text
             overview = self.client.get("/").text
         self.assertEqual(global_data["exit_usage"], {"awg1": 1, "awg3": 1})
-        self.assertEqual([x["id"] for x in global_data["exit_configurations"]["current"]], [orphan])
-        self.assertEqual([x["id"] for x in fallback_data["exit_configurations"]["current"]], [cid])
         route = fallback_data["configs"]["10.80.0.2"]["admin_route"]
         self.assertEqual((global_data["global_exit"], route["pinned"]["id"], route["current"]["id"]),
                          ("awg1", pinned_id, fallback_id))
         self.assertIn('data-live="exit-usage|awg3">1</span>', listing)
-        self.assertIn(f'href="/exits/{fallback_id}#exit-configurations"', overview)
         self.assertIn("fallback is degraded", overview)
-        self.assertIn(f'href="/configs/{cid}">phone</a>', detail)
+        self.assertNotIn("#exit-configurations", overview)
         self.assertEqual(global_id, fallback_data["overview"]["active"]["id"])
 
         stale = dict(status, ts=int(time.time()) - 300)
         with mock.patch.object(app, "read_status", return_value=stale):
-            data = self.client.get("/status.json?exit_configurations=awg3").json()
+            data = self.client.get("/status.json").json()
             listing = self.client.get("/exits").text
         self.assertFalse(data["status_fresh"])
-        self.assertEqual(data["exit_configurations"]["current"], [])
         self.assertIn('data-live="exit-usage|awg3">—</span>', listing)
         self.login("c1@example.com", USER_PASSWORD)
-        user_data = self.client.get("/status.json?exit_configurations=awg3").json()
-        self.assertNotIn("exit_configurations", user_data)
+        user_data = self.client.get("/status.json").json()
         self.assertNotIn("exit_usage", user_data)
         self.assertNotIn("admin_route", user_data["configs"]["10.80.0.2"])
 
@@ -2120,7 +2134,7 @@ class NavigationTests(PanelTestCase):
         self.assertIn('data-live="exit-usage|awg1">0</span>', exits)
         self.assertIn('data-live="exit-usage|awg2">1</span>', exits)
         self.assertIn("second has a failed check", overview)
-        self.assertIn(f"/exits/{second}#exit-configurations", overview)
+        self.assertNotIn("#exit-configurations", overview)
 
     def test_exit_list_shows_latency_and_subnet_mode_without_internet_badges(self):
         self.seed_exit("online", "awg1")
@@ -2691,7 +2705,9 @@ class CabinetTrafficTests(PanelTestCase):
                  "exits": {"awg1": {"alive": True, "rtt_ms": 23}}}
         with mock.patch.object(app, "read_status", return_value=stale):
             text = self.client.get(f"/me/configs/{cid}").text
-        self.assertRegex(text, r"no data</span>\s*exit status unavailable")
+        self.assertIn('data-live="admin-exit|awg1">No data</span>', text)
+        self.assertIn('data-live="active-row|10.80.0.2"', text)
+        self.assertIn('data-iface="awg1" hidden>Active</span>', text)
         self.assertNotIn("in use now", text)
         self.assertNotIn('data-live="exit|awg1">up', text)
 
