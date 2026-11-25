@@ -37,8 +37,8 @@
             {% else %}<span class="oc-badge oc-badge--warning">unassigned</span>{% endif %}
              </td><td>{{ config_route(c.admin_route, c.ip) }}</td><td>
             <span data-live="hs|{{ c.ip }}">—</span><div class="cell-sub oc-num">
-            <span><span data-live="rx|{{ c.ip }}">{{ (c.rx / 1048576) | round(1) }}</span> /
-              <span data-live="tx|{{ c.ip }}">{{ (c.tx / 1048576) | round(1) }}</span> MiB</span>
+            <span><span data-live="rx|{{ c.ip }}">{{ c.rx | human_bytes }}</span> /
+              <span data-live="tx|{{ c.ip }}">{{ c.tx | human_bytes }}</span></span>
           </div>
         </td>
         <td>

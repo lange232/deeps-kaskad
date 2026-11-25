@@ -1411,9 +1411,11 @@
 .config-columns {
   display: grid;
   gap: 24px;
-  grid-template-columns: repeat(auto-fit, minmax(420px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(420px, 100%), 1fr));
   align-items: start;
 }
+/* A scrollable table must not stretch its column past the phone's width. */
+.config-columns > section { min-width: 0; }
 .config-exits-table th:nth-child(3) { width: 100%; }
 .config-traffic { font-size: var(--ui-fs-xs); }
 /* The access table follows the reference console's model list: a 32 px header

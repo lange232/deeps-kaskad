@@ -4,8 +4,8 @@
       <div class="actions" style="gap:10px">
         {% if traffic_ip %}
         <span class="oc-muted oc-mono config-traffic">
-          <span class="oc-num" data-live="rx|{{ traffic_ip }}">{{ (traffic_rx / 1048576) | round(1) }}</span> MiB in ·
-          <span class="oc-num" data-live="tx|{{ traffic_ip }}">{{ (traffic_tx / 1048576) | round(1) }}</span> MiB out
+          <span class="oc-num" data-live="rx|{{ traffic_ip }}">{{ traffic_rx | human_bytes }}</span> in ·
+          <span class="oc-num" data-live="tx|{{ traffic_ip }}">{{ traffic_tx | human_bytes }}</span> out
         </span>
         {% endif %}
         <div class="actions" style="gap:4px">

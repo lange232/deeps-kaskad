@@ -33,6 +33,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   sentence-case header, 48 px rows, two-line cells with the name over the
   country and interface, numbers and controls aligned right. The account email
   and the configuration name carry the same emphasis as the exit names.
+  Byte totals in the overview's client traffic tile, the configuration list
+  and the traffic header pick the largest readable unit (B, KiB, MiB, GiB,
+  TiB) instead of always showing MiB.
 - The account page splits exit grants into two tables, internet exits and
   subnets. Internet exits have a drag grip and both tables have a square access
   switch. Turning a switch off dims the row, moves it to the bottom of its own
@@ -61,7 +64,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   page and the cabinet, so its buttons, icons and QR/config reveals stay in
   step. The admin page's former "Configuration files and keys" block is gone:
   rename and Device ID moved to Manage configuration, reissue key to a Danger
-  zone.
+  zone. `show config` prints the client configuration in full on both pages;
+  only the exit's provider config stays masked.
 - The configuration connection block is gone: the page header shows the
   connection state, the exit table marks the active row, and the traffic totals
   sit in the traffic header.
@@ -99,7 +103,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   "no accounts yet" state keeps room for its create button.
 - On phones the cabinet's exit order shows only the total latency (`N ms`):
   the client+exit split is hidden and long exit names wrap, so the table no
-  longer scrolls sideways.
+  longer scrolls sideways. The two-column block no longer forces a 420 px
+  track on a narrow screen, so the exit list stays as wide as the other
+  blocks.
 - Saving access or an exit order confirms inside the button: it flashes a
   green checkmark for a moment at a fixed width, so neither the row nor the
   page moves. The full wording still reaches screen readers via the live

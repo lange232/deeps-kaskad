@@ -172,7 +172,14 @@
   // the elements marked data-live. Scroll, focus and an open <details> stay.
   window.kaskadLive = function (seconds, clientRtt) {
     var rtt = typeof clientRtt === 'number' ? clientRtt : null;
-    var mb = function (bytes) { return (Number(bytes) / 1048576).toFixed(1); };
+    // Bytes in the largest unit that keeps the number readable.
+    var size = function (value) {
+      var n = Number(value || 0);
+      var units = ['B', 'KiB', 'MiB', 'GiB', 'TiB'];
+      var i = 0;
+      while (n >= 1024 && i < units.length - 1) { n /= 1024; i++; }
+      return (i === 0 ? Math.round(n) : n.toFixed(1)) + ' ' + units[i];
+    };
     var put = function (el, text) {
       if (el.textContent !== text) el.textContent = text;
     };
@@ -302,10 +309,10 @@
           }
         } else if (kind === 'rx') {
           item = configs[key];
-          put(el, mb(item ? item.rx : 0));
+          put(el, size(item ? item.rx : 0));
         } else if (kind === 'tx') {
           item = configs[key];
-          put(el, mb(item ? item.tx : 0));
+          put(el, size(item ? item.tx : 0));
         } else if (kind === 'kb') {
           item = configs[key];
           put(el, item && item.enabled ? 'enabled' : 'disabled');
@@ -355,9 +362,9 @@
         } else if (kind === 'online') {
           put(el, String(data.online));
         } else if (kind === 'rx-total') {
-          put(el, mb(data.rx));
+          put(el, size(data.rx));
         } else if (kind === 'tx-total') {
-          put(el, mb(data.tx));
+          put(el, size(data.tx));
         } else if (kind === 'exits-alive') {
           put(el, data.status_fresh ? String(data.exits_alive) : '—');
         } else if (kind === 'exits_total' || kind === 'configs_total') {

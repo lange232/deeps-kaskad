@@ -2360,6 +2360,21 @@ class GrantTests(PanelTestCase):
         self.assertNotIn('>up</button>', page)
         self.assertNotIn('>down</button>', page)
 
+    def test_config_preview_shows_the_keys_unmasked(self):
+        aid, cid = self.seed_client()
+        self.grant(aid, cid, self.seed_exit("e1", "awg1"))
+        self.login_admin()
+        with mock.patch.object(app, "read_status", return_value={"ts": int(time.time())}):
+            page = self.client.get(f"/configs/{cid}").text
+        self.assertIn("PrivateKey = privkey", page)
+        self.assertIn("PresharedKey = psk", page)
+        self.assertNotIn("••••", page)
+        self.login("c1@example.com", USER_PASSWORD)
+        with mock.patch.object(app, "read_status", return_value={"ts": int(time.time())}):
+            page = self.client.get(f"/me/configs/{cid}").text
+        self.assertIn("PrivateKey = privkey", page)
+        self.assertNotIn("••••", page)
+
     def test_disabled_exit_cannot_be_granted(self):
         aid, cid = self.seed_client()
         dead = self.seed_exit("dead", "awg5", enabled=0)

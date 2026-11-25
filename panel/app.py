@@ -814,6 +814,9 @@ def human_bytes(value) -> str:
     return "0 B"
 
 
+templates.env.filters["human_bytes"] = human_bytes
+
+
 def human_rate(value) -> str:
     return human_bytes(value) + "/s"
 
@@ -1625,6 +1628,12 @@ def config_conf(c: dict, cl) -> str:
 
 
 def mask_conf(text: str) -> str:
+    """Hide PrivateKey/PresharedKey values in a config shown as a preview.
+
+    Used for the exit's provider config. A client's own config is shown in
+    full: the same reader can download the .conf, so masking only hid the
+    text they came to copy.
+    """
     out = []
     for line in text.splitlines():
         low = line.strip().lower()
@@ -2623,7 +2632,7 @@ def config_page(
         for e in known
     }
     try:
-        conf = mask_conf(config_conf(c, cl))
+        conf = config_conf(c, cl)
     except ValueError:
         conf = None
     accounts = []
@@ -3841,7 +3850,7 @@ def me_config_page(
         for e in known
     }
     try:
-        conf = mask_conf(config_conf(c, cl))
+        conf = config_conf(c, cl)
     except ValueError:
         conf = None
     chosen_routed = {e["id"] for e in config_routed_exits(cl)}

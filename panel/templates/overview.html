@@ -33,7 +33,7 @@
     </div>
     <div class="stat-tile">
       <div class="stat-label">client traffic</div>
-      <div class="stat-value oc-num"><span data-live="rx-total">{{ (rx / 1048576) | round(1) }}</span><span class="of">/ <span data-live="tx-total">{{ (tx / 1048576) | round(1) }}</span> MiB</span></div>
+      <div class="stat-value oc-num"><span data-live="rx-total">{{ rx | human_bytes }}</span><span class="of">/ <span data-live="tx-total">{{ tx | human_bytes }}</span></span></div>
       <div class="stat-sub">received / sent</div>
     </div>
     <div class="stat-tile">
