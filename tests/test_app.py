@@ -383,7 +383,8 @@ class TrafficChartTests(unittest.TestCase):
         first, second = chart["points"]
         # The download series is drawn above the upload one, so its y is smaller.
         self.assertLess(first["down"], first["up"])
-        self.assertGreater(second["x"], first["x"])
+        # Time runs right-to-left: the newer point is further left.
+        self.assertLess(second["x"], first["x"])
 
     def test_isolated_buckets_do_not_fill_the_gap(self):
         chart = app.build_traffic_chart(300, 0, 3600, [
@@ -392,7 +393,7 @@ class TrafficChartTests(unittest.TestCase):
         a, b = chart["points"]
         self.assertEqual(a["tx"], 10)
         self.assertEqual(b["rx"], 20)
-        self.assertAlmostEqual(b["x"] - a["x"],
+        self.assertAlmostEqual(a["x"] - b["x"],
                                (chart["width"] - chart["gutter"]) * 2400 / 3600,
                                places=1)
         self.assertEqual(chart["from_ts"], 0)

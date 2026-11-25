@@ -60,7 +60,7 @@
         </svg>
         <div id="traffic-tooltip" class="traffic-tooltip" role="status" aria-live="polite" hidden></div>
       </div>
-      <div class="traffic-axis"><span data-ts="{{ chart.from_ts }}">{{ chart.from }}</span><span data-ts="{{ chart.to_ts }}">{{ chart.to }}</span></div>
+      <div class="traffic-axis"><span data-ts="{{ chart.to_ts }}">{{ chart.to }}</span><span data-ts="{{ chart.from_ts }}">{{ chart.from }}</span></div>
       <script>
       (function () {
         const points = {{ chart.points | tojson }};

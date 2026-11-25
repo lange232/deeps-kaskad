@@ -865,7 +865,8 @@ def build_traffic_chart(step: int, since: int, now: int, rows) -> dict | None:
     scale = peak or 1
 
     def x_at(key: int) -> float:
-        return gutter + ((key * bucket + bucket / 2) / span) * (CHART_WIDTH - gutter)
+        # Newest on the left: the reading direction runs right-to-left in time.
+        return gutter + (1 - (key * bucket + bucket / 2) / span) * (CHART_WIDTH - gutter)
 
     def y_at(value: float) -> float:
         return bottom - (value / scale) * plot

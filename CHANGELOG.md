@@ -66,7 +66,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   sit in the traffic header.
 - The traffic chart follows the Activity page: a grid with rate labels,
   download and upload lines, each with a soft fill, a hover guide with a
-  tooltip and a bordered axis strip. The interval slider is gone.
+  tooltip and a bordered axis strip. The interval slider is gone. The time
+  axis runs right-to-left, so the newest sample is on the left.
 - Collapsible blocks are gone: diagnostics, password recovery, account checks
   and settings, exit management and configuration management are shown
   outright instead of hiding behind a summary line. Only the QR and config
