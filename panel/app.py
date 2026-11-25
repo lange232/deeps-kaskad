@@ -875,20 +875,51 @@ def build_traffic_chart(step: int, since: int, now: int, rows) -> dict | None:
     paths: list[dict] = []
     run: list[dict] = []
 
+    def smooth(items: list[dict], key: str) -> str:
+        """A Catmull-Rom curve through the samples, clamped to the plot.
+
+        A one-hour range has only a dozen points, so straight segments look
+        like a saw; the curve keeps the hover dots on the line and stays
+        inside the grid instead of overshooting.
+        """
+        if len(items) < 2:
+            return ""
+        if len(items) == 2:
+            return f" L {items[1]['x']},{items[1][key]}"
+        parts = []
+        for index in range(len(items) - 1):
+            p0 = items[max(index - 1, 0)]
+            p1 = items[index]
+            p2 = items[index + 1]
+            p3 = items[min(index + 2, len(items) - 1)]
+            c1x = p1["x"] + (p2["x"] - p0["x"]) / 6
+            c1y = min(max(p1[key] + (p2[key] - p0[key]) / 6, top), bottom)
+            c2x = p2["x"] - (p3["x"] - p1["x"]) / 6
+            c2y = min(max(p2[key] - (p3[key] - p1[key]) / 6, top), bottom)
+            parts.append(
+                f"C {round(c1x, 2)},{round(c1y, 2)} "
+                f"{round(c2x, 2)},{round(c2y, 2)} {p2['x']},{p2[key]}"
+            )
+        return " " + " ".join(parts)
+
     def close_run() -> None:
         if not run:
             return
-        xs = ",".join(f"{point['x']},{point['down']}" for point in run)
-        ups = ",".join(f"{point['x']},{point['up']}" for point in run)
-        def closed(points: str) -> str:
-            return (f"M {run[0]['x']},{bottom} L {points} "
-                    f"L {run[-1]['x']},{bottom} Z")
+        first, last = run[0], run[-1]
+
+        def line(key: str) -> str:
+            return f"M {first['x']},{first[key]}" + smooth(run, key)
+
+        def area(key: str) -> str:
+            return (f"M {first['x']},{bottom} L {first['x']},{first[key]}"
+                    + smooth(run, key)
+                    + f" L {last['x']},{bottom} Z")
 
         paths.append({
-            "down": f"M {xs}",
-            "up": f"M {ups}",
-            "area": closed(xs) if len(run) > 1 else "",
-            "area_up": closed(ups) if len(run) > 1 else "",
+            "down": line("down"),
+            "up": line("up"),
+            "area": area("down") if len(run) > 1 else "",
+            "area_up": area("up") if len(run) > 1 else "",
             "dots": [{"x": point["x"], "down": point["down"], "up": point["up"]}
                      for point in run] if len(run) == 1 else [],
         })
