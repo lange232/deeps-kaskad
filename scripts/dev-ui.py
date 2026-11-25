@@ -270,6 +270,11 @@ def build_app(port: int, scenario: str, reset: bool):
     panel.CONFIG_PATH = STATE / "panel.json"
     panel.DB_PATH = STATE / "panel.db"
     panel.ANDROID_APK = STATE / "app.apk"
+    # The cabinet hides the client-apps block when no APK is published. The
+    # preview has no real build, so an empty placeholder keeps the block (and
+    # the "for android" button) visible; a real APK placed here is left alone.
+    if not panel.ANDROID_APK.exists():
+        panel.ANDROID_APK.write_bytes(b"")
     os.environ["KASKAD_SESSION_SECRET"] = "dev-session-secret"
     os.environ["KASKAD_ADMIN_PASSWORD_HASH"] = auth.hash_password(ADMIN_PASSWORD)
 

@@ -13,7 +13,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   automatic administrator sign-in and stubbed system calls, so the interface
   can be checked without a server. The demo database now carries ninety days of
   hourly traffic and a week of five-minute points extended to the current
-  moment on every start, so the chart has data.
+  moment on every start, so the chart has data. An empty `app.apk` placeholder
+  is published so the client-apps block is visible; a real APK placed in the
+  state directory is left alone.
 - An administrator can pin a configuration to one of its granted exits or
   return it to automatic, like the cabinet and the app already could.
   `POST /configs/{id}/pin` validates the exit and refuses one the configuration
@@ -45,12 +47,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   partial or foreign order is rejected, and leaving with unsaved changes asks
   for confirmation.
 - The configuration page has separate Exit order and Subnets sections instead
-  of one Routing block. Dragging the order only marks it unsaved; `save order`
-  posts the list to `/configs/{id}/order/set`, and leaving with unsaved changes
-  asks for confirmation. Traffic now sits at the top of the page, above the
+  of one Routing block. Dragging the order only marks it unsaved; one `apply`
+  button under the table saves the order and the pin together
+  (`POST /configs/{id}/apply`), and leaving with unsaved changes asks for
+  confirmation. Connect sits at the top of the page, then traffic, then the
   exit order. The latency column shows only the server-to-exit round
   trip, right-aligned. The Subnets heading carries its hint inline, without a
-  selected counter or a link to the account page.
+  selected counter or a link to the account page; subnets the account is not
+  granted are not listed at all. On wide screens Exit order and Subnets sit
+  side by side and stack when the window is too narrow for both tables.
+- The Connect block is one shared template used by the admin configuration
+  page and the cabinet, so its buttons, icons and QR/config reveals stay in
+  step. The admin page's former "Configuration files and keys" block is gone:
+  rename and Device ID moved to Manage configuration, reissue key to a Danger
+  zone.
 - The configuration connection block is gone: the page header shows the
   connection state, the exit table marks the active row, and the traffic totals
   sit in the traffic header.
@@ -70,12 +80,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   use it, and `/status.json` no longer carries that data. The usage count in
   the exits table stays.
 - The cabinet configuration page follows the admin console: exit order is a
-  drag-and-drop table with state, Active/Pinned badges and latency, saved with
-  a `save order` button (`POST /me/configs/{id}/order/set`); subnets are square
-  switches in a table instead of checkboxes. The pin is a select, like the
-  admin page.
+  drag-and-drop table with state, Active/Pinned badges and latency. The pin
+  select sits under the table and one `apply` button saves the order and the
+  pin together (`POST /me/configs/{id}/apply`), disabled until either changes;
+  subnets are square switches in a table with their own `apply`; `reissue key`
+  sits in the danger zone with disable and delete.
+- The cabinet's app section is `Client apps` with a `for android` button and
+  the Android robot icon; the configuration page uses the same button.
+- The cabinet's Connect block is recomposed: a one-line hint and four outline
+  buttons with icons — download .conf, for android, show qr, show config. The
+  reveal toggles keep their place and open a panel below, so one never pushes
+  the other onto a new row.
 - Empty states are compact one-line notes instead of tall blank panels; the
   "no accounts yet" state keeps room for its create button.
+- On phones the cabinet's exit order shows only the total latency (`N ms`):
+  the client+exit split is hidden and long exit names wrap, so the table no
+  longer scrolls sideways.
 - Saving access or an exit order confirms inside the button: it flashes a
   green checkmark for a moment at a fixed width, so neither the row nor the
   page moves. The full wording still reaches screen readers via the live

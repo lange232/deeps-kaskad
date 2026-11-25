@@ -2599,7 +2599,6 @@ def config_page(
         accounts = account_rows()
     chosen_routed = {e["id"] for e in config_routed_exits(cl)}
     allowed_routed = config_routed_choices(account) if account else []
-    allowed_ids = {e["id"] for e in allowed_routed}
     routed_choices = [
         {"id": r["id"], "name": r["comment"] or r["name"], "routes": r["routes"],
          "iface": r["iface"], "enabled": bool(r["enabled"]), "priority": r["priority"],
@@ -2614,6 +2613,7 @@ def config_page(
         request, "config_detail.html", "configs",
         csrf=csrf(token), err=err, ok=ok, config=view, **traffic_context(cid, period),
         account=account, routed=config_routed_exits(cl),
+        has_app=ANDROID_APK.exists(),
         diagnosis=configuration_diagnosis(view, status, int(time.time()), shared),
         internet_exits=internet_exits, route=route,
         pinned_iface=cl["pinned_iface"] or "",
@@ -2626,10 +2626,6 @@ def config_page(
         conf=conf, routing_fresh=routing_fresh,
         accounts=accounts,
         routed_choices=routed_choices,
-        ungranted_subnets=[
-            e for e in exits_rows()
-            if e["mode"] == "routes" and e["enabled"] and e["id"] not in allowed_ids
-        ] if account else [],
     )
 
 
@@ -2850,6 +2846,58 @@ def config_order_set(
     if request.headers.get("x-requested-with") == "fetch":
         return JSONResponse({"ok": True})
     return RedirectResponse(f"/configs/{cid}?ok=exit+order+updated", status_code=303)
+
+
+@app.post("/configs/{cid}/apply")
+def config_apply(
+    request: Request,
+    cid: int,
+    order: list[int] = Form([]),
+    exit_id: int = Form(0),
+    csrf_token: str = Form(...),
+):
+    """Save the exit order and the pin from one button.
+
+    The order must name every exit of this configuration once; the pin is
+    either one of those exits or 0 for automatic. Both are written in one
+    transaction so the page never shows a half-applied state.
+    """
+    token = require_admin(request)
+    if not hmac.compare_digest(csrf_token, csrf(token)):
+        raise HTTPException(status_code=400, detail="csrf")
+    cl = config_row(cid)
+    if not cl:
+        raise HTTPException(status_code=404)
+    granted = config_internet_exits(cl)
+    allowed = [e["id"] for e in granted]
+    if len(order) != len(allowed) or set(order) != set(allowed):
+        raise HTTPException(
+            status_code=400,
+            detail="order must list every exit of this configuration once",
+        )
+    chosen = None
+    if exit_id:
+        chosen = next((e for e in granted if e["id"] == exit_id), None)
+        if not chosen:
+            raise HTTPException(status_code=400, detail="exit is not available here")
+    with db() as conn:
+        write_config_order(conn, cid, order)
+        conn.execute(
+            "UPDATE clients SET pinned_iface = ? WHERE id = ?",
+            (chosen["iface"] if chosen else "", cid),
+        )
+    audit("config_exit_order", f"{cl['name']} {' '.join(str(e) for e in order)}")
+    previous = cl["pinned_iface"] or ""
+    current = chosen["iface"] if chosen else ""
+    if previous != current:
+        if current:
+            audit("config_exit_pin", f"{cl['name']} {current}")
+        else:
+            audit("config_exit_pin_cleared", cl["name"])
+    apply_routing()
+    return RedirectResponse(
+        f"/configs/{cid}?ok=exit+order+and+pin+applied", status_code=303
+    )
 
 
 @app.post("/configs/{cid}/pin")
@@ -3873,6 +3921,56 @@ def me_config_order_set(
     if request.headers.get("x-requested-with") == "fetch":
         return JSONResponse({"ok": True})
     return RedirectResponse(f"/me/configs/{cid}?ok=exit+order+updated", status_code=303)
+
+
+@app.post("/me/configs/{cid}/apply")
+def me_config_apply(
+    request: Request,
+    cid: int,
+    order: list[int] = Form([]),
+    exit_id: int = Form(0),
+    csrf_token: str = Form(...),
+):
+    """Save the exit order and the pin from one button.
+
+    The order must name every granted internet exit once; the pin is either
+    one of those exits or 0 for automatic. Both are written in one transaction
+    so the page never shows a half-applied state.
+    """
+    token, account = require_user(request)
+    if not hmac.compare_digest(csrf_token, csrf(token)):
+        raise HTTPException(status_code=400, detail="csrf")
+    cl = user_config(account, cid)
+    granted = config_internet_exits(cl)
+    allowed = [e["id"] for e in granted]
+    if len(order) != len(allowed) or set(order) != set(allowed):
+        raise HTTPException(
+            status_code=400,
+            detail="order must list every exit of this configuration once",
+        )
+    chosen = None
+    if exit_id:
+        chosen = next((e for e in granted if e["id"] == exit_id), None)
+        if not chosen:
+            raise HTTPException(status_code=400, detail="exit is not granted here")
+    with db() as conn:
+        write_config_order(conn, cid, order)
+        conn.execute(
+            "UPDATE clients SET pinned_iface = ? WHERE id = ?",
+            (chosen["iface"] if chosen else "", cid),
+        )
+    audit("user_exit_order", f"{account['email']} {cl['name']} {' '.join(str(e) for e in order)}")
+    previous = cl["pinned_iface"] or ""
+    current = chosen["iface"] if chosen else ""
+    if previous != current:
+        if current:
+            audit("user_exit_pin", f"{account['email']} {cl['name']} {current}")
+        else:
+            audit("user_exit_pin_cleared", f"{account['email']} {cl['name']}")
+    apply_routing()
+    return RedirectResponse(
+        f"/me/configs/{cid}?ok=exit+order+and+pin+applied", status_code=303
+    )
 
 
 @app.post("/me/configs/{cid}/pin")

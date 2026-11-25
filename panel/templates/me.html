@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "_icons.html" import android %}
 {% block title %}my configurations — deeps kaskad{% endblock %}
 {% block topbar %}<a class="oc-mono topbar-link" href="/me">{{ email }}</a>{% endblock %}
 {% block body %}
@@ -62,9 +63,9 @@
 
   {% if has_app %}
   <section>
-    <h2 class="oc-section__title">android app</h2>
+    <h2 class="oc-section__title">Client apps</h2>
     <div class="oc-panel" style="padding:16px">
-      <a class="oc-btn oc-btn--outline oc-btn--sm" href="/download/android">download the app</a>
+      <a class="oc-btn oc-btn--outline oc-btn--sm" href="/download/android">{{ android() }}<span>for android</span></a>
     </div>
   </section>
   {% endif %}

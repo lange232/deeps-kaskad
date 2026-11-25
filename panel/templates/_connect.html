@@ -1,0 +1,49 @@
+{% from "_icons.html" import android, download, qr, config_file %}
+{# The Connect block shared by the admin configuration page and the cabinet.
+   Callers set conf_url, qr_url and pass conf and has_app. #}
+<section>
+  <h2 class="oc-section__title">Connect</h2>
+  <div class="oc-panel connect">
+    {% if conf %}
+    <p class="oc-hint connect__hint">Download the file or scan the QR code to add this device.</p>
+    <div class="connect__actions">
+      <a class="oc-btn oc-btn--outline" href="{{ conf_url }}">{{ download() }}<span>download .conf</span></a>
+      {% if has_app %}
+      <a class="oc-btn oc-btn--outline" href="/download/android">{{ android() }}<span>for android</span></a>
+      {% endif %}
+    </div>
+    <div class="connect__reveals">
+      <button type="button" class="oc-btn oc-btn--outline" data-connect-toggle="qr"
+              aria-expanded="false" aria-controls="connect-qr">{{ qr() }}<span>show qr</span></button>
+      <button type="button" class="oc-btn oc-btn--outline" data-connect-toggle="config"
+              aria-expanded="false" aria-controls="connect-config">{{ config_file() }}<span>show config</span></button>
+    </div>
+    <div class="connect__panels">
+      <div id="connect-qr" class="connect__panel" hidden>
+        <img class="config-qr" src="{{ qr_url }}" alt="Configuration QR code">
+      </div>
+      <div id="connect-config" class="connect__panel" hidden>
+        <pre class="conf">{{ conf }}</pre>
+      </div>
+    </div>
+    {% else %}
+    <p class="oc-muted" style="margin:0">no access assigned</p>
+    {% endif %}
+  </div>
+</section>
+<script>
+// QR and config panels: the toggles stay put and only the panel below opens,
+// so one button never pushes the other onto a new row.
+(function () {
+  const buttons = document.querySelectorAll('[data-connect-toggle]');
+  buttons.forEach(button => {
+    const panel = document.getElementById('connect-' + button.dataset.connectToggle);
+    if (!panel) return;
+    button.addEventListener('click', () => {
+      const open = panel.hidden;
+      panel.hidden = !open;
+      button.setAttribute('aria-expanded', String(open));
+    });
+  });
+})();
+</script>

@@ -43,30 +43,22 @@
 {% endif %}
 
 <div class="stack">
+  {% with conf_url='/configs/' ~ config.id ~ '/conf', qr_url='/configs/' ~ config.id ~ '/qr.png' %}
+  {% include '_connect.html' %}
+  {% endwith %}
+
   {% set chart_url = '/configs/' ~ config.id %}
   {% include '_traffic.html' %}
 
+  <div class="config-columns">
   <section>
-    <div class="toolbar" style="margin-bottom:6px">
-      <div class="actions" style="gap:10px">
-        <h2 class="oc-section__title" style="margin:0">Exit order</h2>
-        <span class="oc-hint">The first working exit is used; a pin wins while that exit is alive</span>
-      </div>
-      {% if internet_exits %}
-      <form method="post" action="/configs/{{ config.id }}/pin" class="actions" style="margin:0">
-        <input type="hidden" name="csrf_token" value="{{ csrf }}">
-        <select class="oc-input" name="exit_id" aria-label="Pinned exit"
-                style="width:auto; max-width:220px">
-          <option value="0">Pinned exit: automatic</option>
-          {% for e in internet_exits %}
-          <option value="{{ e.id }}" {% if e.iface == pinned_iface %}selected{% endif %}>Pinned exit: {{ e.name }}</option>
-          {% endfor %}
-        </select>
-        <button class="oc-btn oc-btn--neutral">apply</button>
-      </form>
-      {% endif %}
+    <div class="actions" style="gap:10px; margin-bottom:6px">
+      <h2 class="oc-section__title" style="margin:0">Exit order</h2>
+      <span class="oc-hint">The first working exit is used; a pin wins while that exit is alive</span>
     </div>
     {% if internet_exits %}
+    <form id="config-apply" method="post" action="/configs/{{ config.id }}/apply">
+      <input type="hidden" name="csrf_token" value="{{ csrf }}">
     <div class="oc-panel table-scroll">
       <table class="oc-table console-table config-exits-table">
         <thead>
@@ -113,15 +105,24 @@
         </tbody>
       </table>
     </div>
+    <div id="config-order-inputs" hidden>
+      {% for e in internet_exits %}<input type="hidden" name="order" value="{{ e.id }}">{% endfor %}
+    </div>
     <div class="actions" style="margin-top:12px">
-      <button type="button" id="config-save-order" class="oc-btn oc-btn--neutral" disabled>save order</button>
+      <select id="config-pin" class="oc-input" name="exit_id" aria-label="Pinned exit"
+              style="width:auto; max-width:220px">
+        <option value="0">Pinned exit: automatic</option>
+        {% for e in internet_exits %}
+        <option value="{{ e.id }}" {% if e.iface == pinned_iface %}selected{% endif %}>Pinned exit: {{ e.name }}</option>
+        {% endfor %}
+      </select>
+      <button id="config-apply-button" class="oc-btn oc-btn--neutral" disabled>apply</button>
       {% if account %}
-      <form method="post" action="/configs/{{ config.id }}/order/reset">
-        <input type="hidden" name="csrf_token" value="{{ csrf }}">
-        <button class="oc-btn oc-btn--neutral">reset to account order</button>
-      </form>
+      <button class="oc-btn oc-btn--neutral" formaction="/configs/{{ config.id }}/order/reset"
+              formnovalidate>reset to account order</button>
       {% endif %}
     </div>
+    </form>
     <span id="config-order-status" class="sr-only" role="status" aria-live="polite"></span>
     {% else %}
     <p class="oc-muted" style="margin:0">{{ 'Uses the global exit order' if config.internet else 'No internet exits granted' }}</p>
@@ -173,30 +174,21 @@
         </table>
       </div>
       <div class="actions" style="margin-top:12px">
-        <button form="config-subnets" class="oc-btn oc-btn--neutral">save subnets</button>
+        <button form="config-subnets" class="oc-btn oc-btn--neutral">apply</button>
       </div>
     </form>
     {% else %}
     <p class="oc-muted">No subnets allowed for this account</p>
     {% endif %}
-    {% if ungranted_subnets %}
-    <div style="margin-top:16px">
-      <h3 class="oc-section__title">Not allowed for this account ({{ ungranted_subnets | length }})</h3>
-      <ul>
-        {% for e in ungranted_subnets %}
-        <li>{{ e.comment or e.name }} · <span class="oc-mono oc-muted">{{ e.routes }}</span></li>
-        {% endfor %}
-      </ul>
-    </div>
-    {% endif %}
   </section>
   {% endif %}
+  </div>
 
   <section>
-    <h2 class="oc-section__title">Configuration files and keys</h2>
+    <h2 class="oc-section__title">Manage configuration</h2>
     <div class="oc-panel" style="padding:16px">
       <form method="post" action="/configs/{{ config.id }}/name"
-            class="actions" style="margin-bottom:14px">
+            class="actions" style="margin:0 0 14px">
         <input type="hidden" name="csrf_token" value="{{ csrf }}">
         <input class="oc-input" type="text" name="name"
                value="{{ config.name }}" maxlength="32" spellcheck="false"
@@ -204,37 +196,25 @@
         <button class="oc-btn oc-btn--outline">rename</button>
       </form>
       {% if config.device_id %}
-      <p class="oc-hint oc-mono" style="margin-bottom:12px">Device ID · {{ config.device_id }}</p>
+      <p class="oc-hint oc-mono" style="margin-bottom:14px">Device ID · {{ config.device_id }}</p>
       {% endif %}
-      <div class="actions">
-        <a class="oc-btn oc-btn--outline" href="/configs/{{ config.id }}/conf">download .conf</a>
-        <form method="post" action="/configs/{{ config.id }}/reissue"
-              data-confirm="Reissue the key for {{ config.name }}? The old .conf and QR code will stop working. Download and import a new configuration.">
-          <input type="hidden" name="csrf_token" value="{{ csrf }}">
-          <button class="oc-btn oc-btn--neutral">reissue key</button>
-        </form>
-      </div>
-      <details id="qr" style="margin-top:14px">
-        <summary class="oc-btn oc-btn--ghost oc-btn--sm" style="display:inline-flex">show qr</summary>
-        <div style="margin-top:14px; background:var(--ui-bg-deep); padding:12px; border-radius:6px; display:inline-block">
-          <img src="/configs/{{ config.id }}/qr.png" alt="qr" style="width:220px; height:220px; image-rendering:pixelated">
-        </div>
-      </details>
-      <details style="margin-top:14px">
-        <summary class="oc-btn oc-btn--ghost oc-btn--sm" style="display:inline-flex">show config</summary>
-        {% if conf %}<pre class="conf" style="margin-top:12px">{{ conf }}</pre>
-        {% else %}<p class="oc-muted" style="margin-top:10px">no access assigned</p>{% endif %}
-      </details>
-    </div>
-  </section>
-
-  <section>
-    <h2 class="oc-section__title">Manage configuration</h2>
-    <div class="oc-panel" style="padding:16px">
       <div class="actions">
         <form method="post" action="/configs/{{ config.id }}/toggle">
           <input type="hidden" name="csrf_token" value="{{ csrf }}">
           <button class="oc-btn oc-btn--neutral">{{ 'disable' if config.enabled else 'enable' }}</button>
+        </form>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2 class="oc-section__title">Danger zone</h2>
+    <div class="oc-panel" style="padding:16px">
+      <div class="actions">
+        <form method="post" action="/configs/{{ config.id }}/reissue"
+              data-confirm="Reissue the key for {{ config.name }}? The old .conf and QR code will stop working. Download and import a new configuration.">
+          <input type="hidden" name="csrf_token" value="{{ csrf }}">
+          <button class="oc-btn oc-btn--neutral">reissue key</button>
         </form>
         <form method="post" action="/configs/{{ config.id }}/delete"
               data-confirm="Delete {{ config.name }}? Its keys and traffic history will be erased, and its .conf will stop working.">
@@ -250,17 +230,18 @@
 
 <script>
 (function () {
-  // Same controls as the account page: drag a grip (or Alt + arrows) to order
-  // this configuration's exits, and let a subnet switch dim and move its row
-  // before "save subnets".
+  // Same controls as the cabinet: drag a grip (or Alt + arrows) to order this
+  // configuration's exits. One `apply` button saves the order and the pin;
+  // the subnet switches have their own `apply`.
   const exits = document.querySelector('.config-exits-table');
   const subnets = document.querySelector('.config-subnets-table');
   const status = document.getElementById('config-order-status');
-  const csrfInput = document.querySelector('input[name="csrf_token"]');
-  if (!exits || !status || !csrfInput) return;
-  const configId = {{ config.id }};
+  const form = document.getElementById('config-apply');
+  const pin = document.getElementById('config-pin');
+  const applyButton = document.getElementById('config-apply-button');
+  if (!exits || !status || !form) return;
   let dragged = null;
-  let startOrder = '';
+  let submitting = false;
 
   function rows() {
     return Array.from(exits.tBodies[0].querySelectorAll('tr[data-exit-id]'));
@@ -275,42 +256,38 @@
     list.forEach(row => tbody.appendChild(row));
   }
 
-  const saveButton = document.getElementById('config-save-order');
-  let dirty = false;
+  const startOrder = snapshot();
+  const startPin = pin ? pin.value : '';
 
-  function markDirty() {
-    dirty = true;
-    status.textContent = 'Unsaved order';
-    if (saveButton) saveButton.disabled = false;
+  function changed() {
+    return snapshot() !== startOrder || (pin && pin.value !== startPin);
   }
 
-  function save() {
-    const form = new URLSearchParams();
-    form.append('csrf_token', csrfInput.value);
-    rows().forEach(row => form.append('order', row.dataset.exitId));
-    fetch('/configs/' + configId + '/order/set', {
-      method: 'POST',
-      credentials: 'same-origin',
-      headers: {'Content-Type': 'application/x-www-form-urlencoded',
-                'X-Requested-With': 'fetch'},
-      body: form.toString()
-    }).then(response => {
-      if (!response.ok) throw new Error('save failed');
-      dirty = false;
-      if (saveButton) {
-        saveButton.disabled = true;
-        window.kaskadSaved(saveButton, 'save order');
-      }
-      status.textContent = 'Order saved';
-      window.setTimeout(() => {
-        if (status.textContent === 'Order saved') status.textContent = '';
-      }, 2000);
-    }).catch(() => { status.textContent = 'Could not save the order'; });
+  function announce() {
+    const dirty = changed();
+    status.textContent = dirty ? 'Unsaved changes' : '';
+    if (applyButton) applyButton.disabled = !dirty;
   }
 
-  if (saveButton) saveButton.addEventListener('click', save);
+  // The single form carries the current order into the submit; the hidden
+  // inputs are server-rendered for the no-JS case.
+  form.addEventListener('submit', () => {
+    submitting = true;
+    const box = document.getElementById('config-order-inputs');
+    if (!box) return;
+    box.replaceChildren(...rows().map(row => {
+      const input = document.createElement('input');
+      input.type = 'hidden';
+      input.name = 'order';
+      input.value = row.dataset.exitId;
+      return input;
+    }));
+  });
+
+  if (pin) pin.addEventListener('change', announce);
+
   window.addEventListener('beforeunload', event => {
-    if (!dirty) return;
+    if (submitting || !changed()) return;
     event.preventDefault();
     event.returnValue = '';
   });
@@ -319,7 +296,7 @@
     if (!dragged) return;
     dragged.classList.remove('is-dragging');
     dragged = null;
-    if (snapshot() !== startOrder) markDirty();
+    announce();
   }
 
   exits.addEventListener('pointerdown', event => {
@@ -327,7 +304,6 @@
     if (!grip || (event.pointerType === 'mouse' && event.button > 0)) return;
     event.preventDefault();
     dragged = grip.closest('tr');
-    startOrder = snapshot();
     dragged.classList.add('is-dragging');
     if (grip.setPointerCapture) grip.setPointerCapture(event.pointerId);
   });
@@ -366,7 +342,7 @@
     list.splice(target, 0, row);
     place(list);
     grip.focus({preventScroll: true});
-    markDirty();
+    announce();
   });
 
   if (subnets) {

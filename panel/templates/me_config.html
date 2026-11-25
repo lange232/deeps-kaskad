@@ -20,50 +20,21 @@
 {% if ok %}<div class="oc-alert oc-alert--success" style="margin-bottom:16px"><span class="oc-dot" style="margin-top:7px"></span><div class="oc-alert__body">{{ ok }}</div></div>{% endif %}
 
 <div class="stack">
-  <section>
-    <h2 class="oc-section__title">Connect</h2>
-    <div class="oc-panel" style="padding:16px">
-      {% if conf %}
-      <div class="actions">
-        <a class="oc-btn oc-btn--contrast oc-btn--sm" href="/me/configs/{{ cl.id }}/conf">download .conf</a>
-        {% if has_app %}
-        <a class="oc-btn oc-btn--outline oc-btn--sm" href="/download/android">android app</a>
-        {% endif %}
-        <details><summary class="oc-btn oc-btn--outline oc-btn--sm">Show QR</summary>
-          <img class="config-qr" src="/me/configs/{{ cl.id }}/qr.png" alt="Configuration QR code">
-        </details>
-      </div>
-      <details style="margin-top:14px">
-        <summary class="oc-btn oc-btn--ghost oc-btn--sm" style="display:inline-flex">show config</summary>
-        <pre class="conf" style="margin-top:12px">{{ conf }}</pre>
-      </details>
-      {% else %}
-      <p class="oc-muted" style="margin:0">no access assigned</p>
-      {% endif %}
-    </div>
-  </section>
+  {% with conf_url='/me/configs/' ~ cl.id ~ '/conf', qr_url='/me/configs/' ~ cl.id ~ '/qr.png' %}
+  {% include '_connect.html' %}
+  {% endwith %}
   {% set chart_url = '/me/configs/' ~ cl.id %}
   {% include '_traffic.html' %}
 
+  <div class="config-columns">
   {% if internet_exits and cl.internet %}
   <section>
-    <div class="toolbar" style="margin-bottom:6px">
-      <div class="actions" style="gap:10px">
-        <h2 class="oc-section__title" style="margin:0">Exit order</h2>
-        <span class="oc-hint">The first working exit is used; a pin wins while that exit is alive</span>
-      </div>
-      <form method="post" action="/me/configs/{{ cl.id }}/pin" class="actions" style="margin:0">
-        <input type="hidden" name="csrf_token" value="{{ csrf }}">
-        <select class="oc-input" name="exit_id" aria-label="Pinned exit"
-                style="width:auto; max-width:220px">
-          <option value="0">Pinned exit: automatic</option>
-          {% for e in internet_exits %}
-          <option value="{{ e.id }}" {% if e.iface == pinned_iface %}selected{% endif %}>Pinned exit: {{ e.comment or e.name }}</option>
-          {% endfor %}
-        </select>
-        <button class="oc-btn oc-btn--neutral">apply</button>
-      </form>
+    <div class="actions" style="gap:10px; margin-bottom:6px">
+      <h2 class="oc-section__title" style="margin:0">Exit order</h2>
+      <span class="oc-hint">The first working exit is used; a pin wins while that exit is alive</span>
     </div>
+    <form id="me-apply" method="post" action="/me/configs/{{ cl.id }}/apply">
+      <input type="hidden" name="csrf_token" value="{{ csrf }}">
     <div class="oc-panel table-scroll">
       <table class="oc-table console-table me-exits-table">
         <thead>
@@ -112,13 +83,22 @@
         </tbody>
       </table>
     </div>
-    <div class="actions" style="margin-top:12px">
-      <button type="button" id="me-save-order" class="oc-btn oc-btn--neutral" disabled>save order</button>
-      <form method="post" action="/me/configs/{{ cl.id }}/order/reset">
-        <input type="hidden" name="csrf_token" value="{{ csrf }}">
-        <button class="oc-btn oc-btn--neutral">reset to account order</button>
-      </form>
+    <div id="me-order-inputs" hidden>
+      {% for e in internet_exits %}<input type="hidden" name="order" value="{{ e.id }}">{% endfor %}
     </div>
+    <div class="actions" style="margin-top:12px">
+      <select id="me-pin" class="oc-input" name="exit_id" aria-label="Pinned exit"
+              style="width:auto; max-width:220px">
+        <option value="0">Pinned exit: automatic</option>
+        {% for e in internet_exits %}
+        <option value="{{ e.id }}" {% if e.iface == pinned_iface %}selected{% endif %}>Pinned exit: {{ e.comment or e.name }}</option>
+        {% endfor %}
+      </select>
+      <button id="me-apply-button" class="oc-btn oc-btn--neutral" disabled>apply</button>
+      <button class="oc-btn oc-btn--neutral" formaction="/me/configs/{{ cl.id }}/order/reset"
+              formnovalidate>reset to account order</button>
+    </div>
+    </form>
     <span id="me-order-status" class="sr-only" role="status" aria-live="polite"></span>
   </section>
   {% endif %}
@@ -167,13 +147,14 @@
         </table>
       </div>
       <div class="actions" style="margin-top:12px">
-        <button form="me-subnets" class="oc-btn oc-btn--neutral">save subnets</button>
+        <button form="me-subnets" class="oc-btn oc-btn--neutral">apply</button>
       </div>
     </form>
     {% else %}
     <p class="oc-muted">No subnets allowed for this account</p>
     {% endif %}
   </section>
+  </div>
 
   <section>
     <h2 class="oc-section__title">Manage configuration</h2>
@@ -191,23 +172,17 @@
   </section>
 
 
-  {% if conf %}
-  <section>
-    <h2 class="oc-section__title">reissue key</h2>
-    <div class="oc-panel" style="padding:16px">
-      <form method="post" action="/me/configs/{{ cl.id }}/reissue"
-            data-confirm="Reissue the key for {{ cl.name }}? The old .conf and QR code will stop working. Download and import a new configuration.">
-        <input type="hidden" name="csrf_token" value="{{ csrf }}">
-        <button class="oc-btn oc-btn--neutral oc-btn--sm">reissue key</button>
-      </form>
-    </div>
-  </section>
-  {% endif %}
-
   <section>
     <h2 class="oc-section__title">danger zone</h2>
     <div class="oc-panel" style="padding:16px">
       <div class="actions">
+        {% if conf %}
+        <form method="post" action="/me/configs/{{ cl.id }}/reissue"
+              data-confirm="Reissue the key for {{ cl.name }}? The old .conf and QR code will stop working. Download and import a new configuration.">
+          <input type="hidden" name="csrf_token" value="{{ csrf }}">
+          <button class="oc-btn oc-btn--neutral oc-btn--sm">reissue key</button>
+        </form>
+        {% endif %}
         <form method="post" action="/me/configs/{{ cl.id }}/toggle">
           <input type="hidden" name="csrf_token" value="{{ csrf }}">
           <button class="oc-btn oc-btn--neutral oc-btn--sm">{{ 'disable' if cl.enabled else 'enable' }}</button>
@@ -226,16 +201,17 @@
 <script>
 (function () {
   // Same controls as the admin configuration page: drag a grip (or Alt +
-  // arrows) to order this configuration's exits, and let a subnet switch dim
-  // and move its row before "save subnets".
+  // arrows) to order this configuration's exits. One `apply` button saves the
+  // order and the pin together; the subnet switches have their own `apply`.
   const exits = document.querySelector('.me-exits-table');
   const subnets = document.querySelector('.me-subnets-table');
   const status = document.getElementById('me-order-status');
-  const csrfInput = document.querySelector('input[name="csrf_token"]');
-  if (!exits || !status || !csrfInput) return;
-  const configId = {{ cl.id }};
+  const form = document.getElementById('me-apply');
+  const pin = document.getElementById('me-pin');
+  const applyButton = document.getElementById('me-apply-button');
+  if (!exits || !status || !form) return;
   let dragged = null;
-  let startOrder = '';
+  let submitting = false;
 
   function rows() {
     return Array.from(exits.tBodies[0].querySelectorAll('tr[data-exit-id]'));
@@ -250,42 +226,38 @@
     list.forEach(row => tbody.appendChild(row));
   }
 
-  const saveButton = document.getElementById('me-save-order');
-  let dirty = false;
+  const startOrder = snapshot();
+  const startPin = pin ? pin.value : '';
 
-  function markDirty() {
-    dirty = true;
-    status.textContent = 'Unsaved order';
-    if (saveButton) saveButton.disabled = false;
+  function changed() {
+    return snapshot() !== startOrder || (pin && pin.value !== startPin);
   }
 
-  function save() {
-    const form = new URLSearchParams();
-    form.append('csrf_token', csrfInput.value);
-    rows().forEach(row => form.append('order', row.dataset.exitId));
-    fetch('/me/configs/' + configId + '/order/set', {
-      method: 'POST',
-      credentials: 'same-origin',
-      headers: {'Content-Type': 'application/x-www-form-urlencoded',
-                'X-Requested-With': 'fetch'},
-      body: form.toString()
-    }).then(response => {
-      if (!response.ok) throw new Error('save failed');
-      dirty = false;
-      if (saveButton) {
-        saveButton.disabled = true;
-        window.kaskadSaved(saveButton, 'save order');
-      }
-      status.textContent = 'Order saved';
-      window.setTimeout(() => {
-        if (status.textContent === 'Order saved') status.textContent = '';
-      }, 2000);
-    }).catch(() => { status.textContent = 'Could not save the order'; });
+  function announce() {
+    const dirty = changed();
+    status.textContent = dirty ? 'Unsaved changes' : '';
+    if (applyButton) applyButton.disabled = !dirty;
   }
 
-  if (saveButton) saveButton.addEventListener('click', save);
+  // The single form carries the current order into the submit; the hidden
+  // inputs are server-rendered for the no-JS case.
+  form.addEventListener('submit', () => {
+    submitting = true;
+    const box = document.getElementById('me-order-inputs');
+    if (!box) return;
+    box.replaceChildren(...rows().map(row => {
+      const input = document.createElement('input');
+      input.type = 'hidden';
+      input.name = 'order';
+      input.value = row.dataset.exitId;
+      return input;
+    }));
+  });
+
+  if (pin) pin.addEventListener('change', announce);
+
   window.addEventListener('beforeunload', event => {
-    if (!dirty) return;
+    if (submitting || !changed()) return;
     event.preventDefault();
     event.returnValue = '';
   });
@@ -294,7 +266,7 @@
     if (!dragged) return;
     dragged.classList.remove('is-dragging');
     dragged = null;
-    if (snapshot() !== startOrder) markDirty();
+    announce();
   }
 
   exits.addEventListener('pointerdown', event => {
@@ -302,7 +274,6 @@
     if (!grip || (event.pointerType === 'mouse' && event.button > 0)) return;
     event.preventDefault();
     dragged = grip.closest('tr');
-    startOrder = snapshot();
     dragged.classList.add('is-dragging');
     if (grip.setPointerCapture) grip.setPointerCapture(event.pointerId);
   });
@@ -341,7 +312,7 @@
     list.splice(target, 0, row);
     place(list);
     grip.focus({preventScroll: true});
-    markDirty();
+    announce();
   });
 
   if (subnets) {

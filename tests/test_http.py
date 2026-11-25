@@ -705,15 +705,38 @@ class ExitPinTests(PanelTestCase):
         self.assertEqual(bad.status_code, 400)
         self.assertEqual(self.order(), [self.first, self.second])
 
-    def test_the_cabinet_offers_a_grip_and_save_order(self):
+    def test_the_cabinet_offers_a_grip_and_one_apply(self):
         with mock.patch.object(app, "read_status", return_value={"ts": int(time.time())}):
             page = self.client.get(f"/me/configs/{self.cid}").text
         self.assertIn('class="oc-table console-table me-exits-table"', page)
         self.assertIn('class="exit-grip"', page)
-        self.assertIn('id="me-save-order"', page)
-        self.assertIn('disabled>save order</button>', page)
-        self.assertNotIn('>up</button>', page)
-        self.assertNotIn('>down</button>', page)
+        self.assertIn('id="me-apply"', page)
+        self.assertIn('id="me-pin"', page)
+        self.assertIn('id="me-order-inputs"', page)
+        self.assertIn('id="me-apply-button"', page)
+        self.assertIn('disabled>apply</button>', page)
+        self.assertNotIn('>save order</button>', page)
+        self.assertNotIn('>save subnets</button>', page)
+
+    def test_the_cabinet_applies_order_and_pin_together(self):
+        csrf = self.csrf(f"/me/configs/{self.cid}")
+        response = self.client.post(f"/me/configs/{self.cid}/apply", data={
+            "order": [self.second, self.first], "exit_id": self.second,
+            "csrf_token": csrf,
+        })
+        self.assertEqual(response.status_code, 303)
+        self.assertEqual(self.order(), [self.second, self.first])
+        self.assertEqual(self.pinned(), "awg2")
+
+    def test_the_cabinet_apply_refuses_a_foreign_pin(self):
+        foreign = self.seed_exit("spare", "awg3", priority=30)
+        csrf = self.csrf(f"/me/configs/{self.cid}")
+        response = self.client.post(f"/me/configs/{self.cid}/apply", data={
+            "order": [self.first, self.second], "exit_id": foreign,
+            "csrf_token": csrf,
+        })
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(self.pinned(), "")
 
     def test_only_a_granted_exit_can_be_pinned(self):
         foreign = self.seed_exit("spare", "awg3", priority=30)
@@ -1489,10 +1512,10 @@ class AdminActivitySystemTests(PanelTestCase):
 
 
 class RoutedChoiceTests(PanelTestCase):
-    def test_admin_distinguishes_unselected_and_ungranted_subnets(self):
+    def test_admin_hides_subnets_not_granted_to_the_account(self):
         aid, cid, routed = self.account_with_routed()
-        foreign = self.seed_exit("ungranted-subnet", "awg9", mode="routes",
-                                 routes="10.9.0.0/24")
+        self.seed_exit("ungranted-subnet", "awg9", mode="routes",
+                       routes="10.9.0.0/24")
         with app.db() as conn:
             conn.execute("DELETE FROM client_exits WHERE client_id = ?", (cid,))
         self.login_admin()
@@ -1500,8 +1523,8 @@ class RoutedChoiceTests(PanelTestCase):
         self.assertNotIn(f'/accounts/{aid}#access', text)
         self.assertNotIn("selected</span>", text)
         self.assertIn("Only subnets granted to the account can be enabled here", text)
-        self.assertIn("ungranted-subnet", text)
-        self.assertNotIn(f'name="exits" value="{foreign}"', text)
+        self.assertNotIn("ungranted-subnet", text)
+        self.assertNotIn("Not allowed for this account", text)
         self.login("c1@example.com", USER_PASSWORD)
         text = self.client.get(f"/me/configs/{cid}").text
         self.assertIn("Only subnets granted to the account can be enabled here", text)
@@ -1992,7 +2015,7 @@ class ConfigPingTests(PanelTestCase):
             "client_ping": {"10.80.0.2": 10},
         })
         self.assertIn('data-live="exit-rtt|awg1">40 ms</span>', text)
-        self.assertNotIn("≈ 50 ms", text)
+        self.assertNotIn("50 ms", text)
         self.assertNotIn("client 10 + exit", text)
 
     def test_card_shows_exit_latency_without_client_ping(self):
@@ -2213,6 +2236,36 @@ class GrantTests(PanelTestCase):
         self.assertEqual([e for e, _ in self.account_grants(aid)],
                          [first, second, third])
 
+    def test_config_apply_saves_order_and_pin_together(self):
+        aid, cid = self.seed_client()
+        first = self.seed_exit("e1", "awg1", priority=10)
+        second = self.seed_exit("e2", "awg2", priority=20)
+        self.grant(aid, cid, first, 10)
+        self.grant(aid, cid, second, 20)
+        self.login_admin()
+        csrf = self.csrf(f"/configs/{cid}")
+        response = self.client.post(f"/configs/{cid}/apply", data={
+            "order": [second, first], "exit_id": second, "csrf_token": csrf,
+        })
+        self.assertEqual(response.status_code, 303)
+        self.assertEqual([e for e, _ in self.grants(cid)], [second, first])
+        with app.db() as conn:
+            self.assertEqual(conn.execute(
+                "SELECT pinned_iface FROM clients WHERE id = ?", (cid,)).fetchone()[0],
+                "awg2")
+
+    def test_config_apply_refuses_a_foreign_pin(self):
+        aid, cid = self.seed_client()
+        first = self.seed_exit("e1", "awg1")
+        self.grant(aid, cid, first)
+        stranger = self.seed_exit("spare", "awg3")
+        self.login_admin()
+        csrf = self.csrf(f"/configs/{cid}")
+        response = self.client.post(f"/configs/{cid}/apply", data={
+            "order": [first], "exit_id": stranger, "csrf_token": csrf,
+        })
+        self.assertEqual(response.status_code, 400)
+
     def test_config_exit_order_rejects_a_partial_or_foreign_list(self):
         aid, cid = self.seed_client()
         first = self.seed_exit("e1", "awg1")
@@ -2299,8 +2352,10 @@ class GrantTests(PanelTestCase):
             page = self.client.get(f"/configs/{cid}").text
         self.assertIn('class="oc-table console-table config-exits-table"', page)
         self.assertIn('class="exit-grip"', page)
-        self.assertIn('id="config-save-order"', page)
-        self.assertIn('disabled>save order</button>', page)
+        self.assertIn('id="config-apply"', page)
+        self.assertIn('id="config-pin"', page)
+        self.assertIn('id="config-apply-button"', page)
+        self.assertIn('disabled>apply</button>', page)
         self.assertIn('class="oc-switch"', page)
         self.assertNotIn('>up</button>', page)
         self.assertNotIn('>down</button>', page)
