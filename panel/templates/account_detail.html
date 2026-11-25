@@ -171,15 +171,15 @@
       </form>
     </div>
     <span id="order-status" class="sr-only" role="status" aria-live="polite"></span>
-    <p class="oc-hint" style="margin-top:8px">
+    <p class="oc-hint" style="margin:8px 0 0">
       Order changes apply to new configurations only. “Apply order” resets every
       configuration of this account to the order above.
     </p>
   </section>
 
+  {% if checks %}
   <section>
     <h2 class="oc-section__title">Destinations this account checks</h2>
-    {% if checks %}
     <div class="oc-panel">
       <div class="table-scroll">
       <table class="oc-table">
@@ -197,10 +197,8 @@
       </table>
       </div>
     </div>
-    {% else %}
-    <div class="oc-empty">none</div>
-    {% endif %}
   </section>
+  {% endif %}
 
   <section>
     <div class="toolbar">

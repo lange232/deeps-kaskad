@@ -39,7 +39,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   table and hides the grip before saving; turning it back on returns the row to
   the end of the checked group. One `save` button applies both the switches and
   the order. The tables are labelled Exits and Subnets directly, without a
-  redundant "Exit access and order" heading above them.
+  redundant "Exit access and order" heading above them. The checks section is
+  hidden while the account has no checks.
 - The exit order is changed by dragging a grip or with Alt plus the arrow keys,
   Home and End. On both pages the change is only marked unsaved until the
   `save` button on the account page (which applies the switches and the order
@@ -77,7 +78,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   start with their search and actions, and the object name (account email,
   configuration or exit name, and the cabinet's account) sits in the middle of
   the top bar. The old heading line is replaced by a compact row of badges and
-  counts.
+  counts. The first block keeps an 18 px gap under the top bar, so removing
+  the heading did not push it against the header.
 - The exit page no longer lists the configurations that use the exit or could
   use it, and `/status.json` no longer carries that data. The usage count in
   the exits table stays.

@@ -1390,7 +1390,7 @@
 /* The theme is switched by an attribute on <html>: data-theme="light" | "dark" */
 
 .nav-toggle { display: none; }
-.cab-nav { display: flex; gap: 18px; margin: 16px 0 20px; border-bottom: 1px solid var(--ui-border-base); }
+.cab-nav { display: flex; gap: 18px; margin: 0 0 20px; border-bottom: 1px solid var(--ui-border-base); }
 .cab-nav a { padding: 8px 0; color: var(--ui-text-muted); text-decoration: none; }
 .cab-nav [aria-current] { color: var(--ui-text-base); border-bottom: 2px solid var(--ui-border-focus); }
 .health-summary { padding: 12px 16px; display: grid; gap: 6px; }
