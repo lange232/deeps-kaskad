@@ -78,9 +78,6 @@
 # staging certificate has to be replaced by a real one.
 - name: Certificate needs issuance
   ansible.builtin.set_fact:
-    kaskad_le_days_left: >-
-      {{ (kaskad_le_existing.stdout | default('')
-          | regex_findall('VALID: (\\d+) day') | first | default('0')) | int }}
     kaskad_le_issue_needed: >-
       {{ (kaskad_le_existing.rc | default(1)) != 0
          or (kaskad_le_existing.stdout | default('')

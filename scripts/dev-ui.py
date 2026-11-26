@@ -34,13 +34,13 @@ STATE = Path(os.environ.get("KASKAD_DEV_STATE",
                             Path.home() / ".local" / "share" / "kaskad-dev"))
 ADMIN_PASSWORD = "dev-panel"
 SCENARIOS = ("healthy", "degraded", "down", "stale")
-# Bumped when the demo dataset changes, so an old database is not silently
-# missing rows the UI is expected to show.
 PNG_PIXEL = bytes.fromhex(
     "89504e470d0a1a0a0000000d4948445200000001000000010806000000"
     "1f15c4890000000a49444154789c6300010000050001"
     "0d0a2db40000000049454e44ae426082"
 )
+# Bumped when the demo dataset changes, so an old database is not silently
+# missing rows the UI is expected to show.
 SEED_VERSION = "4"
 
 
@@ -309,7 +309,7 @@ def build_app(port: int, scenario: str, reset: bool):
         mock.patch.object(panel, "apply_routing", mock.Mock()),
         mock.patch.object(panel, "apply_exit", mock.Mock(return_value="")),
         mock.patch.object(panel, "iface_dump", lambda _iface: {"peers": live}),
-        mock.patch.object(panel, "read_status", lambda: dict(status, ts=int(time.time()))),
+        mock.patch.object(panel, "read_status", lambda: dict(status)),
         mock.patch.object(panel, "services", lambda: services),
         mock.patch.object(panel, "run_dir", lambda _name: status.get("active", "")),
         # qrencode is not installed everywhere; the preview only needs a square.

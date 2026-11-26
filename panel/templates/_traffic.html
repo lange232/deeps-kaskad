@@ -111,9 +111,7 @@
           dotUp.setAttribute('visibility', 'hidden');
           tip.hidden = true;
         }
-        svg.addEventListener('pointermove', event => {
-          if (event.pointerType && event.pointerType !== 'mouse'
-              && event.pointerType !== 'pen') return;
+        function at(event) {
           const box = svg.getBoundingClientRect();
           const x = (event.clientX - box.left) * {{ chart.width }} / box.width;
           let best = points[0];
@@ -121,6 +119,15 @@
             if (Math.abs(point.x - x) < Math.abs(best.x - x)) best = point;
           }
           show(best);
+        }
+        svg.addEventListener('pointermove', event => {
+          if (event.pointerType && event.pointerType !== 'mouse'
+              && event.pointerType !== 'pen') return;
+          at(event);
+        });
+        // A tap inspects the nearest sample on a phone, where there is no hover.
+        svg.addEventListener('pointerdown', event => {
+          if (event.pointerType === 'touch') at(event);
         });
         svg.addEventListener('pointerleave', hide);
       })();

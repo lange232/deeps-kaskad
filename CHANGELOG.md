@@ -14,8 +14,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   can be checked without a server. The demo database now carries ninety days of
   hourly traffic and a week of five-minute points extended to the current
   moment on every start, so the chart has data. An empty `app.apk` placeholder
-  is published so the client-apps block is visible; a real APK placed in the
-  state directory is left alone.
+  is published so the client-apps block is visible, and an empty `app.msi`
+  placeholder does the same for Windows; real files placed in the state
+  directory are left alone.
 - An administrator can pin a configuration to one of its granted exits or
   return it to automatic, like the cabinet and the app already could.
   `POST /configs/{id}/pin` validates the exit and refuses one the configuration
@@ -51,9 +52,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The exit order is changed by dragging a grip or with Alt plus the arrow keys,
   Home and End. On both pages the change is only marked unsaved until the
   `save` button on the account page (which applies the switches and the order
-  in one go) or `save order` on the configuration page posts the whole list; a
-  partial or foreign order is rejected, and leaving with unsaved changes asks
-  for confirmation.
+  in one go) or `apply` on the configuration page posts the whole list and the
+  pin; a partial or foreign order is rejected, and leaving with unsaved changes
+  asks for confirmation.
 - The configuration page has separate Exit order and Subnets sections instead
   of one Routing block. Dragging the order only marks it unsaved; one `apply`
   button under the table saves the order and the pin together
@@ -70,7 +71,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   rename and Device ID moved to Manage configuration, reissue key to a Danger
   zone. `show config` prints the client configuration in full on both pages;
   only the exit's provider config stays masked.
-- The configuration connection block is gone: the page header shows the
+- The old connection-state block is gone: the page header shows the
   connection state, the exit table marks the active row, and the traffic totals
   sit in the traffic header.
 - The traffic chart follows the Activity page: a grid with rate labels,
@@ -99,8 +100,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   sits in the danger zone with disable and delete.
 - The cabinet's app section is `Client apps` with a `for android` button and
   the Android robot icon; the configuration page uses the same button.
-- The cabinet's Connect block is recomposed: a one-line hint and four outline
-  buttons with icons — download .conf, for android, show qr, show config. The
+- The cabinet's Connect block is recomposed: a one-line hint and outline
+  buttons with icons — download .conf, for android, for windows, show qr,
+  show config. The
   reveal toggles keep their place and open a panel below, so one never pushes
   the other onto a new row.
 - Empty states are compact one-line notes instead of tall blank panels; the
@@ -110,10 +112,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   longer scrolls sideways. The two-column block no longer forces a 420 px
   track on a narrow screen, so the exit list stays as wide as the other
   blocks.
-- Saving access or an exit order confirms inside the button: it flashes a
+- Saving access on the account page confirms inside the button: it flashes a
   green checkmark for a moment at a fixed width, so neither the row nor the
-  page moves. The full wording still reaches screen readers via the live
-  region.
+  page moves; the configuration pages' `apply` submits and reloads instead.
+  The full wording still reaches screen readers via the live region.
 - Deploying panel code is a fast path: `--tags code` runs only the archive,
   unpack, config and restarts (~40 s on the stand) instead of the whole role.
   Facts are gathered once, certbot is called only when a certificate is missing

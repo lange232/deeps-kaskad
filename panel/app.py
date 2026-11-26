@@ -864,7 +864,7 @@ def build_traffic_chart(step: int, since: int, now: int, rows) -> dict | None:
     if not sums:
         return None
     peak = max(max(pair) for pair in sums.values()) / bucket
-    top, bottom, gutter = 10, CHART_HEIGHT - 5, 36
+    top, bottom, gutter = 10, CHART_HEIGHT - 5, 64
     plot = bottom - top
     scale = peak or 1
 
@@ -3843,7 +3843,6 @@ def me_config_page(
     shared = not cl["account_id"] and bool(cl["internet"]) and not granted
     current_iface = (selected_internet_iface(cl, status, shared)
                      if routing_fresh else "")
-    current = next((e for e in granted if e["iface"] == current_iface), None)
     states = status.get("exits") or {}
     known = exits_rows()
     latency = {
@@ -3871,8 +3870,8 @@ def me_config_page(
         request, "me_config.html", "me", role="user",
         csrf=csrf(token), err=err, ok=ok, email=account["email"],
         cl=view, diagnosis=configuration_diagnosis(view, status, int(time.time())),
-        conf=conf, internet_exits=granted, current_exit=current,
-        pinned=cl["pinned_iface"], pinned_iface=cl["pinned_iface"] or "",
+        conf=conf, internet_exits=granted,
+        pinned_iface=cl["pinned_iface"] or "",
         current_iface=current_iface,
         latency=latency, has_app=ANDROID_APK.exists(), has_windows=WINDOWS_MSI.exists(),
         exit_states={e["iface"]: exit_view(e, status, None)
@@ -4808,7 +4807,8 @@ def status_json(request: Request, overview: bool = False):
                 "handshake": v["handshake"],
                 "rx": v["rx"],
                 "tx": v["tx"],
-                "iface": current.get(v["ip"], ""),
+                "iface": ((status.get("active") or "") if v["id"] in shared
+                          else current.get(v["ip"], "")),
                 **({"admin_route": admin_routes[v["ip"]]} if role == "admin" else {}),
                 "diagnosis": configuration_diagnosis(
                     v, status, now, v["id"] in shared

@@ -1778,6 +1778,9 @@ class AdminRouteConsistencyTests(PanelTestCase):
             listing = self.client.get("/exits").text
             overview = self.client.get("/").text
         self.assertEqual(global_data["exit_usage"], {"awg1": 1, "awg3": 1})
+        # A legacy shared configuration is absent from status["clients"]; the
+        # live payload must still report the global active exit for its badge.
+        self.assertEqual(global_data["configs"]["10.80.0.9"]["iface"], "awg1")
         route = fallback_data["configs"]["10.80.0.2"]["admin_route"]
         self.assertEqual((global_data["global_exit"], route["pinned"]["id"], route["current"]["id"]),
                          ("awg1", pinned_id, fallback_id))

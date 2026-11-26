@@ -324,9 +324,10 @@ ansible-playbook -i inventory.libra.yml playbooks/site.yml --tags code -T 60
 `code` runs just the panel archive, its unpack, the config template and the
 restart handlers — a handful of tasks instead of the whole role. It skips apt,
 fail2ban, certbot, the systemd units and backups, which is what made a full
-`site.yml` run take tens of minutes on a slow 1-vCPU stand. Add `deps`
-(`--tags code,deps`) when `requirements.txt` changed; pip still runs only on a
-change. Use a full run for a fresh host or after touching base/entry/TLS.
+`site.yml` run take tens of minutes on a slow 1-vCPU stand. The `deps` checks
+ride along with `code` and install Python requirements only when
+`requirements.txt` changed; `--skip-tags deps` drops them. Use a full run for a
+fresh host or after touching base/entry/TLS.
 
 Addresses, the panel port and TLS belong in the inventory, which is
 gitignored; `group_vars/all.yml` holds only shared defaults and is the same

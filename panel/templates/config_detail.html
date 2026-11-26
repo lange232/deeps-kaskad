@@ -117,6 +117,7 @@
         {% endfor %}
       </select>
       <button id="config-apply-button" class="oc-btn oc-btn--neutral" disabled>apply</button>
+      <noscript><button class="oc-btn oc-btn--neutral">apply</button></noscript>
       {% if account %}
       <button class="oc-btn oc-btn--neutral" formaction="/configs/{{ config.id }}/order/reset"
               formnovalidate>reset to account order</button>
