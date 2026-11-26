@@ -518,8 +518,11 @@ GET  /api/me/configs/{id}/traffic?hours=24
 POST /api/logout                  revokes the token
 ```
 
-Changing the subnets changes `AllowedIPs` and `DNS` of the generated `.conf`,
-so the device has to import the file again; the keys stay the same.
+On a subnet-only configuration, changing the subnets changes `AllowedIPs` and
+`DNS` of the generated `.conf`, so the device has to import the file again; the
+keys stay the same. A configuration with an internet exit keeps
+`AllowedIPs = 0.0.0.0/0` and the global DNS, and the server routes the chosen
+subnets, so its file does not change and nothing needs re-importing.
 
 `client` is a compatibility field: the account's first configuration (`null`
 while the account has none), for app versions that predate the account model.
@@ -568,8 +571,26 @@ SHA-256 from that file on each request, caching them until the file changes.
 A same-directory atomic rename avoids serving a partially written APK. A
 replacement is visible at `/api/android` and
 `/download/android`, with no deploy and no restart. `/download/android`
-answers 404 until the file exists; the client's `/me` page then shows an
-"android app" button.
+answers 404 until the file exists; the cabinet's Client apps section then
+shows a "for android" button.
+
+### Windows client
+
+The panel also distributes the Windows client MSI. Like the APK, the file is
+not kept in this repository and the deploy does not manage it. Put the
+installer on the host:
+
+```bash
+scp deeps-kaskad-0.3.0-x64.msi user@host:/tmp/
+ssh user@host 'sudo install -o root -g root -m 0644 \
+    /tmp/deeps-kaskad-0.3.0-x64.msi /var/lib/kaskad/app.msi.new &&
+    sudo mv -f /var/lib/kaskad/app.msi.new /var/lib/kaskad/app.msi'
+```
+
+`/download/windows` serves it, and the cabinet's Client apps section and the
+Connect block on a configuration page show a "for windows" button once the
+file exists. There is no metadata endpoint: the panel advertises nothing
+about the build beyond the file itself.
 
 A code-only deploy on a slow link uses `--tags code` (see Deployment). The
 `deps` checks ride along and install Python requirements only when

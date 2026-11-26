@@ -62,6 +62,7 @@ BASE = Path(__file__).resolve().parent
 CONFIG_PATH = Path(os.environ.get("KASKAD_CONFIG", "/etc/kaskad/panel.json"))
 DB_PATH = Path(os.environ.get("KASKAD_DB", "/var/lib/kaskad/panel.db"))
 ANDROID_APK = Path(os.environ.get("KASKAD_ANDROID_APK", "/var/lib/kaskad/app.apk"))
+WINDOWS_MSI = Path(os.environ.get("KASKAD_WINDOWS_MSI", "/var/lib/kaskad/app.msi"))
 COOKIE = "kaskad_session"
 SESSION_TTL = auth.SESSION_TTL
 NAME_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,31}$")
@@ -2654,7 +2655,7 @@ def config_page(
         request, "config_detail.html", "configs",
         csrf=csrf(token), err=err, ok=ok, config=view, **traffic_context(cid, period),
         account=account, routed=config_routed_exits(cl),
-        has_app=ANDROID_APK.exists(),
+        has_app=ANDROID_APK.exists(), has_windows=WINDOWS_MSI.exists(),
         diagnosis=configuration_diagnosis(view, status, int(time.time()), shared),
         internet_exits=internet_exits, route=route,
         pinned_iface=cl["pinned_iface"] or "",
@@ -3634,7 +3635,7 @@ def me_page(request: Request, err: str | None = None, ok: str | None = None):
         csrf=csrf(token), err=err, ok=ok, configs=configs,
         email=account["email"], last_login=human_ts(account["last_login"]),
         limit=max_configs_for(account),
-        has_app=ANDROID_APK.exists(),
+        has_app=ANDROID_APK.exists(), has_windows=WINDOWS_MSI.exists(),
         # Which exit each configuration rides right now, plus the state the
         # failover reported for it: the cabinet must show it without a click.
         current_exit_of=status.get("clients") or {},
@@ -3873,7 +3874,7 @@ def me_config_page(
         conf=conf, internet_exits=granted, current_exit=current,
         pinned=cl["pinned_iface"], pinned_iface=cl["pinned_iface"] or "",
         current_iface=current_iface,
-        latency=latency, has_app=ANDROID_APK.exists(),
+        latency=latency, has_app=ANDROID_APK.exists(), has_windows=WINDOWS_MSI.exists(),
         exit_states={e["iface"]: exit_view(e, status, None)
                      for e in granted + allowed_routed},
         routing_fresh=routing_fresh,
@@ -4153,6 +4154,19 @@ def download_android():
         ANDROID_APK,
         media_type="application/vnd.android.package-archive",
         filename="deepskaskad.apk",
+    )
+
+
+@app.get("/download/windows")
+def download_windows():
+    """The Windows client MSI, served from a file the deploy drops next to
+    the database; 404 until the administrator uploads one."""
+    if not WINDOWS_MSI.exists():
+        raise HTTPException(status_code=404, detail="no app uploaded yet")
+    return FileResponse(
+        WINDOWS_MSI,
+        media_type="application/x-msi",
+        filename="deeps-kaskad-x64.msi",
     )
 
 

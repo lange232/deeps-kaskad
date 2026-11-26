@@ -20,6 +20,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   return it to automatic, like the cabinet and the app already could.
   `POST /configs/{id}/pin` validates the exit and refuses one the configuration
   does not have.
+- The panel publishes a Windows client MSI at `/download/windows` when
+  `/var/lib/kaskad/app.msi` exists, next to the Android APK. The cabinet's
+  Client apps section and the configuration's Connect block show a
+  `for windows` button with the installer present.
 
 ### Changed
 

@@ -75,6 +75,7 @@ reveal whether the account exists or is disabled.
 | GET | `/api/me/subnets` | Subnets granted to the account and their choice |
 | POST | `/api/me/subnets` | Switch subnets on or off for a configuration |
 | GET | `/api/android` | Public: Android client version, digest and download URL |
+| GET | `/download/windows` | Public: Windows client MSI |
 
 Object shapes are collected in [Data objects](#data-objects).
 
@@ -417,8 +418,11 @@ Switches subnets on or off for one configuration.
 Errors: `400 the account does not grant all of these subnets`, `404
 configuration not found`, `409 no configuration yet; create one first`.
 
-Changing subnets changes `AllowedIPs` and `DNS` in the generated `.conf`. The
-keys stay the same, but the device must import the new file.
+On a subnet-only configuration, changing subnets changes `AllowedIPs` and
+`DNS` in the generated `.conf`; the keys stay the same, but the device must
+import the new file. A configuration with an internet exit keeps
+`AllowedIPs = 0.0.0.0/0` and the global DNS, so its file does not change and
+no re-import is needed: the server routes the chosen subnets.
 
 ---
 
@@ -624,6 +628,14 @@ it signs in. The answer describes the APK that `/download/android` serves.
 - Everything is read from the file on the host, with the result cached until
   the file changes: replacing the APK takes effect on the next request,
   without a deploy or a restart.
+
+### GET /download/windows
+
+The Windows client MSI, served from `/var/lib/kaskad/app.msi` on the host. It
+needs no token. `404` until the file exists. There is no metadata endpoint:
+the file is advertised only by its presence, and the cabinet's Client apps
+section and the configuration's Connect block show a "for windows" button
+once it is there.
 
 ### GET /ping
 

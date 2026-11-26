@@ -181,6 +181,9 @@
 .oc-android {
   color: var(--ui-state-success-fg);
 }
+.oc-windows {
+  color: var(--ui-state-info-fg);
+}
 
 .oc-btn:focus {
   outline: none;

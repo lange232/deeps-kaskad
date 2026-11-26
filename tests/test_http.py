@@ -1998,6 +1998,43 @@ class AndroidInfoTests(PanelTestCase):
         self.assertEqual(len(download.content), info["size"])
 
 
+class WindowsDownloadTests(PanelTestCase):
+    def setUp(self):
+        super().setUp()
+        self.msi = Path(self.tmp.name) / "app.msi"
+        self.msi_patch = mock.patch.object(app, "WINDOWS_MSI", self.msi)
+        self.msi_patch.start()
+
+    def tearDown(self):
+        self.msi_patch.stop()
+        super().tearDown()
+
+    def test_no_msi_is_404(self):
+        self.assertEqual(self.client.get("/download/windows").status_code, 404)
+
+    def test_download_serves_the_published_file(self):
+        self.msi.write_bytes(b"msi bytes")
+        response = self.client.get("/download/windows")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.content, b"msi bytes")
+        self.assertEqual(response.headers["content-type"], "application/x-msi")
+
+    def test_the_cabinet_shows_the_windows_button_only_when_published(self):
+        aid, cid = self.seed_client()
+        self.login("c1@example.com", USER_PASSWORD)
+        self.assertNotIn('href="/download/windows"', self.client.get("/me").text)
+        self.msi.write_bytes(b"msi")
+        self.assertIn('href="/download/windows"', self.client.get("/me").text)
+
+    def test_the_config_page_offers_windows(self):
+        aid, cid = self.seed_client()
+        self.grant(aid, cid, self.seed_exit("e1", "awg1"))
+        self.msi.write_bytes(b"msi")
+        self.login_admin()
+        page = self.client.get(f"/configs/{cid}").text
+        self.assertIn('href="/download/windows"', page)
+
+
 class ConfigPingTests(PanelTestCase):
     def card(self, status):
         aid, cid = self.seed_client()

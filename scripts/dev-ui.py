@@ -275,6 +275,10 @@ def build_app(port: int, scenario: str, reset: bool):
     # the "for android" button) visible; a real APK placed here is left alone.
     if not panel.ANDROID_APK.exists():
         panel.ANDROID_APK.write_bytes(b"")
+    panel.WINDOWS_MSI = STATE / "app.msi"
+    # Same for the Windows installer: an empty placeholder keeps its button.
+    if not panel.WINDOWS_MSI.exists():
+        panel.WINDOWS_MSI.write_bytes(b"")
     os.environ["KASKAD_SESSION_SECRET"] = "dev-session-secret"
     os.environ["KASKAD_ADMIN_PASSWORD_HASH"] = auth.hash_password(ADMIN_PASSWORD)
 

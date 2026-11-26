@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "_icons.html" import android %}
+{% from "_icons.html" import android, windows %}
 {% block title %}my configurations — deeps kaskad{% endblock %}
 {% block topbar %}<a class="oc-mono topbar-link" href="/me">{{ email }}</a>{% endblock %}
 {% block body %}
@@ -61,11 +61,18 @@
     {% endif %}
   </section>
 
-  {% if has_app %}
+  {% if has_app or has_windows %}
   <section>
     <h2 class="oc-section__title">Client apps</h2>
     <div class="oc-panel" style="padding:16px">
-      <a class="oc-btn oc-btn--outline oc-btn--sm" href="/download/android">{{ android() }}<span>for android</span></a>
+      <div class="actions">
+        {% if has_app %}
+        <a class="oc-btn oc-btn--outline oc-btn--sm" href="/download/android">{{ android() }}<span>for android</span></a>
+        {% endif %}
+        {% if has_windows %}
+        <a class="oc-btn oc-btn--outline oc-btn--sm" href="/download/windows">{{ windows() }}<span>for windows</span></a>
+        {% endif %}
+      </div>
     </div>
   </section>
   {% endif %}
