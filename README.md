@@ -436,9 +436,10 @@ Pages: `/`, `/exits`, `/accounts`, `/configs`, `/journal`, `/settings`, plus
 `/accounts/new`, `/accounts/{id}`, `/configs/new`, `/configs/{id}` and the
 cabinet under `/me`, `/me/configs/new`, `/me/configs/{id}`, `/me/checks` and
 `/me/account`
-(password and sessions). Both the admin and cabinet configuration pages draw the traffic history for 1h, 24h, 7d, 30d or 90d
+(password and sessions). Both the admin and cabinet configuration pages draw the traffic history for 1h, 6h, 24h, 7d, 30d or 90d
 (`?range=`), with the downloaded and uploaded totals and the peak rate; the
-chart uses paired SVG bars, leaving missing time buckets blank.
+chart draws a line and a filled area per direction, leaving missing time
+buckets blank.
 
 `/settings` has a `Sign-in page` switch: it serves a standalone minimal page
 with its own inline styles instead of the panel template, so the source names

@@ -168,6 +168,52 @@
     }, 1500);
   };
 
+  var reorderAnimations = new WeakMap();
+
+  // Drop targets use the final layout, not the in-flight visual position.
+  window.kaskadRowMidpoint = function (row) {
+    var box = row.getBoundingClientRect();
+    var transform = reorderAnimations.has(row) ? getComputedStyle(row).transform : 'none';
+    var dy = transform === 'none' ? 0 : new DOMMatrixReadOnly(transform).m42;
+    return box.top + box.height / 2 - dy;
+  };
+
+  // FLIP: start each slide from the row's current visual position, even
+  // when a new reorder interrupts the previous animation.
+  window.kaskadReorder = function (tbody, mutate) {
+    if (!tbody) return;
+    var rows = Array.prototype.slice.call(tbody.querySelectorAll('tr[data-exit-id]'));
+    var animate = typeof DOMMatrixReadOnly === 'function' && typeof tbody.animate === 'function'
+      && !(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+    var before = new Map();
+    if (animate) {
+      rows.forEach(function (row) { before.set(row, row.getBoundingClientRect().top); });
+    }
+    rows.forEach(function (row) {
+      var animation = reorderAnimations.get(row);
+      if (!animation) return;
+      animation.cancel();
+      reorderAnimations.delete(row);
+    });
+    mutate();
+    if (!animate) return;
+    var moves = rows.filter(function (row) { return row.isConnected; }).map(function (row) {
+      return [row, before.get(row) - row.getBoundingClientRect().top];
+    });
+    moves.forEach(function (move) {
+      var row = move[0], dy = move[1];
+      if (!dy) return;
+      var animation = row.animate(
+        [{transform: 'translateY(' + dy + 'px)'}, {transform: 'translateY(0)'}],
+        {duration: 150, easing: 'ease'}
+      );
+      reorderAnimations.set(row, animation);
+      animation.onfinish = function () {
+        if (reorderAnimations.get(row) === animation) reorderAnimations.delete(row);
+      };
+    });
+  };
+
   // Live numbers without a page reload: fetch /status.json and rewrite only
   // the elements marked data-live. Scroll, focus and an open <details> stay.
   window.kaskadLive = function (seconds, clientRtt) {

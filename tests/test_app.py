@@ -399,6 +399,27 @@ class TrafficChartTests(unittest.TestCase):
         self.assertEqual(chart["from_ts"], 0)
         self.assertEqual(chart["to_ts"], 3600)
 
+    def test_the_tooltip_rate_uses_the_drawn_bucket(self):
+        now = 1794800100
+        rows = [
+            {"ts": now - 600, "rx": 0, "tx": 1200},
+            {"ts": now - 300, "rx": 0, "tx": 600},
+        ]
+        chart = app.build_traffic_chart(300, now - 86400, now, rows)
+        # A day is drawn in ten-minute buckets; the tooltip divides by the same
+        # bucket, so its rate matches the axis and the peak.
+        self.assertEqual(chart["bucket"], 600)
+        point = chart["points"][0]
+        self.assertEqual(point["tx"], 1800)
+        self.assertEqual(point["from"], now - 600)
+        self.assertEqual(point["to"], now)
+
+    def test_a_bucket_is_labelled_by_its_first_sample(self):
+        now = 1794800177  # not on the sampler grid
+        rows = [{"ts": now - 177, "rx": 0, "tx": 300}]
+        chart = app.build_traffic_chart(300, now - 3600, now, rows)
+        self.assertEqual(chart["points"][0]["from"], now - 177)
+
     def test_no_history_means_no_chart(self):
         self.assertIsNone(app.build_traffic_chart(300, 0, 3600, []))
 

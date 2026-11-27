@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- The traffic chart has a 6-hour range between 1h and 24h.
+
+### Changed
+
+- The Connect block opens one reveal at a time: showing the QR closes the
+  config panel and the other way round. The config panel has a copy button
+  inside it that copies the whole configuration to the clipboard.
+- Dragging an exit row, or moving it with Alt and the arrow keys, slides the
+  rows into their new positions instead of jumping; reduced-motion settings
+  turn the animation off.
+- The traffic tooltip shows the rate in the same unit as the axis (KiB/s and
+  so on), with the amount moved in that bucket on a second line.
+
 ## [0.5.0] - 2026-11-26
 
 ### Added

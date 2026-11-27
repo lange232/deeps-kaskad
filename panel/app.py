@@ -798,7 +798,7 @@ def remote_ip(endpoint: str) -> str:
     return value.rsplit(":", 1)[0] if ":" in value else value
 
 
-TRAFFIC_RANGES = {"1h": 1, "24h": 24, "7d": 7 * 24, "30d": 30 * 24, "90d": 90 * 24}
+TRAFFIC_RANGES = {"1h": 1, "6h": 6, "24h": 24, "7d": 7 * 24, "30d": 30 * 24, "90d": 90 * 24}
 CHART_WIDTH = 960
 CHART_HEIGHT = 245
 CHART_COLUMNS = 240
@@ -852,15 +852,22 @@ def build_traffic_chart(step: int, since: int, now: int, rows) -> dict | None:
     span = max(int(now) - int(since), 1)
     bucket = max(step, math.ceil(span / CHART_COLUMNS / step) * step)
     sums: dict[int, list[int]] = {}
+    # The window starts at an arbitrary second while the sampler only writes on
+    # its own grid, so a bucket is labelled by its first real sample rather than
+    # by the edge derived from `since`.
+    extent: dict[int, list[int]] = {}
     total_rx = total_tx = 0
     for row in rows:
         rx, tx = int(row["rx"]), int(row["tx"])
         total_rx += rx
         total_tx += tx
-        key = min((span - 1) // bucket, int((int(row["ts"]) - since) // bucket))
+        ts = int(row["ts"])
+        key = min((span - 1) // bucket, int((ts - since) // bucket))
         pair = sums.setdefault(key, [0, 0])
         pair[0] += rx
         pair[1] += tx
+        edge = extent.setdefault(key, [ts, ts])
+        edge[1] = max(edge[1], ts)
     if not sums:
         return None
     peak = max(max(pair) for pair in sums.values()) / bucket
@@ -939,8 +946,8 @@ def build_traffic_chart(step: int, since: int, now: int, rows) -> dict | None:
             "up": round(y_at(rx / bucket), 2),
             "rx": rx,
             "tx": tx,
-            "from": since + key * bucket,
-            "to": min(now, since + (key + 1) * bucket),
+            "from": extent[key][0],
+            "to": min(now, extent[key][1] + step),
         }
         points.append(point)
         run.append(point)
@@ -958,6 +965,7 @@ def build_traffic_chart(step: int, since: int, now: int, rows) -> dict | None:
     return {
         "width": CHART_WIDTH, "height": CHART_HEIGHT,
         "top": top, "bottom": bottom, "gutter": gutter,
+        "bucket": bucket,
         "grid": grid, "paths": paths, "points": points,
         "from_ts": since, "to_ts": now,
         "total_rx": human_bytes(total_rx),

@@ -2847,6 +2847,19 @@ class CabinetTrafficTests(PanelTestCase):
         self.assertIn(
             f'href="/me/configs/{cid}?range=7d#traffic"', response.text
         )
+        self.assertIn(
+            f'href="/me/configs/{cid}?range=6h#traffic"', response.text
+        )
+
+    def test_the_six_hour_range_draws_five_minute_points(self):
+        aid, cid = self.seed_client()
+        self.seed_traffic(cid)
+        self.login("c1@example.com", USER_PASSWORD)
+        response = self.client.get(f"/me/configs/{cid}?range=6h")
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertIn("traffic-chart", response.text)
+        self.assertIn("traffic-line--down", response.text)
+        self.assertIn("const bucket = 300;", response.text)
 
     def test_an_unknown_range_falls_back_to_24h(self):
         aid, cid = self.seed_client()

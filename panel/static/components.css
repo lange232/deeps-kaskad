@@ -1370,7 +1370,7 @@
   color: var(--ui-text-muted);
   font-size: 11px;
   font-weight: 530;
-  white-space: nowrap;
+  white-space: pre-line;
   pointer-events: none;
 }
 .traffic-tooltip[hidden] { display: none; }
@@ -1533,6 +1533,10 @@
 .connect__panels { margin-top: 14px; display: grid; gap: 12px; }
 .connect__panel[hidden] { display: none; }
 .connect__panel .config-qr { margin: 0; }
+/* The copy button sits inside the config panel, over its top-right corner. */
+.connect__conf { position: relative; }
+.connect__copy { position: absolute; top: 8px; right: 8px; z-index: 1; background: var(--ui-bg-layer-2); }
+.connect__conf .conf { padding-right: 40px; }
 @media (max-width: 760px) {
   .nav-toggle:not([hidden]) { display: inline-flex; }
   .side .nav-toggle:not([hidden])[aria-expanded="false"] + nav { display: none; }

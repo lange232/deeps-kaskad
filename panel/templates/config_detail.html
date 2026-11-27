@@ -254,7 +254,7 @@
 
   function place(list) {
     const tbody = exits.tBodies[0];
-    list.forEach(row => tbody.appendChild(row));
+    window.kaskadReorder(tbody, () => list.forEach(row => tbody.appendChild(row)));
   }
 
   const startOrder = snapshot();
@@ -312,12 +312,10 @@
   exits.addEventListener('pointermove', event => {
     if (!dragged) return;
     const others = rows().filter(row => row !== dragged);
-    const before = others.find(row => {
-      const box = row.getBoundingClientRect();
-      return event.clientY < box.top + box.height / 2;
-    });
+    const before = others.find(row => event.clientY < window.kaskadRowMidpoint(row));
     const list = others.slice();
     list.splice(before ? others.indexOf(before) : others.length, 0, dragged);
+    if (list.map(row => row.dataset.exitId).join(',') === snapshot()) return;
     place(list);
   });
 

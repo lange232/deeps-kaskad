@@ -83,6 +83,7 @@
           while (n >= 1024 && i < units.length - 1) { n /= 1024; i++; }
           return (i === 0 ? String(Math.round(n)) : n.toFixed(1)) + ' ' + units[i];
         }
+        const rate = value => size(value) + '/s';
         document.querySelectorAll('.traffic-axis span').forEach(span => {
           if (span.dataset.ts) span.textContent = clock(Number(span.dataset.ts));
         });
@@ -96,8 +97,15 @@
           dotUp.setAttribute('cx', point.x);
           dotUp.setAttribute('cy', point.up);
           dotUp.setAttribute('visibility', 'visible');
-          tip.textContent = clock(point.from) + ' · ↓ ' + size(point.tx)
-            + ' ↑ ' + size(point.rx);
+          // The axis, the peak and the tooltip divide by the same bucket, so
+          // every number on the chart is the same kind of rate.
+          const bucket = {{ chart.bucket }};
+          const bucket_label = bucket >= 3600
+            ? Math.round(bucket / 3600) + ' h'
+            : Math.round(bucket / 60) + ' min';
+          tip.textContent = clock(point.from)
+            + ' · ↓ ' + rate(point.tx / bucket) + ' ↑ ' + rate(point.rx / bucket)
+            + '\n↓ ' + size(point.tx) + ' ↑ ' + size(point.rx) + ' in ' + bucket_label;
           tip.hidden = false;
           const box = svg.getBoundingClientRect();
           const scale = box.width / {{ chart.width }};
