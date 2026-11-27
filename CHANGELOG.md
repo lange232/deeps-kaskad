@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.3] - 2026-11-28
+
 ### Added
 
 - Request bodies are capped at 64 KiB before they are read into memory, so an
