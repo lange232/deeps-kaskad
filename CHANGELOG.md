@@ -27,6 +27,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Responses carry an HSTS header; the deploy and test-client scripts verify
   host keys (accept-new) instead of accepting any key; atomic status writes
   fsync and clean up their temp file; unused ticker branches are removed.
+- Rows in every configuration list — the cabinet, the admin list and the
+  account page — keep their access badges from deciding how wide the
+  configuration line gets. On a phone the rows stack: the configuration stays
+  at two lines and the badges follow underneath.
 
 ## [0.5.2] - 2026-11-27
 

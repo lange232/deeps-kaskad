@@ -1435,7 +1435,12 @@
   text-transform: none;
 }
 .account-access-table th:nth-child(3) { width: 100%; }
-.account-configs-table th:first-child { width: 100%; }
+/* The account page's configuration list keeps its configuration column wide:
+   the exit and access columns have fixed shares instead of content widths. */
+.account-configs-table { table-layout: fixed; }
+.account-configs-table td { white-space: normal; }
+.account-configs-table th:nth-child(2) { width: 22%; }
+.account-configs-table th:nth-child(3) { width: 20%; }
 .console-table tbody tr { height: 48px; }
 .console-table td {
   padding-top: 8px;
@@ -1443,6 +1448,13 @@
   line-height: 16px;
 }
 .console-table .cell-sub { line-height: 15px; }
+/* The cabinet list: the access column has a fixed share, so its badges can
+   never narrow the configuration line. */
+.me-configs { table-layout: fixed; }
+.me-configs th:last-child { width: 30%; }
+/* The admin configurations list gives the configuration column the spare
+   width, so the badges and counters in the other columns cannot squeeze it. */
+.config-list th:first-child { width: 100%; }
 /* A configuration's liveness: a dot before its name, green while the
    handshake is fresh, red when it has gone quiet, grey when it is disabled. */
 .config-state {
@@ -1573,4 +1585,23 @@
   .config-list td { display: block; padding: 2px 0; width: auto !important; border: 0; }
   .config-list .config-owner { overflow-wrap: anywhere; }
   .config-list td:nth-child(4)::before { content: "Handshake · "; color: var(--ui-text-muted); }
+  /* A phone row stacks: the configuration keeps its own two lines and the
+     access badges follow underneath, so neither decides the other's width. */
+  .me-configs thead { display: none; }
+  .me-configs tbody, .me-configs tr, .me-configs td { display: block; width: auto; }
+  .me-configs tr { padding: 10px 12px; border-bottom: 1px solid var(--ui-border-base); }
+  .me-configs tbody tr:last-child { border-bottom: 0; }
+  .me-configs td { padding: 0; border: 0; }
+  .me-configs td + td { margin-top: 6px; }
+  /* The account page keeps its configurations in a console table; on a phone
+     it stacks the same way. */
+  .account-configs-table thead { display: none; }
+  .account-configs-table tbody, .account-configs-table tr,
+  .account-configs-table td { display: block; width: auto; white-space: normal; }
+  .account-configs-table tr { padding: 10px 12px; border-bottom: 1px solid var(--ui-border-base); }
+  /* The console table pins rows to one line; a stacked row grows instead. */
+  .console-table.account-configs-table tbody tr { height: auto; }
+  .account-configs-table tbody tr:last-child { border-bottom: 0; }
+  .account-configs-table td { padding: 0; border: 0; }
+  .account-configs-table td + td { margin-top: 6px; }
 }

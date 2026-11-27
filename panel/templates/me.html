@@ -19,8 +19,8 @@
     {% if configs %}
     <div class="oc-panel">
       <div class="table-scroll">
-      <table class="oc-table">
-        <thead><tr><th>configuration</th><th style="width:1%">access</th></tr></thead>
+      <table class="oc-table me-configs">
+        <thead><tr><th>configuration</th><th>access</th></tr></thead>
         <tbody>
         {% for c in configs %}
           <tr data-href="/me/configs/{{ c.id }}" tabindex="0">
