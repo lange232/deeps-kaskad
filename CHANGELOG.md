@@ -24,6 +24,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The traffic tooltip shows the rate in the same unit as the axis (KiB/s and
   so on), with the amount moved in that bucket on a second line.
 
+### Fixed
+
+- The copy result under the config block no longer pushes the panel down when
+  it appears and moves it back when it clears.
+
 ## [0.5.0] - 2026-11-26
 
 ### Added

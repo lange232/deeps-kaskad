@@ -1537,6 +1537,9 @@
 .connect__conf { position: relative; }
 .connect__copy { position: absolute; top: 8px; right: 8px; z-index: 1; background: var(--ui-bg-layer-2); }
 .connect__conf .conf { padding-right: 40px; }
+/* The status line keeps its height while empty, so reporting a copy result
+   never moves the config block. */
+.connect__status { min-height: 15px; margin-top: 2px; }
 @media (max-width: 760px) {
   .nav-toggle:not([hidden]) { display: inline-flex; }
   .side .nav-toggle:not([hidden])[aria-expanded="false"] + nav { display: none; }

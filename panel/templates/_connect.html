@@ -41,7 +41,7 @@
           </svg>
         </button>
         <pre class="conf">{{ conf }}</pre>
-        <div class="oc-hint" role="status" data-connect-copy-status></div>
+        <div class="oc-hint connect__status" role="status" data-connect-copy-status></div>
       </div>
     </div>
     {% else %}
@@ -89,7 +89,7 @@
     copyButton.setAttribute('aria-label', copyButton.title);
     copyStatus.textContent = copied
       ? 'Config copied'
-      : 'Copy failed. Use “download .conf” instead.';
+      : 'Copy failed — use download .conf.';
     if (copied) reset = window.setTimeout(() => {
       copyIcon.classList.remove('is-hidden');
       copiedIcon.classList.add('is-hidden');
