@@ -1531,6 +1531,10 @@
   background-color: var(--ui-overlay-pressed);
 }
 .connect__panels { margin-top: 14px; display: grid; gap: 12px; }
+/* A grid item would otherwise refuse to shrink below the width of the longest
+   config line and push the block out of the panel on a phone; the <pre>
+   scrolls on its own instead. */
+.connect__panel { min-width: 0; }
 .connect__panel[hidden] { display: none; }
 .connect__panel .config-qr { margin: 0; }
 /* The copy button sits inside the config panel, over its top-right corner. */

@@ -28,6 +28,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - The copy result under the config block no longer pushes the panel down when
   it appears and moves it back when it clears.
+- On a phone the config block stays inside its panel instead of stretching to
+  the longest key and running past the edge of the screen.
 
 ## [0.5.0] - 2026-11-26
 
