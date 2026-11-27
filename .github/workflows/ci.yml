@@ -17,6 +17,14 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r panel/requirements-dev.txt
+      # The panel shells out to `awg` for key derivation. Its keys are plain
+      # WireGuard keys, so the stock `wg` from wireguard-tools answers the same;
+      # the obfuscation parameters are applied later, in the config text.
+      - name: Install awg key tooling
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq wireguard-tools
+          sudo ln -sf "$(command -v wg)" /usr/local/bin/awg
       - name: Run tests
         run: python -B -m unittest discover -s tests -v
 
