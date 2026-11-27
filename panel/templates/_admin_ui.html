@@ -23,6 +23,14 @@
 {% endfor %}
 {% endmacro %}
 
+{% macro config_dot(c) %}
+{% set state = 'disabled' if not c.enabled else ('up' if c.online else 'down') %}
+{% set label = 'disabled' if not c.enabled else ('online' if c.online else 'offline') %}
+<span class="config-state config-state--{{ state }}"
+      role="img" data-live="config-online|{{ c.ip }}"
+      title="{{ label }}" aria-label="{{ label }}"></span>
+{% endmacro %}
+
 {% macro config_route(route, ip, show_labels=false) %}
 <div class="admin-config-route" data-live="admin-route|{{ ip }}">
   <div>

@@ -342,14 +342,35 @@
         if (kind === 'hs') {
           item = configs[key];
           put(el, item ? kaskadRel(item.handshake) : 'no data');
+        } else if (kind === 'config-online') {
+          item = configs[key];
+          var state = !item || !item.enabled ? 'disabled'
+            : (item.handshake && data.ts - item.handshake < {{ online_window | default(180) }}
+                ? 'up' : 'down');
+          var cls = 'config-state config-state--' + state;
+          if (el.className !== cls) el.className = cls;
+          var label = state === 'disabled' ? 'disabled'
+            : (state === 'up' ? 'online' : 'offline');
+          if (el.title !== label) {
+            el.title = label;
+            el.setAttribute('aria-label', label);
+          }
         } else if (kind === 'status') {
           el.hidden = !!data.status_fresh;
         } else if (kind.startsWith('diagnosis')) {
           item = configs[key];
           if (!item || !item.diagnosis) continue;
-          if (kind === 'diagnosis') put(el, item.diagnosis.state);
-          else if (kind === 'diagnosis-age') put(el, item.diagnosis.state === 'Last handshake' ? kaskadRel(item.handshake) : '');
-          else {
+          if (kind === 'diagnosis') {
+            put(el, item.diagnosis.state);
+            // Green while the tunnel is live, grey for every other state.
+            var chip = el.closest('[data-diagnosis-badge]');
+            if (chip) {
+              chip.className = 'oc-badge oc-badge--'
+                + (item.diagnosis.state === 'Online' ? 'success' : 'subtle');
+            }
+          } else if (kind === 'diagnosis-age') {
+            put(el, item.diagnosis.state === 'Last handshake' ? kaskadRel(item.handshake) : '');
+          } else {
             put(el, item.diagnosis.warning);
             el.hidden = !item.diagnosis.warning;
           }
@@ -388,9 +409,6 @@
           put(el, item && item.enabled && item.alive && item.rtt_ms != null ? item.rtt_ms + ' ms' : '—');
         } else if (kind === 'exit-targets') {
           renderProbes(el, (data.exit_targets || {})[key] || {});
-        } else if (kind === 'current-state') {
-          item = configs[key];
-          badge(el, item && exits[item.iface]);
         } else if (kind === 'ping') {
           ping(el, exits[key]);
         } else if (kind === 'pingparts') {

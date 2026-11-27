@@ -444,6 +444,7 @@ Returned by `/api/login`, `/api/me` and `/api/me/configs`.
 | `exits` | string[] | Names of the routed subnets this configuration uses |
 | `remote_ip` | string | Peer address as the host sees it; empty until first connect |
 | `handshake` | int | Unix time of the last handshake; `0` for never |
+| `online` | bool | Handshake younger than three minutes; always false while disabled |
 | `rx` | int | Bytes received from the peer since the interface came up |
 | `tx` | int | Bytes sent to the peer since the interface came up |
 

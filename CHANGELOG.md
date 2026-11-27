@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Every configuration is marked with a dot before its name — in the cabinet,
+  on the admin configurations page and on the account page — green while its
+  handshake is fresh, red once it has gone quiet, and grey while the
+  configuration is disabled. The cabinet list no longer shows the current
+  exit's state badge, which made the `up` labels stagger from row to row, and
+  the state badge on the configuration page is green while the tunnel is
+  online.
+
 ## [0.5.1] - 2026-11-27
 
 ### Added

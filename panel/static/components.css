@@ -1443,6 +1443,19 @@
   line-height: 16px;
 }
 .console-table .cell-sub { line-height: 15px; }
+/* A configuration's liveness: a dot before its name, green while the
+   handshake is fresh, red when it has gone quiet, grey when it is disabled. */
+.config-state {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-right: 6px;
+  border-radius: var(--ui-radius-full);
+  background: var(--ui-state-danger-fg);
+  vertical-align: middle;
+}
+.config-state--up { background: var(--ui-state-success-fg); }
+.config-state--disabled { background: var(--ui-text-faint); }
 .account-access-table__check { text-align: right; }
 .exit-cell { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
 .exit-cell__name { display: flex; align-items: center; gap: 6px; min-width: 0; line-height: 16px; }

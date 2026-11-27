@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% from "_icons.html" import android, windows %}
+{% from "_admin_ui.html" import config_dot %}
 {% block title %}my configurations — deeps kaskad{% endblock %}
 {% block topbar %}<a class="oc-mono topbar-link" href="/me">{{ email }}</a>{% endblock %}
 {% block body %}
@@ -24,7 +25,7 @@
         {% for c in configs %}
           <tr data-href="/me/configs/{{ c.id }}" tabindex="0">
             <td>
-              {{ c.name }}
+              {{ config_dot(c) }}{{ c.name }}
               {% if not c.enabled %}<span class="oc-badge oc-badge--subtle">disabled</span>{% endif %}
               <div class="cell-sub oc-mono" style="display:flex; flex-wrap:wrap; gap:4px 10px">
                 <span>{{ c.ip }}</span>
@@ -39,13 +40,9 @@
               </div>
               {% set iface = current_exit_of.get(c.ip) %}
               {% if iface %}
-              {% set st = exit_states.get(iface, {}) %}
               {% set ex = exits_by_iface.get(iface) %}
-              <div class="cell-sub" style="margin-top:6px; display:flex; gap:6px; align-items:center; white-space:nowrap">
-                <span class="oc-mono" data-live="current-label|{{ c.ip }}">{{ (ex.country or ex.comment or ex.name) if ex else iface }}</span>
-                <span class="oc-badge {% if not status_fresh or st.get('alive') is none %}oc-badge--subtle{% elif st.get('degraded') %}oc-badge--warning{% elif st.get('alive') %}oc-badge--success{% else %}oc-badge--danger{% endif %}"
-                      data-live="current-state|{{ c.ip }}">{% if not status_fresh or st.get('alive') is none %}no data{% elif st.get('degraded') %}degraded{% elif st.get('alive') %}up{% else %}down{% endif %}</span>
-              </div>
+              <div class="cell-sub oc-mono" style="margin-top:6px"
+                   data-live="current-label|{{ c.ip }}">{{ (ex.country or ex.comment or ex.name) if ex else iface }}</div>
               {% endif %}
             </td>
           </tr>

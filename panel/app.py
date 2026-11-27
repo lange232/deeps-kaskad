@@ -70,6 +70,8 @@ NAME_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,31}$")
 DEVICE_ID_RE = re.compile(r"^[A-Za-z0-9-]{8,64}$")
 # Configurations per account unless the administrator sets a personal value.
 DEFAULT_MAX_CONFIGS = 5
+# A configuration counts as online while its handshake is younger than this.
+ONLINE_WINDOW = 180
 # A check is run through every exit the account may use; three is enough to
 # describe the destinations that matter without turning the failover loop
 # into a scanner.
@@ -77,6 +79,7 @@ MAX_ACCOUNT_CHECKS = 3
 # A name that does not resolve quickly is treated as invalid: the request
 # handler must not hang on a slow resolver.
 RESOLVE_TIMEOUT = 3
+
 
 def human_ts(value) -> str:
     if not value:
@@ -1654,10 +1657,17 @@ def mask_conf(text: str) -> str:
     return "\n".join(out)
 
 
-def config_view(cl, live: dict, assigned=None) -> dict:
+def config_online(handshake, now: int) -> bool:
+    """Online while the peer's last handshake is younger than ONLINE_WINDOW."""
+    return bool(handshake) and now - handshake < ONLINE_WINDOW
+
+
+def config_view(cl, live: dict, assigned=None, now: int | None = None) -> dict:
     st = live.get(cl["public_key"], {})
     if assigned is None:
         assigned = config_routed_exits(cl)
+    handshake = st.get("handshake", 0)
+    now = int(time.time()) if now is None else now
     return {
         "id": cl["id"],
         "account_id": cl["account_id"],
@@ -1668,7 +1678,8 @@ def config_view(cl, live: dict, assigned=None) -> dict:
         "internet": config_has_internet(cl),
         "exits": [e["name"] for e in assigned],
         "remote_ip": remote_ip(st.get("endpoint", "")),
-        "handshake": st.get("handshake", 0),
+        "handshake": handshake,
+        "online": config_online(handshake, now),
         "rx": st.get("rx", 0),
         "tx": st.get("tx", 0),
     }
@@ -1734,7 +1745,7 @@ def configuration_diagnosis(view: dict, status: dict, now: int, shared: bool = F
     handshake = view["handshake"]
     if not handshake:
         return {"state": "No handshake recorded", "warning": ""}
-    if now - handshake >= 180:
+    if not config_online(handshake, now):
         return {"state": "Last handshake", "warning": ""}
     warning = ""
     if view["internet"]:
@@ -1803,6 +1814,7 @@ def render_page(request: Request, template: str, nav: str, **ctx):
     ctx.setdefault("role", "admin")
     ctx.setdefault("version", c.get("version", "dev"))
     ctx.setdefault("commit", c.get("commit", ""))
+    ctx.setdefault("online_window", ONLINE_WINDOW)
     ctx["nav"] = nav
     return templates.TemplateResponse(request, template, ctx)
 
@@ -1957,7 +1969,8 @@ def overview(request: Request, err: str | None = None, ok: str | None = None):
     c = cfg()
     live = iface_dump(c["iface"])["peers"]
     rows = config_rows()
-    configs = [config_view(cl, live) for cl in rows]
+    now = int(time.time())
+    configs = [config_view(cl, live, now=now) for cl in rows]
     status, fresh = routing_status()
     active = run_dir("active-exit") if fresh else None
     manual = setting("manual_exit") or ""
@@ -1966,8 +1979,7 @@ def overview(request: Request, err: str | None = None, ok: str | None = None):
         events = conn.execute(
             "SELECT ts, action, detail FROM audit ORDER BY id DESC LIMIT 6"
         ).fetchall()
-    now = int(time.time())
-    online = sum(1 for cl in configs if cl["handshake"] and now - cl["handshake"] < 180)
+    online = sum(1 for cl in configs if cl["online"])
     rx = sum(cl["rx"] for cl in configs)
     tx = sum(cl["tx"] for cl in configs)
     health = overview_health(exits, fresh)
@@ -2487,7 +2499,8 @@ def configs_page(request: Request, q: str | None = None, state: str = ""):
             for r in conn.execute("SELECT id, email, enabled FROM accounts")
         }
     rows = config_rows()
-    items = [config_view(cl, live) for cl in rows]
+    now = int(time.time())
+    items = [config_view(cl, live, now=now) for cl in rows]
     for c in items:
         account = accounts.get(c["account_id"])
         c["account_email"] = account["email"] if account else ""
@@ -2504,10 +2517,9 @@ def configs_page(request: Request, q: str | None = None, state: str = ""):
                "unassigned": "Unassigned"}
     if state not in filters:
         state = ""
-    now = int(time.time())
     if state == "recent":
-        items = [c for c in items if c["enabled"] and c["handshake"]
-                 and now - c["handshake"] < 180]
+        items = [c for c in items
+                 if c["enabled"] and config_online(c["handshake"], now)]
     elif state == "disabled":
         items = [c for c in items if not c["enabled"]]
     elif state == "unassigned":
@@ -3637,19 +3649,17 @@ def me_page(request: Request, err: str | None = None, ok: str | None = None):
     token, account = require_user(request)
     live = iface_dump(cfg()["iface"])["peers"]
     configs = [config_view(cl, live) for cl in account_configs(int(account["id"]))]
-    status, fresh = routing_status()
+    status, _ = routing_status()
     return render_page(
         request, "me.html", "me", role="user",
         csrf=csrf(token), err=err, ok=ok, configs=configs,
         email=account["email"], last_login=human_ts(account["last_login"]),
         limit=max_configs_for(account),
         has_app=ANDROID_APK.exists(), has_windows=WINDOWS_MSI.exists(),
-        # Which exit each configuration rides right now, plus the state the
-        # failover reported for it: the cabinet must show it without a click.
+        # Which exit each configuration rides right now: the cabinet names it
+        # next to the access badges.
         current_exit_of=status.get("clients") or {},
-        exit_states=status.get("exits") or {},
         exits_by_iface={e["iface"]: e for e in exits_rows()},
-        status_fresh=fresh,
     )
 
 
@@ -4759,7 +4769,7 @@ def status_json(request: Request, overview: bool = False):
     live = iface_dump(c["iface"])["peers"]
     now = int(time.time())
     rows = account_configs(int(account["id"])) if account else config_rows()
-    views = [config_view(cl, live) for cl in rows]
+    views = [config_view(cl, live, now=now) for cl in rows]
     shared = shared_internet_configs(rows)
     exit_rows_all = exits_rows()
     exits = {
@@ -4801,7 +4811,7 @@ def status_json(request: Request, overview: bool = False):
         "ts": now,
         "status_fresh": status_fresh,
         "active": status.get("active"),
-        "online": sum(1 for v in views if v["handshake"] and now - v["handshake"] < 180),
+        "online": sum(1 for v in views if v["online"]),
         "rx": sum(v["rx"] for v in views),
         "tx": sum(v["tx"] for v in views),
         "exits_alive": sum(1 for e in exits.values() if e["alive"]),

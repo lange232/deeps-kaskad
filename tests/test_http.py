@@ -768,7 +768,7 @@ class ExitPinTests(PanelTestCase):
 
 
 class CabinetExitStateTests(PanelTestCase):
-    def test_me_shows_the_exit_in_use_and_its_state(self):
+    def test_me_shows_the_exit_in_use_without_its_state(self):
         aid, cid = self.seed_client()
         eid = self.seed_exit(name="nl-1", iface="awg1")
         self.grant(aid, cid, eid)
@@ -781,7 +781,31 @@ class CabinetExitStateTests(PanelTestCase):
         with mock.patch.object(app, "read_status", return_value=status):
             page = self.client.get("/me").text
         self.assertIn("nl-1", page)
-        self.assertIn("degraded", page)
+        # The list names where the traffic leaves, but the exit state lives on
+        # the configuration page: rows stay flush without a badge to stagger.
+        self.assertNotIn('data-live="current-state|10.80.0.2"', page)
+
+    def test_me_marks_a_configuration_online_with_a_green_dot(self):
+        aid, cid = self.seed_client()
+        self.login("c1@example.com", USER_PASSWORD)
+        now = int(time.time())
+        live = {"ok": True, "device": {}, "peers": {"pubkey": {
+            "endpoint": "77.88.99.3:51820", "handshake": now - 20,
+            "rx": 1, "tx": 1}}}
+        with mock.patch.object(app, "iface_dump", return_value=live):
+            page = self.client.get("/me").text
+        self.assertIn('data-live="config-online|10.80.0.2"', page)
+        self.assertIn("config-state config-state--up", page)
+        self.assertNotIn(">online<", page)
+
+    def test_me_marks_a_silent_configuration_with_a_red_dot(self):
+        aid, cid = self.seed_client()
+        self.login("c1@example.com", USER_PASSWORD)
+        live = {"ok": True, "device": {}, "peers": {"pubkey": {
+            "endpoint": "", "handshake": 1, "rx": 0, "tx": 0}}}
+        with mock.patch.object(app, "iface_dump", return_value=live):
+            page = self.client.get("/me").text
+        self.assertIn("config-state config-state--down", page)
 
     def test_me_prefers_the_exit_comment_over_its_name(self):
         aid, cid = self.seed_client()
@@ -898,6 +922,38 @@ class CabinetExitStateTests(PanelTestCase):
             page = self.client.get("/me/account").text
         self.assertIn("nl-1", page)
         self.assertNotIn("spare", page)
+
+
+class ConfigOnlineDotTests(PanelTestCase):
+    def online_peers(self, seconds_ago):
+        now = int(time.time())
+        return {"ok": True, "device": {}, "peers": {"pubkey": {
+            "endpoint": "", "handshake": now - seconds_ago, "rx": 0, "tx": 0}}}
+
+    def test_the_configuration_list_marks_an_online_configuration(self):
+        aid, cid = self.seed_client()
+        self.login_admin()
+        with mock.patch.object(app, "iface_dump",
+                               return_value=self.online_peers(20)):
+            page = self.client.get("/configs").text
+        self.assertIn("config-state config-state--up", page)
+
+    def test_the_account_page_marks_a_silent_configuration(self):
+        aid, cid = self.seed_client()
+        self.login_admin()
+        with mock.patch.object(app, "iface_dump",
+                               return_value=self.online_peers(600)):
+            page = self.client.get(f"/accounts/{aid}").text
+        self.assertIn("config-state config-state--down", page)
+
+    def test_a_disabled_configuration_gets_a_grey_dot(self):
+        aid, cid = self.seed_client(enabled=0)
+        self.login_admin()
+        # Even a fresh handshake does not make a disabled row look online.
+        with mock.patch.object(app, "iface_dump",
+                               return_value=self.online_peers(20)):
+            page = self.client.get("/configs").text
+        self.assertIn("config-state config-state--disabled", page)
 
 
 class RollbackMessageTests(PanelTestCase):
@@ -2860,6 +2916,29 @@ class CabinetTrafficTests(PanelTestCase):
         self.assertIn("traffic-chart", response.text)
         self.assertIn("traffic-line--down", response.text)
         self.assertIn("const bucket = 300;", response.text)
+
+    def test_the_state_badge_is_green_only_while_online(self):
+        aid, cid = self.seed_client()
+        eid = self.seed_exit(name="nl-1", iface="awg1")
+        self.grant(aid, cid, eid)
+        self.login("c1@example.com", USER_PASSWORD)
+        now = int(time.time())
+        live = {"ok": True, "device": {}, "peers": {"pubkey": {
+            "endpoint": "", "handshake": now - 20, "rx": 0, "tx": 0}}}
+        status = {"ts": now, "active": "awg1", "clients": {"10.80.0.2": "awg1"},
+                  "exits": {"awg1": {"alive": True, "degraded": False, "rtt_ms": 20}}}
+        with mock.patch.object(app, "iface_dump", return_value=live), \
+                mock.patch.object(app, "read_status", return_value=status):
+            page = self.client.get(f"/me/configs/{cid}").text
+        self.assertIn(">Online<", page)
+        self.assertIn("oc-badge--success\" data-diagnosis-badge", page)
+
+        live["peers"]["pubkey"]["handshake"] = now - 600
+        with mock.patch.object(app, "iface_dump", return_value=live), \
+                mock.patch.object(app, "read_status", return_value=status):
+            page = self.client.get(f"/me/configs/{cid}").text
+        self.assertIn("Last handshake", page)
+        self.assertIn("oc-badge--subtle\" data-diagnosis-badge", page)
 
     def test_an_unknown_range_falls_back_to_24h(self):
         aid, cid = self.seed_client()

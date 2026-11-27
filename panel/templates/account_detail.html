@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "_admin_ui.html" import config_route, exit_state, notices %}
+{% from "_admin_ui.html" import config_route, exit_state, notices, config_dot %}
 {% block title %}{{ account.email }} — deeps kaskad{% endblock %}
 {% block topbar_title %}<span class="oc-topbar__title oc-mono">{{ account.email }}</span>{% endblock %}
 {% block body %}
@@ -213,7 +213,7 @@
         {% for c in configs %}
           <tr data-href="/configs/{{ c.id }}">
             <td>
-              <a class="oc-link" href="/configs/{{ c.id }}">{{ c.name }}</a>
+              {{ config_dot(c) }}<a class="oc-link" href="/configs/{{ c.id }}">{{ c.name }}</a>
               {% if not c.enabled %}<span class="oc-badge oc-badge--subtle">disabled</span>{% endif %}
               <div class="cell-sub oc-mono">
                 {{ c.ip }} · <span data-live="hs|{{ c.ip }}">—</span>

@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "_admin_ui.html" import config_route %}
+{% from "_admin_ui.html" import config_route, config_dot %}
 {% block title %}configs — deeps kaskad{% endblock %}
 {% block body %}
 <div class="toolbar toolbar--list">
@@ -27,7 +27,7 @@
     {% for c in configs %}
       <tr data-href="/configs/{{ c.id }}">
         <td>
-          <a class="oc-link list-name" href="/configs/{{ c.id }}">{{ c.name }}</a>
+          {{ config_dot(c) }}<a class="oc-link list-name" href="/configs/{{ c.id }}">{{ c.name }}</a>
           {% if not c.enabled %}<span class="oc-badge oc-badge--subtle">disabled</span>{% endif %}
           <div class="cell-sub oc-mono">{{ c.ip }}</div>
           </td><td class="config-owner">

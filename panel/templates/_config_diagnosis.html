@@ -1,5 +1,5 @@
 <div class="actions" style="margin-top:8px">
-  <span class="oc-badge oc-badge--subtle">
+  <span class="oc-badge oc-badge--{{ 'success' if diagnosis.state == 'Online' else 'subtle' }}" data-diagnosis-badge>
     <span data-live="diagnosis|{{ diagnosis_ip }}">{{ diagnosis.state }}</span>
     <span data-live="diagnosis-age|{{ diagnosis_ip }}"></span>
   </span>
