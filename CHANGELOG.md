@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- A provider config can no longer smuggle `awg-quick` hooks into the exit
+  file: `PreUp`, `PostUp`, `PreDown` and `PostDown` are stripped by prefix,
+  and any other unknown `[Interface]` key now makes the config invalid
+  instead of being copied into a file that runs as root.
+
 ## [0.5.3] - 2026-11-28
 
 ### Added

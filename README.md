@@ -712,12 +712,18 @@ a client.
 
 ## Limitations
 
-- Internet exits are probed with ICMP and two HTTP targets. A provider that
-  filters ICMP is considered dead; a destination it blackholes can still be
-  missed unless the account adds it as one of its own checks.
+- Internet exits are probed with ICMP, a TCP handshake and three HTTP targets.
+  A provider that filters ICMP is considered dead; a destination it blackholes
+  can still be missed unless the account adds it as one of its own checks.
 - Two exits must not share the same provider config: the provider sees one
   public key from two endpoints and roams the session between them. The panel
   rejects such configs.
+- A provider config is treated as untrusted. `awg-quick` hooks (`PreUp`,
+  `PostUp`, `PreDown`, `PostDown`) are stripped by prefix, and any other
+  unknown `[Interface]` key is refused when the exit is created, so a foreign
+  config cannot run commands as root on S1.
+- An exit's provider config cannot be edited in place: delete the exit and
+  create it again with the new config.
 - Client tunnels are IPv4 only; on dual-stack devices IPv6 bypasses the tunnel.
 - The panel is exposed over a self-signed certificate (or a Let's Encrypt one,
   which covers the domain, not the IP) and a password.

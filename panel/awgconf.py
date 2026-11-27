@@ -1,8 +1,10 @@
 """Parser for upstream AmneziaWG/WireGuard configs.
 
 Providers hand out configs with things we do not want: DNS (would rewrite
-the resolv.conf of S1), PostUp/PreDown (kill-switch) and IPv6. This module
-turns them into something suitable for awg-quick with Table = off.
+the resolv.conf of S1), awg-quick hooks such as PreUp/PostUp (executed as root)
+and IPv6. This module turns them into something suitable for awg-quick with
+Table = off. Hooks are stripped by prefix, and any other unknown [Interface]
+key is refused rather than copied into a file awg-quick runs.
 """
 from __future__ import annotations
 
@@ -12,6 +14,9 @@ DROP_INTERFACE = {
     "dns", "postup", "predown", "postdown", "saveconfig",
     "table", "mtu", "listenport", "fwmark",
 }
+# awg-quick runs [Interface] keys with these prefixes as root shell commands.
+# Strip them by prefix, not by exact name, so a new spelling cannot slip in.
+HOOK_PREFIXES = ("pre", "post")
 KEEP_PEER = {"publickey", "presharedkey", "allowedips", "endpoint", "persistentkeepalive"}
 REQUIRED_IFACE = {"address", "privatekey"}
 REQUIRED_PEER = {"publickey", "endpoint"}
@@ -24,6 +29,17 @@ OBFUSCATION_KEYS = {
     "jc", "jmin", "jmax", "s1", "s2", "s3", "s4",
     "h1", "h2", "h3", "h4", "headerprotectionkey", "i1", "i2", "i3", "i4", "i5",
 }
+# The only [Interface] keys written back to the exit config: Address,
+# PrivateKey and the obfuscation parameters. Everything else in a foreign
+# provider config is rejected by validate(), never carried into a file that
+# awg-quick executes as root.
+KEEP_EXTRA = OBFUSCATION_KEYS | {
+    "contentpaddingaddition", "randomtrailers", "disablecookies",
+    # AmneziaWG device timers that providers put in [Interface] as well.
+    "keepalivetimeout", "maxhandshakeattempts", "rejectaftertime",
+    "rekeyaftertime", "rekeytimeout",
+}
+SAFE_IFACE = {"address", "privatekey"} | KEEP_EXTRA | DROP_INTERFACE
 PLAIN_PARAMS = [
     ("Jc", "0"), ("Jmin", "0"), ("Jmax", "0"),
     ("S1", "0"), ("S2", "0"), ("S3", "0"), ("S4", "0"),
@@ -42,6 +58,7 @@ def parse_text(text: str) -> dict:
     iface: dict[str, str] = {}
     extra: list[tuple[str, str]] = []
     peers: list[dict[str, str]] = []
+    rejected: list[str] = []
 
     for raw in text.splitlines():
         line = raw.strip()
@@ -61,14 +78,16 @@ def parse_text(text: str) -> dict:
         k = key.lower()
 
         if section == "iface":
-            if k in DROP_INTERFACE:
+            if k in DROP_INTERFACE or k.startswith(HOOK_PREFIXES):
                 continue
             if k in {"address", "privatekey"}:
                 if k == "address":
                     value = ", ".join(v for v in value.split(",") if ":" not in v)
                 iface[key] = value
-            else:
+            elif k in KEEP_EXTRA:
                 extra.append((key, value))
+            else:
+                rejected.append(key)
         elif section == "peer":
             if k not in KEEP_PEER:
                 continue
@@ -76,12 +95,16 @@ def parse_text(text: str) -> dict:
                 value = ", ".join(v for v in value.split(",") if ":" not in v)
             peers[-1][key] = value
 
-    return {"iface": iface, "extra": extra, "peers": peers}
+    return {"iface": iface, "extra": extra, "peers": peers, "rejected": rejected}
 
 
 def validate(text: str) -> list[str]:
     data = parse_text(text)
     errors = []
+    if data["rejected"]:
+        errors.append(
+            "unsupported in [Interface]: " + ", ".join(sorted(set(data["rejected"])))
+        )
     present = {k.lower() for k in data["iface"]}
     missing = REQUIRED_IFACE - present
     if missing:
