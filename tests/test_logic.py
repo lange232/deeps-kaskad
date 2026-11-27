@@ -1201,5 +1201,22 @@ class RoutingSafetyTests(unittest.TestCase):
         lock.assert_called_once()
 
 
+class WriteAtomicTests(unittest.TestCase):
+    def test_writes_the_content_and_leaves_no_tmp(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "status.json"
+            failover.write_atomic(target, '{"ok": true}')
+            self.assertEqual(target.read_text(), '{"ok": true}')
+            self.assertFalse((Path(tmp) / "status.tmp").exists())
+
+    def test_a_failed_replace_leaves_no_tmp_behind(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "status.json"
+            with mock.patch.object(Path, "replace", side_effect=OSError("disk full")):
+                with self.assertRaises(OSError):
+                    failover.write_atomic(target, "x")
+            self.assertFalse((Path(tmp) / "status.tmp").exists())
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -23,7 +23,9 @@ user=$(python3 -c 'import json,sys;print(json.load(sys.stdin)["ansible_user"])' 
 key=$(python3 -c 'import json,sys,os;print(os.path.expanduser(json.load(sys.stdin)["ansible_ssh_private_key_file"]))' <<<"$vars")
 addr=$(python3 -c 'import json,sys;print(json.load(sys.stdin).get("ansible_host",""))' <<<"$vars")
 addr=${addr:-$host}
-ssh_opts=(-i "$key" -o IdentitiesOnly=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null)
+# accept-new: trust the host key on first connect, then reject any change
+# (MITM guard). The old "no" + /dev/null accepted even a swapped key.
+ssh_opts=(-i "$key" -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new)
 
 archive=$(mktemp /tmp/kaskad-panel.XXXXXX.tgz)
 trap 'rm -f "$archive"' EXIT

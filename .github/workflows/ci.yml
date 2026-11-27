@@ -1,0 +1,37 @@
+name: CI
+
+on:
+  push:
+    branches: [develop, main]
+  pull_request:
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r panel/requirements-dev.txt
+      - name: Run tests
+        run: python -B -m unittest discover -s tests -v
+
+  ansible:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install ansible
+        run: pip install ansible-core
+      # --syntax-check parses the playbooks without contacting any host; a real
+      # --check run needs the private inventories, which are not in the repo.
+      - name: Syntax-check playbooks
+        run: |
+          ansible-playbook --syntax-check -i inventory.example.yml playbooks/site.yml
+          ansible-playbook --syntax-check -i inventory.example.yml playbooks/check.yml

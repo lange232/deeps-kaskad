@@ -24,7 +24,7 @@ fetch_conf() {
     local host user key
     host="$(inv host)"; user="$(inv user)"; key="$(inv key)"
     mkdir -p "$RUN_DIR"
-    ssh -i "$key" -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no -o BatchMode=yes \
+    ssh -i "$key" -o StrictHostKeyChecking=accept-new -o BatchMode=yes \
         "$user@$host" "sudo /opt/kaskad/venv/bin/python /opt/kaskad/app/app.py conf $NAME" > "$RUN_DIR/$NAME.conf"
     chmod 0600 "$RUN_DIR/$NAME.conf"
 }

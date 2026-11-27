@@ -15,11 +15,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Routing applies are serialised with a lock file, so the panel and the
   failover daemon can no longer remove each other's rules and routes when they
   apply at the same time.
+- A CI workflow runs the test suite and syntax-checks the playbooks on every
+  push and pull request.
 
 ### Changed
 
 - A hung `ip`/`iptables` call during a routing apply now times out after five
   seconds and is reported as an error instead of hanging the panel request.
+- Dependencies are refreshed: FastAPI 0.163.2 / Starlette 0.52.1 (closing the
+  multipart DoS CVE-2025-54121), Jinja2 3.1.6, uvicorn 0.54.0.
+- Responses carry an HSTS header; the deploy and test-client scripts verify
+  host keys (accept-new) instead of accepting any key; atomic status writes
+  fsync and clean up their temp file; unused ticker branches are removed.
 
 ## [0.5.2] - 2026-11-27
 

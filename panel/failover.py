@@ -882,8 +882,14 @@ def record_exit_transition(previous, current, manual, alive, degraded=()) -> Non
 def write_atomic(path: Path, text: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(".tmp")
-    tmp.write_text(text)
-    tmp.replace(path)
+    try:
+        with open(tmp, "w") as handle:
+            handle.write(text)
+            handle.flush()
+            os.fsync(handle.fileno())
+        tmp.replace(path)
+    finally:
+        tmp.unlink(missing_ok=True)
 
 
 def switch(iface: str, c: dict) -> None:

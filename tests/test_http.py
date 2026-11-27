@@ -349,6 +349,15 @@ class SessionTests(PanelTestCase):
         response = self.client.get("/configs")
         self.assertEqual(response.headers.get("cache-control"), "no-store")
 
+    def test_responses_carry_security_headers(self):
+        self.login_admin()
+        response = self.client.get("/configs")
+        self.assertEqual(response.headers.get("x-frame-options"), "DENY")
+        self.assertEqual(response.headers.get("x-content-type-options"), "nosniff")
+        self.assertEqual(response.headers.get("referrer-policy"), "no-referrer")
+        self.assertEqual(response.headers.get("strict-transport-security"),
+                         "max-age=31536000")
+
     def test_healthz_is_public(self):
         fresh = {"ts": int(time.time())}
         with mock.patch.object(app, "read_status", return_value=fresh):

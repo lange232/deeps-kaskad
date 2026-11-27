@@ -1,6 +1,9 @@
 state/
 __pycache__/
 .venv/
+.pytest_cache/
+.coverage
+htmlcov/
 
 # agent and local editor files
 AGENTS.md

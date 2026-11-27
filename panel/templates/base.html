@@ -355,8 +355,6 @@
             el.title = label;
             el.setAttribute('aria-label', label);
           }
-        } else if (kind === 'status') {
-          el.hidden = !!data.status_fresh;
         } else if (kind.startsWith('diagnosis')) {
           item = configs[key];
           if (!item || !item.diagnosis) continue;
@@ -380,9 +378,6 @@
         } else if (kind === 'tx') {
           item = configs[key];
           put(el, size(item ? item.tx : 0));
-        } else if (kind === 'kb') {
-          item = configs[key];
-          put(el, item && item.enabled ? 'enabled' : 'disabled');
         } else if (kind === 'exit') {
           badge(el, exits[key]);
         } else if (kind === 'admin-exit') {
@@ -416,9 +411,6 @@
         } else if (kind === 'lastok') {
           item = exits[key];
           put(el, item && item.last_ok ? kaskadRel(item.last_ok) : 'no data');
-        } else if (kind === 'current') {
-          item = configs[key];
-          put(el, (item && item.iface) || 'none');
         } else if (kind === 'current-label') {
           item = configs[key];
           var current = item && exits[item.iface];
