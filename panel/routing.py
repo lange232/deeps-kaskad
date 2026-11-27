@@ -17,16 +17,20 @@ recreated, so a panel change does not interrupt unrelated clients.
 """
 from __future__ import annotations
 
+import fcntl
 import ipaddress
 import json
 import os
 import sqlite3
 import subprocess
 import sys
+from contextlib import contextmanager
 from pathlib import Path
 
 CONFIG_PATH = Path(os.environ.get("KASKAD_CONFIG", "/etc/kaskad/panel.json"))
 DB_PATH = Path(os.environ.get("KASKAD_DB", "/var/lib/kaskad/panel.db"))
+RUN_DIR = Path(os.environ.get("KASKAD_RUN_DIR", "/run/kaskad"))
+LOCK_PATH = RUN_DIR / "routing.lock"
 
 ROUTE_PRIORITY = 10000
 INTERNET_PRIORITY = 20000
@@ -50,8 +54,28 @@ def rows(db: sqlite3.Connection, sql: str) -> list[dict]:
     return [dict(r) for r in db.execute(sql).fetchall()]
 
 
-def run(cmd: list[str]) -> subprocess.CompletedProcess:
-    return subprocess.run(cmd, capture_output=True, text=True)
+def run(cmd: list[str], timeout: int = 5) -> subprocess.CompletedProcess:
+    """A hung `ip` must not hang the panel request that triggered the apply."""
+    try:
+        return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        return subprocess.CompletedProcess(cmd, 124, "", f"timeout after {timeout}s")
+
+
+@contextmanager
+def routing_lock():
+    """The panel and the failover daemon both apply routing; only one at a time.
+
+    Without this, two applies read the same kernel state and can remove each
+    other's rules and routes in the window between reading and writing.
+    """
+    RUN_DIR.mkdir(parents=True, exist_ok=True)
+    with open(LOCK_PATH, "w") as handle:
+        fcntl.flock(handle, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(handle, fcntl.LOCK_UN)
 
 
 def used_tables(conn: sqlite3.Connection) -> set[int]:
@@ -491,6 +515,11 @@ def desired_state() -> tuple[set[Rule], dict[int, set[Route]], dict[int, list[st
 
 
 def apply() -> dict:
+    with routing_lock():
+        return _apply()
+
+
+def _apply() -> dict:
     errors: list[str] = []
     (desired_rules, desired_routes, client_tables, internet_table,
      nat_ifaces, clients_net) = desired_state()

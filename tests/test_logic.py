@@ -306,7 +306,23 @@ class PlanChangesTests(unittest.TestCase):
         self.assertEqual(plan["tables_flush"], [])
 
 
-class FailoverStatusTests(unittest.TestCase):
+class RoutingRunDirMixin:
+    """Point the routing lock at a temp dir so tests never touch /run/kaskad."""
+
+    def setUp(self):
+        super().setUp()
+        self._run_dir = tempfile.TemporaryDirectory()
+        self._saved = (routing.RUN_DIR, routing.LOCK_PATH)
+        routing.RUN_DIR = Path(self._run_dir.name)
+        routing.LOCK_PATH = routing.RUN_DIR / "routing.lock"
+
+    def tearDown(self):
+        routing.RUN_DIR, routing.LOCK_PATH = self._saved
+        self._run_dir.cleanup()
+        super().tearDown()
+
+
+class FailoverStatusTests(RoutingRunDirMixin, unittest.TestCase):
     def test_failed_replace_is_not_reported(self):
         failed = subprocess.CompletedProcess(args=[], returncode=2, stdout="", stderr="boom")
         with mock.patch.object(failover, "run", return_value=failed), \
@@ -634,7 +650,7 @@ class ProbeTests(unittest.TestCase):
                 failover.state.update(old_state)
 
 
-class ClientCheckTests(unittest.TestCase):
+class ClientCheckTests(RoutingRunDirMixin, unittest.TestCase):
     def test_an_avoided_exit_is_skipped_for_that_client(self):
         calls = []
 
@@ -1147,6 +1163,42 @@ class SessionTests(unittest.TestCase):
     def test_garbage_is_rejected(self):
         for token in ("", "abc", "abc.def", None):
             self.assertIsNone(auth.session_data(self.secret, token))
+
+
+class RoutingSafetyTests(unittest.TestCase):
+    def test_a_hung_command_reports_a_timeout_instead_of_hanging(self):
+        with mock.patch.object(
+            routing.subprocess, "run",
+            side_effect=subprocess.TimeoutExpired(cmd=["ip"], timeout=5),
+        ):
+            result = routing.run(["ip", "rule", "show"])
+        self.assertEqual(result.returncode, 124)
+        self.assertIn("timeout", result.stderr)
+
+    def test_apply_takes_the_routing_lock(self):
+        with mock.patch.object(routing, "_apply", return_value={"errors": []}) as inner, \
+             mock.patch.object(routing, "routing_lock") as lock:
+            result = routing.apply()
+        lock.assert_called_once()
+        inner.assert_called_once()
+        self.assertEqual(result, {"errors": []})
+
+    def test_the_lock_file_lives_under_the_run_dir(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir = Path(tmp)
+            with mock.patch.object(routing, "RUN_DIR", run_dir), \
+                 mock.patch.object(routing, "LOCK_PATH", run_dir / "routing.lock"):
+                with routing.routing_lock():
+                    self.assertTrue((run_dir / "routing.lock").exists())
+
+    def test_switching_the_active_exit_takes_the_routing_lock(self):
+        with mock.patch.object(failover.routing, "routing_lock") as lock, \
+             mock.patch.object(failover, "run", return_value=mock.Mock(returncode=0)), \
+             mock.patch.object(failover, "write_atomic"), \
+             mock.patch.object(failover, "log"):
+            failover.switch("awg1", {"route_table": 100,
+                                     "clients_net": "10.80.0.0/24"})
+        lock.assert_called_once()
 
 
 if __name__ == "__main__":

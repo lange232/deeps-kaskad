@@ -79,6 +79,9 @@ MAX_ACCOUNT_CHECKS = 3
 # A name that does not resolve quickly is treated as invalid: the request
 # handler must not hang on a slow resolver.
 RESOLVE_TIMEOUT = 3
+# Forms are a few kilobytes at most. FastAPI parses a form fully before the
+# handler runs, so an unbounded body on the public login is a memory DoS.
+MAX_BODY_BYTES = 64 * 1024
 
 
 def human_ts(value) -> str:
@@ -181,6 +184,48 @@ async def invalid_request(request: Request, exc: RequestValidationError):
             {"detail": jsonable_encoder(exc.errors())}, status_code=422
         )
     return Response(status_code=422)
+
+
+class LimitBodyMiddleware:
+    """Reject oversized bodies before they are read into memory.
+
+    A plain ASGI middleware, not BaseHTTPMiddleware: it wraps `receive` so a
+    chunked body without Content-Length is counted too. The raised
+    HTTPException is turned into a 413 by FastAPI's own exception handling.
+    Registered first so it ends up innermost, right against the router: a
+    BaseHTTPMiddleware between it and the endpoint would swallow the raise.
+    """
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        length = next(
+            (v for k, v in scope.get("headers", []) if k == b"content-length"), None
+        )
+        if length and length.isdigit() and int(length) > MAX_BODY_BYTES:
+            await JSONResponse(
+                {"detail": "request body too large"}, status_code=413
+            )(scope, receive, send)
+            return
+        received = 0
+
+        async def limited_receive():
+            nonlocal received
+            message = await receive()
+            if message["type"] == "http.request":
+                received += len(message.get("body", b""))
+                if received > MAX_BODY_BYTES:
+                    raise HTTPException(status_code=413, detail="request body too large")
+            return message
+
+        await self.app(scope, limited_receive, send)
+
+
+app.add_middleware(LimitBodyMiddleware)
 
 
 @app.middleware("http")

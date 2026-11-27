@@ -767,6 +767,30 @@ class ExitPinTests(PanelTestCase):
         self.assertEqual(auto.json()["pinned"], "")
 
 
+class BodyLimitTests(PanelTestCase):
+    def test_an_oversized_form_is_rejected(self):
+        response = self.client.post(
+            "/login",
+            content=b"email=a%40b.c&password=" + b"x" * (app.MAX_BODY_BYTES + 1),
+            headers={"content-type": "application/x-www-form-urlencoded"},
+        )
+        self.assertEqual(response.status_code, 413)
+
+    def test_a_chunked_body_over_the_limit_is_rejected(self):
+        chunk = b"x" * (app.MAX_BODY_BYTES // 2 + 1)
+        response = self.client.post(
+            "/login",
+            content=iter([chunk, chunk]),
+            headers={"content-type": "application/x-www-form-urlencoded"},
+        )
+        self.assertEqual(response.status_code, 413)
+
+    def test_a_normal_form_still_works(self):
+        response = self.client.post(
+            "/login", data={"email": "admin", "password": "wrong-password"})
+        self.assertEqual(response.status_code, 401)
+
+
 class CabinetExitStateTests(PanelTestCase):
     def test_me_shows_the_exit_in_use_without_its_state(self):
         aid, cid = self.seed_client()

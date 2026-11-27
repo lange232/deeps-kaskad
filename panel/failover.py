@@ -250,8 +250,9 @@ def apply_client_routes(
         # a dead exit, so traffic already fails, and a daemon restart does
         # not cut a working client for the two probe rounds it needs.
         if desired and desired != before:
-            res = run(["ip", "route", "replace", "default", "dev", desired,
-                       "table", str(table)])
+            with routing.routing_lock():
+                res = run(["ip", "route", "replace", "default", "dev", desired,
+                           "table", str(table)])
             if res.returncode != 0:
                 log(f"client {ip}: failed to route via {desired}: "
                     f"{res.stderr.strip()}")
@@ -886,7 +887,8 @@ def write_atomic(path: Path, text: str) -> None:
 
 
 def switch(iface: str, c: dict) -> None:
-    result = run(["ip", "route", "replace", "default", "dev", iface, "table", str(c["route_table"])])
+    with routing.routing_lock():
+        result = run(["ip", "route", "replace", "default", "dev", iface, "table", str(c["route_table"])])
     if result.returncode != 0:
         log(f"failed to switch the route to {iface}: {result.stderr.strip()}")
         return

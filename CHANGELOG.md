@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Request bodies are capped at 64 KiB before they are read into memory, so an
+  oversized form on the public sign-in page can no longer exhaust it; both
+  Content-Length and chunked bodies are checked.
+- Routing applies are serialised with a lock file, so the panel and the
+  failover daemon can no longer remove each other's rules and routes when they
+  apply at the same time.
+
+### Changed
+
+- A hung `ip`/`iptables` call during a routing apply now times out after five
+  seconds and is reported as an error instead of hanging the panel request.
+
 ## [0.5.2] - 2026-11-27
 
 ### Changed
