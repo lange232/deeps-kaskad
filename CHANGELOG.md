@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-11-27
+
 ### Added
 
 - The traffic chart has a 6-hour range between 1h and 24h.
