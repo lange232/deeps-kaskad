@@ -7,8 +7,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.5.5] - 2026-11-28
-
 ### Added
 
 - A configuration can switch on a SOCKS5 proxy at `10.80.0.1:1080` for its own
@@ -16,6 +14,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   configuration's exit and failover, resolves DNS through that exit, and is
   reachable only from `awg0`. The port is configurable with
   `kaskad_socks_port`.
+
+### Fixed
+
+- The panel's unit did not allow writing to `/run/kaskad`, so its routing
+  apply could not take the lock and failed; changes made in the panel (deleted
+  configurations, subnets, the SOCKS mark) were left for the failover daemon
+  to apply on its next interface change.
+
+## [0.5.5] - 2026-11-28
+
+### Added
+
 - `GET /api/me/presets` publishes curated route presets (Telegram, Claude,
   Cloudflare) for the client's own split tunneling. The admin page `/presets`
   switches individual presets on or off, adds custom ones from a manual CIDR
