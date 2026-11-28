@@ -3755,6 +3755,9 @@ def me_create_preset(
     values, error = _preset_fields(name, description, cidrs, "", "")
     if error:
         return fail(error)
+    errors = _personal_errors(values)
+    if errors:
+        return fail("; ".join(errors))
     with db() as conn:
         if presets.account_count(conn, int(account["id"])) >= presets.MAX_ACCOUNT_PRESETS:
             return fail(f"at most {presets.MAX_ACCOUNT_PRESETS} personal presets")
@@ -4840,6 +4843,9 @@ def api_create_preset(
     values, error = _preset_fields(name, description, cidrs, "", "")
     if error:
         raise HTTPException(status_code=400, detail=error)
+    errors = _personal_errors(values)
+    if errors:
+        raise HTTPException(status_code=400, detail="; ".join(errors))
     with db() as conn:
         if presets.account_count(conn, int(account["id"])) >= presets.MAX_ACCOUNT_PRESETS:
             raise HTTPException(
@@ -4857,14 +4863,14 @@ def api_create_preset(
              int(account["id"])),
         )
     audit("preset_create", f"{account['email']} {values['name']} via=api")
-    return {
+    return JSONResponse({
         "id": slug,
         "name": values["name"],
         "description": values["description"],
         "cidrs": presets.cidr_list(values["cidrs"]),
         "source": "manual",
         "fetched": 0,
-    }
+    }, status_code=201)
 
 
 @app.delete("/api/me/presets/{preset_id}")
@@ -5071,6 +5077,15 @@ def _preset_fields(name: str, description: str, cidrs: str,
     }, None
 
 
+def _personal_errors(values: dict) -> list[str]:
+    """Ranges an account may not put into its own preset."""
+    c = cfg()
+    return presets.validate_personal(
+        presets.cidr_list(values["cidrs"]),
+        c.get("clients_net", ""), c.get("net", ""),
+    )
+
+
 @app.get("/presets", response_class=HTMLResponse)
 def presets_page(request: Request, err: str | None = None, ok: str | None = None):
     token = require_admin(request)
@@ -5089,6 +5104,11 @@ def preset_page(request: Request, pid: int, err: str | None = None):
         item = presets.row(conn, pid)
     if not item:
         raise HTTPException(status_code=404)
+    if item["kind"] != "custom" or item["account_id"] is not None:
+        return RedirectResponse(
+            "/presets?err=" + quote("built-in presets can only be switched on or off"),
+            status_code=303,
+        )
     return render_page(
         request, "preset_edit.html", "presets",
         csrf=csrf(token), err=err, preset=item,

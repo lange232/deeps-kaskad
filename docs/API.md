@@ -492,8 +492,9 @@ Adds a personal preset, visible only to this account.
 }
 ```
 
-Errors: `400` for invalid input, `409` when the account already has
-20 personal presets.
+Errors: `400` for invalid input (including `0.0.0.0/0`, reserved ranges and
+prefixes that overlap the tunnel or panel network), `409` when the account
+already has 20 personal presets. The response is `201 Created`.
 
 ### DELETE /api/me/presets/{id}
 

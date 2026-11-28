@@ -20,13 +20,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - An account can keep up to twenty personal presets: `POST /api/me/presets`
   adds one from a manual CIDR list, `DELETE /api/me/presets/{id}` removes it,
   and the cabinet page `/me/presets` does the same in the browser. They are
-  visible only to that account and never become global.
+  visible only to that account and never become global; ranges that overlap the
+  tunnel or panel network, loopback, link-local, multicast and reserved ranges
+  are refused.
 
 ### Changed
 
 - The theme switch in the top bar is a sun/moon icon button instead of the
   words "light theme"/"dark theme"; its label for screen readers still names
   the theme it switches to.
+
+### Fixed
+
+- The preset refresher refuses an `https` source that redirects to plain
+  `http`, and its first run now happens after the panel has created and
+  migrated the database.
 
 ## [0.5.4] - 2026-11-28
 

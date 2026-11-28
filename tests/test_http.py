@@ -3072,7 +3072,7 @@ class PresetsApiTests(PanelTestCase):
         self.fill("telegram")
         headers = self.api_login()
         created = self.create_personal(headers)
-        self.assertEqual(created.status_code, 200, created.text)
+        self.assertEqual(created.status_code, 201, created.text)
         preset = created.json()
         self.assertTrue(preset["id"].startswith("u1-"))
         self.assertNotIn("icon", preset)
@@ -3135,6 +3135,14 @@ class PresetsApiTests(PanelTestCase):
         headers = self.api_login()
         response = self.create_personal(headers, cidrs="0.0.0.0/0")
         self.assertEqual(response.status_code, 400)
+
+    def test_reserved_and_tunnel_ranges_are_refused(self):
+        self.seed_client()
+        headers = self.api_login()
+        for cidr in ("10.80.0.0/24", "127.0.0.0/8",
+                     "169.254.0.0/16", "224.0.0.0/4"):
+            response = self.create_personal(headers, cidrs=cidr)
+            self.assertEqual(response.status_code, 400, cidr)
 
 
 class PresetIconTests(PanelTestCase):

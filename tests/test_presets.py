@@ -5,7 +5,9 @@ import sys
 import tempfile
 import time
 import unittest
+import urllib.error
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "panel"))
 
@@ -71,10 +73,25 @@ class ValidateTests(unittest.TestCase):
                             for e in presets.validate_cidrs(["oops"])))
 
 
+class PersonalValidationTests(unittest.TestCase):
+    def test_public_ranges_pass(self):
+        self.assertEqual(presets.validate_personal(
+            ["91.108.4.0/22"], "10.80.0.0/24", "10.80.0.0/24"), [])
+
+    def test_the_tunnel_network_is_refused(self):
+        errors = presets.validate_personal(
+            ["10.80.0.0/24"], "10.80.0.0/24", "10.80.0.0/24")
+        self.assertTrue(any("tunnel" in e for e in errors))
+
+    def test_reserved_ranges_are_refused(self):
+        for cidr in ("127.0.0.0/8", "169.254.0.0/16",
+                     "224.0.0.0/4", "0.0.0.0/8"):
+            self.assertTrue(presets.validate_personal([cidr]), cidr)
+
+
 class SourceTests(unittest.TestCase):
     def test_a_manual_source_needs_nothing(self):
         self.assertIsNone(presets.validate_source("", ""))
-
     def test_a_url_must_be_https(self):
         self.assertIsNotNone(presets.validate_source("cidr-text", "http://x"))
         self.assertIsNone(presets.validate_source("cidr-text", "https://x/y"))
@@ -101,6 +118,15 @@ class SlugTests(unittest.TestCase):
             slug = presets.unique_slug(conn, "telegram")
             self.assertEqual(slug, "telegram-2")
             conn.close()
+
+
+class RedirectTests(unittest.TestCase):
+    def test_a_plain_http_redirect_is_refused(self):
+        request = mock.Mock(full_url="https://example.com/x")
+        with self.assertRaises(urllib.error.HTTPError) as caught:
+            presets._HttpsRedirect().redirect_request(
+                request, None, 302, "", {}, "http://example.com/x")
+        caught.exception.close()
 
 
 class EtagTests(unittest.TestCase):

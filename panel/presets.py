@@ -15,6 +15,7 @@ import re
 import sqlite3
 import sys
 import time
+import urllib.error
 import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
@@ -84,6 +85,17 @@ DEFAULT_PRESETS = (
 
 SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9-]{1,31}$")
 SOURCE_KINDS = ("", "cidr-text", "ripe-asn")
+
+
+class _HttpsRedirect(urllib.request.HTTPRedirectHandler):
+    """A source URL may redirect, but never down to plain http."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        if not newurl.startswith("https://"):
+            raise urllib.error.HTTPError(
+                req.full_url, code, "redirect to a non-https URL", headers, fp
+            )
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 # Icons of the built-in presets, versioned by content: changing a picture
 # changes the file name, the URL and therefore the catalogue ETag. Custom
@@ -225,6 +237,39 @@ def validate_cidrs(cidrs: list[str]) -> list[str]:
     return errors
 
 
+def validate_personal(cidrs: list[str], clients_net: str = "",
+                      panel_net: str = "") -> list[str]:
+    """Extra checks for account-owned presets.
+
+    The client installs these prefixes into its own routes, so a range that
+    swallows the tunnel itself (or loopback/link-local/multicast) would cut the
+    connection instead of splitting it.
+    """
+    errors = validate_cidrs(cidrs)
+    own_nets = []
+    for label, value in (("the tunnel network", clients_net),
+                         ("the panel network", panel_net)):
+        try:
+            own_nets.append((label, ipaddress.ip_network(value)))
+        except (ValueError, TypeError):
+            continue
+    for raw in cidrs:
+        try:
+            net = ipaddress.ip_network(raw, strict=True)
+        except ValueError:
+            continue
+        if net.version != 4:
+            continue
+        for label, own in own_nets:
+            if net.overlaps(own):
+                errors.append(f"{raw} overlaps {label}")
+        if (int(net.network_address) == 0 or net.is_loopback
+                or net.is_link_local or net.is_multicast
+                or net.is_unspecified or net.is_reserved):
+            errors.append(f"{raw} is a reserved range")
+    return errors
+
+
 def validate_source(kind: str, value: str) -> str | None:
     if kind not in SOURCE_KINDS:
         return "unknown source kind"
@@ -279,7 +324,8 @@ def fetch(url: str, timeout: int = FETCH_TIMEOUT) -> str:
     request = urllib.request.Request(
         url, headers={"User-Agent": "kaskad-presets/1"}
     )
-    with urllib.request.urlopen(request, timeout=timeout) as response:
+    opener = urllib.request.build_opener(_HttpsRedirect)
+    with opener.open(request, timeout=timeout) as response:
         data = response.read(MAX_BYTES + 1)
     if len(data) > MAX_BYTES:
         raise RuntimeError("the source is larger than the limit")

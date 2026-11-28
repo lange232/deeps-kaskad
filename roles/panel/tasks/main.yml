@@ -378,14 +378,6 @@
     daemon_reload: true
   when: not ansible_check_mode
 
-- name: Route presets fetched once
-  ansible.builtin.command: systemctl start kaskad-presets.service
-  # A source can be down without making the deploy fail: the timer retries and
-  # the API keeps serving the previous catalogue.
-  changed_when: false
-  failed_when: false
-  when: not ansible_check_mode
-
 - name: awg0 enabled
   ansible.builtin.systemd:
     name: awg-quick@awg0
@@ -399,6 +391,15 @@
     enabled: true
     state: started
     daemon_reload: true
+  when: not ansible_check_mode
+
+- name: Route presets fetched once
+  # After the panel: its first start creates and migrates the database.
+  ansible.builtin.command: systemctl start kaskad-presets.service
+  # A source can be down without making the deploy fail: the timer retries and
+  # the API keeps serving the previous catalogue.
+  changed_when: false
+  failed_when: false
   when: not ansible_check_mode
 
 - name: Apply pending restarts before the first backup

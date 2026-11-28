@@ -28,7 +28,8 @@
               <strong>{{ p.name }}</strong>
               {% if p.description %}<div class="cell-sub">{{ p.description }}</div>{% endif %}
               <details style="margin-top:4px">
-                <summary class="cell-sub oc-mono" style="cursor:pointer">{{ p.cidrs | replace(',', ', ') }}</summary>
+                {% set items = p.cidrs.split(',') %}
+                <summary class="cell-sub oc-mono" style="cursor:pointer">{{ items[:3] | join(', ') }}{% if items | length > 3 %} … +{{ items | length - 3 }}{% endif %}</summary>
               </details>
             </td>
             <td class="oc-num">{{ (p.cidrs.split(',') | select | list | length) if p.cidrs else 0 }}</td>
