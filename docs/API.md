@@ -74,6 +74,7 @@ reveal whether the account exists or is disabled.
 | POST | `/api/me/exits/pin` | Pin a configuration to one exit, or back to automatic |
 | GET | `/api/me/subnets` | Subnets granted to the account and their choice |
 | POST | `/api/me/subnets` | Switch subnets on or off for a configuration |
+| GET | `/api/me/presets` | Route presets for the client's own split tunneling |
 | GET | `/api/android` | Public: Android client version, digest and download URL |
 | GET | `/download/windows` | Public: Windows client MSI |
 
@@ -426,6 +427,42 @@ no re-import is needed: the server routes the chosen subnets.
 
 ---
 
+### GET /api/me/presets
+
+Curated route presets for the client's own split tunneling: Telegram, Claude
+(Anthropic) and Cloudflare, which covers Discord, OpenCode and many other
+sites. The panel does not put these prefixes into any configuration or routing
+table — the app decides what to do with them.
+
+The catalogue is refreshed from public sources every six hours and served from
+a cache. `stale` is `true` when the cache is older than a day.
+
+| Header | Notes |
+|---|---|
+| `ETag` | On `200`. Send it back in `If-None-Match` to get `304 Not Modified` with an empty body |
+| `Cache-Control` | `no-cache`: the client must revalidate |
+
+```json
+{
+  "version": "2026-11-28T06:17:00+00:00",
+  "stale": false,
+  "presets": [
+    {
+      "id": "telegram",
+      "name": "Telegram",
+      "description": "Official Telegram IPv4 ranges.",
+      "cidrs": ["91.105.192.0/23", "91.108.4.0/22"],
+      "source": "lord-alfred/ipranges",
+      "fetched": 1795800000
+    }
+  ]
+}
+```
+
+Errors: `401` without a token; `503` while the cache has never been fetched.
+
+---
+
 ## Data objects
 
 ### Configuration
@@ -487,6 +524,17 @@ Returned as `config` by `POST /api/me/configs`:
 
 The `subnets` array returned by `POST /api/me/subnets` has only `id`, `name`
 and `enabled`.
+
+### Route preset
+
+| Field | Type | Meaning |
+|---|---|---|
+| `id` | string | Stable identifier: `telegram`, `claude`, `cloudflare` |
+| `name` | string | Human name |
+| `description` | string | What the preset covers and how exact it is |
+| `cidrs` | string[] | IPv4 prefixes; `0.0.0.0/0` never appears |
+| `source` | string | Where the ranges come from |
+| `fetched` | int | Unix time of the fetch that produced this entry |
 
 ### Traffic point
 

@@ -1,0 +1,11 @@
+# {{ ansible_managed }}
+[Unit]
+Description=kaskad route preset refresh
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+Environment=KASKAD_PRESETS=/var/lib/kaskad/presets.json
+ExecStart=/opt/kaskad/venv/bin/python /opt/kaskad/app/presets.py

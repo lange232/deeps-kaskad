@@ -513,6 +513,10 @@ GET  /api/me/subnets?config_id=N  subnets the account grants, with the choice of
                                     configuration (id, name, comment, routes, enabled)
 POST /api/me/subnets              subnet_id (repeated) + config_id -> switches subnets on;
                                     any subset of the grants, an empty list turns all off
+GET  /api/me/presets              curated route presets (Telegram, Claude, Cloudflare)
+                                    for the client's own split tunneling; each is a
+                                    list of IPv4 CIDRs, served from a cache with an
+                                    ETag. The panel does not route them itself
 GET  /api/me/configs/{id}/traffic?hours=24
                                     traffic history: {config_id, step_seconds, points};
                                     points are {ts, rx, tx} deltas in ascending order,

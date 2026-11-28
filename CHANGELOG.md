@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `GET /api/me/presets` publishes curated route presets (Telegram, Claude,
+  Cloudflare) for the client's own split tunneling. The catalogue is refreshed
+  from public sources every six hours, served with an ETag, and the panel never
+  routes these prefixes itself.
+
 ### Changed
 
 - The theme switch in the top bar is a sun/moon icon button instead of the

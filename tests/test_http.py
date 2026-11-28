@@ -30,11 +30,13 @@ try:
     import apkmeta
     import app
     import auth
+    import presets
 except ImportError:  # pragma: no cover - local python without fastapi
     apkmeta = None
     app = None
     TestClient = None
     auth = None
+    presets = None
 
 ADMIN_PASSWORD = "admin-password-123"
 USER_PASSWORD = "client-password-123"
@@ -2994,6 +2996,79 @@ class CabinetTrafficTests(PanelTestCase):
         self.login("c1@example.com", USER_PASSWORD)
         response = self.client.get(f"/me/configs/{cid2}")
         self.assertEqual(response.status_code, 404)
+
+
+class PresetsApiTests(PanelTestCase):
+    def api_login(self):
+        response = self.client.post("/api/login", data={
+            "email": "c1@example.com", "password": USER_PASSWORD,
+        })
+        self.assertEqual(response.status_code, 200, response.text)
+        return {"Authorization": "Bearer " + response.json()["token"]}
+
+    def write_cache(self, path, generated=None):
+        now = int(time.time()) if generated is None else generated
+        presets.save_cache({
+            "version": "2026-11-28T00:00:00+00:00",
+            "generated": now,
+            "presets": [{
+                "id": "telegram", "name": "Telegram", "description": "d",
+                "cidrs": ["91.108.4.0/22"], "source": "test", "fetched": now,
+            }],
+        }, path)
+
+    def test_the_catalogue_needs_a_token(self):
+        self.seed_client()
+        self.assertEqual(self.client.get("/api/me/presets").status_code, 401)
+
+    def test_the_catalogue_is_served_from_the_cache(self):
+        self.seed_client()
+        headers = self.api_login()
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "presets.json"
+            self.write_cache(path)
+            with mock.patch.object(presets, "CACHE_PATH", path):
+                response = self.client.get("/api/me/presets", headers=headers)
+        self.assertEqual(response.status_code, 200, response.text)
+        body = response.json()
+        self.assertEqual(body["version"], "2026-11-28T00:00:00+00:00")
+        self.assertEqual([p["id"] for p in body["presets"]], ["telegram"])
+        self.assertFalse(body["stale"])
+        self.assertIn("etag", response.headers)
+        self.assertEqual(response.headers["cache-control"], "no-cache")
+
+    def test_the_etag_short_circuits_the_body(self):
+        self.seed_client()
+        headers = self.api_login()
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "presets.json"
+            self.write_cache(path)
+            with mock.patch.object(presets, "CACHE_PATH", path):
+                first = self.client.get("/api/me/presets", headers=headers)
+                second = self.client.get(
+                    "/api/me/presets",
+                    headers=dict(headers, **{"If-None-Match": first.headers["etag"]}),
+                )
+        self.assertEqual(second.status_code, 304)
+        self.assertEqual(second.content, b"")
+
+    def test_an_old_cache_is_marked_stale(self):
+        self.seed_client()
+        headers = self.api_login()
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "presets.json"
+            self.write_cache(path, int(time.time()) - presets.STALE_AFTER - 60)
+            with mock.patch.object(presets, "CACHE_PATH", path):
+                response = self.client.get("/api/me/presets", headers=headers)
+        self.assertTrue(response.json()["stale"])
+
+    def test_a_missing_cache_is_a_503(self):
+        self.seed_client()
+        headers = self.api_login()
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch.object(presets, "CACHE_PATH", Path(tmp) / "none.json"):
+                response = self.client.get("/api/me/presets", headers=headers)
+        self.assertEqual(response.status_code, 503)
 
 
 class MobileApiTests(PanelTestCase):

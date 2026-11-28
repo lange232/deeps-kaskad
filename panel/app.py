@@ -55,6 +55,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 import apkmeta
 import auth
 import awgconf
+import presets
 import routing
 import traffic
 
@@ -4727,6 +4728,27 @@ def api_exits_pin(
           f"{account['email']} {cl['name']} {chosen['iface']} via=api")
     apply_routing()
     return {"ok": True, "pinned": chosen["iface"]}
+
+
+@app.get("/api/me/presets")
+def api_presets(request: Request):
+    """Route presets the client applies on its own.
+
+    The panel only serves the cached catalogue; it does not put these
+    prefixes into any configuration or routing table.
+    """
+    api_user(request)
+    catalog = presets.load_cache()
+    if not catalog:
+        raise HTTPException(
+            status_code=503, detail="route presets are not available yet"
+        )
+    body = presets.catalog_payload(catalog)
+    tag = presets.etag(body)
+    headers = {"ETag": f'"{tag}"', "Cache-Control": "no-cache"}
+    if presets.etag_matches(request.headers.get("if-none-match"), tag):
+        return Response(status_code=304, headers=headers)
+    return JSONResponse(body, headers=headers)
 
 
 @app.get("/api/me/subnets")

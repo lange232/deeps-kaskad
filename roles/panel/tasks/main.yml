@@ -353,6 +353,38 @@
     daemon_reload: true
   when: not ansible_check_mode
 
+- name: Route presets unit
+  ansible.builtin.template:
+    src: kaskad-presets.service.j2
+    dest: /etc/systemd/system/kaskad-presets.service
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Route presets timer
+  ansible.builtin.template:
+    src: kaskad-presets.timer.j2
+    dest: /etc/systemd/system/kaskad-presets.timer
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Route presets timer enabled
+  ansible.builtin.systemd:
+    name: kaskad-presets.timer
+    enabled: true
+    state: started
+    daemon_reload: true
+  when: not ansible_check_mode
+
+- name: Route presets fetched once
+  ansible.builtin.command: systemctl start kaskad-presets.service
+  # A source can be down without making the deploy fail: the timer retries and
+  # the API keeps serving the previous catalogue.
+  changed_when: false
+  failed_when: false
+  when: not ansible_check_mode
+
 - name: awg0 enabled
   ansible.builtin.systemd:
     name: awg-quick@awg0
