@@ -232,11 +232,11 @@ names — no `BIND`, no `UDP ASSOCIATE`, so QUIC and voice over UDP fall back to
 TCP or do not work.
 
 The source address must belong to an enabled configuration with the proxy on.
-The exit is read from the failover status for that address, so the proxy
-follows the configuration's order, its pin and a switch to a healthy exit; the
-outbound socket is bound to that interface and to the client's tunnel address,
-which makes the existing SNAT send it through `awgN` instead of the host's
-default route. Domain names are resolved through the same exit.
+Each such configuration also gets an `ip rule fwmark <mark> lookup <its table>`;
+the proxy marks its sockets, so the same table the failover maintains sends
+them through `awgN` instead of the host's default route. The packet leaves with
+the exit's own address, so no extra NAT rule is involved. Domain names are
+resolved through the same table.
 
 The port is allowed only on `awg0`; everything else is dropped. Destinations in
 the tunnel network, loopback, link-local, multicast and reserved ranges are

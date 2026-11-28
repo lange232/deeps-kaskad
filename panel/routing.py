@@ -36,6 +36,9 @@ ROUTE_PRIORITY = 10000
 INTERNET_PRIORITY = 20000
 # A client's own choice must win over the shared automatic table.
 CLIENT_PRIORITY = 19000
+# Marked sockets (the SOCKS5 proxy) follow the configuration's table.
+MARK_PRIORITY = 18000
+SOCKS_MARK_BASE = 0x4B0000
 # All routing tables we own live above the system ones: 201..264 overlaps the
 # main/local tables (253..255) and once cut a host off the network.
 TABLE_POOL_BASE = 1001
@@ -220,7 +223,16 @@ def parse_rules(output: str, internet_table: int) -> set[Rule]:
         if not sep or not head.strip().isdigit():
             continue
         spec = tuple(rest.strip().split())
-        if "iif" not in spec or "awg0" not in spec or "lookup" not in spec:
+        if "lookup" not in spec:
+            continue
+        ours = ("iif" in spec and "awg0" in spec)
+        if "fwmark" in spec:
+            index = spec.index("fwmark")
+            try:
+                ours = int(spec[index + 1], 0) >= SOCKS_MARK_BASE
+            except (IndexError, ValueError):
+                ours = False
+        if not ours:
             continue
         if "to" in spec:
             at = spec.index("to") + 1
@@ -489,6 +501,15 @@ def desired_state() -> tuple[set[Rule], dict[int, set[Route]], dict[int, list[st
                 (CLIENT_PRIORITY,
                  ("from", cl["ip"], "iif", "awg0", "lookup", str(cl["table_num"])))
             )
+            if cl["socks"]:
+                # Locally generated SOCKS connections have no iif: a mark sends
+                # them through the same table the failover maintains.
+                rules.add(
+                    (MARK_PRIORITY,
+                     ("from", "all", "fwmark",
+                      f"0x{SOCKS_MARK_BASE + cl['table_num']:x}",
+                      "lookup", str(cl["table_num"])))
+                )
         elif not cl["account_id"] and cl["internet"]:
             # Legacy configuration without granted exits: the shared
             # automatic table. Account-owned configurations with no grants

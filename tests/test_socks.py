@@ -10,6 +10,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "panel"))
 
 import socks  # noqa: E402
+import routing  # noqa: E402
 
 
 class DestinationTests(unittest.TestCase):
@@ -81,20 +82,27 @@ class ListenTests(unittest.TestCase):
 
 
 class ClientTests(unittest.TestCase):
-    def test_only_enabled_configurations_with_the_proxy_on_are_allowed(self):
+    def test_only_enabled_configurations_with_the_proxy_on_get_a_table(self):
         with tempfile.TemporaryDirectory() as tmp:
             conn = sqlite3.connect(Path(tmp) / "db.sqlite")
             conn.execute(
-                "CREATE TABLE clients (ip TEXT, enabled INTEGER, socks INTEGER)")
+                "CREATE TABLE clients (ip TEXT, enabled INTEGER, socks INTEGER, "
+                "table_num INTEGER)")
             conn.executemany(
-                "INSERT INTO clients VALUES (?, ?, ?)",
-                [("10.80.0.2", 1, 1), ("10.80.0.3", 1, 0), ("10.80.0.4", 0, 1)],
+                "INSERT INTO clients VALUES (?, ?, ?, ?)",
+                [("10.80.0.2", 1, 1, 1001), ("10.80.0.3", 1, 0, 1002),
+                 ("10.80.0.4", 0, 1, 1003), ("10.80.0.5", 1, 1, 0)],
             )
-            self.assertTrue(socks.allowed_client(conn, "10.80.0.2"))
-            self.assertFalse(socks.allowed_client(conn, "10.80.0.3"))
-            self.assertFalse(socks.allowed_client(conn, "10.80.0.4"))
-            self.assertFalse(socks.allowed_client(conn, "10.80.0.9"))
+            self.assertEqual(socks.client_table(conn, "10.80.0.2"), 1001)
+            self.assertEqual(socks.client_table(conn, "10.80.0.3"), 0)
+            self.assertEqual(socks.client_table(conn, "10.80.0.4"), 0)
+            self.assertEqual(socks.client_table(conn, "10.80.0.5"), 0)
+            self.assertEqual(socks.client_table(conn, "10.80.0.9"), 0)
             conn.close()
+
+    def test_the_mark_follows_the_table(self):
+        self.assertEqual(socks.mark_for(1001),
+                         routing.SOCKS_MARK_BASE + 1001)
 
 
 if __name__ == "__main__":

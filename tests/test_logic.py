@@ -238,6 +238,17 @@ class ParseTests(unittest.TestCase):
         output = "30000:\tfrom 10.80.0.2 iif awg0 lookup 254\n"
         self.assertEqual(routing.parse_rules(output, 100), set())
 
+    def test_rules_recognise_the_proxy_mark(self):
+        mark = f"0x{routing.SOCKS_MARK_BASE + 1002:x}"
+        output = (
+            f"18000:\tfrom all fwmark {mark} lookup 1002\n"
+            "18000:\tfrom all fwmark 0x1234 lookup 1002\n"
+            f"18000:\tfrom all fwmark {mark} lookup 254\n"
+        )
+        self.assertEqual(routing.parse_rules(output, 100), {
+            (18000, ("from", "all", "fwmark", mark, "lookup", "1002")),
+        })
+
     def test_routes_parses_prefix_and_dev(self):
         output = "default dev awg3 scope link\n10.90.0.2 dev awg2 scope link\n"
         self.assertEqual(

@@ -2,9 +2,9 @@
 
 Listens on the awg0 address. Every connection is checked against the panel
 database: the source must be an enabled configuration with the proxy switched
-on. The current exit is taken from the failover status, and the outbound
-socket is bound to that interface and to the client's tunnel address, so the
-traffic leaves through awgN instead of the host's default route.
+on. The socket carries the SO_MARK of that configuration's routing table, so
+the kernel sends it through the exit the failover keeps there, not through the
+host's default route.
 
 TCP CONNECT only: no BIND, no UDP ASSOCIATE, IPv4 only.
 """
@@ -20,6 +20,8 @@ import struct
 import sys
 import time
 from pathlib import Path
+
+import routing
 
 CONFIG_PATH = Path(os.environ.get("KASKAD_CONFIG", "/etc/kaskad/panel.json"))
 DB_PATH = Path(os.environ.get("KASKAD_DB", "/var/lib/kaskad/panel.db"))
@@ -94,12 +96,17 @@ def load_status() -> dict:
         return {}
 
 
-def allowed_client(conn: sqlite3.Connection, ip: str) -> bool:
+def client_table(conn: sqlite3.Connection, ip: str) -> int:
+    """The configuration's routing table if it may use the proxy, else 0."""
     row = conn.execute(
-        "SELECT 1 FROM clients WHERE ip = ? AND enabled = 1 AND socks = 1",
+        "SELECT table_num FROM clients WHERE ip = ? AND enabled = 1 AND socks = 1",
         (ip,),
     ).fetchone()
-    return row is not None
+    return int(row[0]) if row and int(row[0]) > 0 else 0
+
+
+def mark_for(table: int) -> int:
+    return routing.SOCKS_MARK_BASE + table
 
 
 def socks_reply(code: int) -> bytes:
@@ -159,17 +166,14 @@ def parse_dns_response(data: bytes, txid: int) -> str:
     return ""
 
 
-async def resolve(name: str, iface: str, source: str, server: str) -> str:
-    """Resolve an A record through the exit's interface."""
+async def resolve(name: str, table: int, server: str) -> str:
+    """Resolve an A record through the configuration's exit table."""
     loop = asyncio.get_running_loop()
     txid, query = build_dns_query(name)
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     try:
         sock.setblocking(False)
-        sock.setsockopt(socket.SOL_SOCKET, socket.SO_BINDTODEVICE, iface.encode())
-        if hasattr(socket, "IP_FREEBIND"):
-            sock.setsockopt(socket.IPPROTO_IP, socket.IP_FREEBIND, 1)
-        sock.bind((source, 0))
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_MARK, mark_for(table))
         for _ in range(2):
             await loop.sock_sendto(sock, query, (server, 53))
             try:
@@ -186,15 +190,12 @@ async def resolve(name: str, iface: str, source: str, server: str) -> str:
         sock.close()
 
 
-async def connect_exit(dest: str, port: int, iface: str, source: str):
+async def connect_exit(dest: str, port: int, table: int):
     loop = asyncio.get_running_loop()
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     try:
         sock.setblocking(False)
-        sock.setsockopt(socket.SOL_SOCKET, socket.SO_BINDTODEVICE, iface.encode())
-        if hasattr(socket, "IP_FREEBIND"):
-            sock.setsockopt(socket.IPPROTO_IP, socket.IP_FREEBIND, 1)
-        sock.bind((source, 0))
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_MARK, mark_for(table))
         await asyncio.wait_for(loop.sock_connect(sock, (dest, port)), CONNECT_TIMEOUT)
     except BaseException:
         sock.close()
@@ -297,8 +298,8 @@ class Proxy:
         port = struct.unpack(">H", await read_exact(reader, 2))[0]
 
         with sqlite3.connect(DB_PATH, timeout=5) as conn:
-            allowed = allowed_client(conn, source)
-        if not allowed:
+            table = client_table(conn, source)
+        if not table:
             self.deny(writer, REPLY_NOT_ALLOWED)
             return None
         iface = current_exit(load_status(), source)
@@ -307,7 +308,7 @@ class Proxy:
             return None
 
         if not dest:
-            dest = await resolve(name, iface, source, self.dns_server)
+            dest = await resolve(name, table, self.dns_server)
             if not dest:
                 self.deny(writer, REPLY_HOST)
                 return None
@@ -317,7 +318,7 @@ class Proxy:
             return None
 
         try:
-            sock = await connect_exit(dest, port, iface, source)
+            sock = await connect_exit(dest, port, table)
         except (asyncio.TimeoutError, OSError):
             self.deny(writer, REPLY_HOST)
             return None
