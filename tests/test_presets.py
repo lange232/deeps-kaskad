@@ -185,6 +185,25 @@ class DatabaseTests(unittest.TestCase):
                          ["telegram", "cloudflare"])
         self.assertFalse(body["stale"])
 
+    def test_builtin_presets_carry_an_icon(self):
+        presets.refresh(self.conn, self.fetch)
+        self.conn.execute(
+            "INSERT INTO route_presets (slug, name, kind, cidrs, enabled, "
+            "priority, created_at) VALUES ('mine', 'Mine', 'custom', "
+            "'10.90.0.0/24', 1, 1, 'now')")
+        by_id = {item["id"]: item for item in presets.catalog(self.conn)["presets"]}
+        for slug in ("telegram", "claude", "cloudflare"):
+            self.assertTrue(by_id[slug]["icon"].startswith("/static/presets/"))
+            self.assertTrue(by_id[slug]["icon"].endswith(".svg"))
+        self.assertNotIn("icon", by_id["mine"])
+
+    def test_icon_files_exist_and_are_small(self):
+        static = Path(__file__).resolve().parents[1] / "panel" / "static"
+        for icon in presets.ICONS.values():
+            path = static / icon.removeprefix("/static/")
+            self.assertTrue(path.is_file(), path)
+            self.assertLessEqual(path.stat().st_size, 64 * 1024, path)
+
     def test_an_old_catalogue_is_stale(self):
         presets.refresh(self.conn, self.fetch)
         old = int(time.time()) - presets.STALE_AFTER - 60

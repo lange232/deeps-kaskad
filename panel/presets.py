@@ -80,6 +80,15 @@ DEFAULT_PRESETS = (
 SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9-]{1,31}$")
 SOURCE_KINDS = ("", "cidr-text", "ripe-asn")
 
+# Icons of the built-in presets, versioned by content: changing a picture
+# changes the file name, the URL and therefore the catalogue ETag. Custom
+# presets have no icon; the client shows a generic one.
+ICONS = {
+    "telegram": "/static/presets/telegram-6a604913.svg",
+    "claude": "/static/presets/claude-1f5ad7ab.svg",
+    "cloudflare": "/static/presets/cloudflare-172d7e14.svg",
+}
+
 
 def ensure_schema(conn: sqlite3.Connection) -> None:
     """Creates the table and fills the built-in entries exactly once."""
@@ -270,8 +279,9 @@ def catalog(conn: sqlite3.Connection, now: int | None = None) -> dict:
         "SELECT * FROM route_presets WHERE enabled = 1 AND cidrs <> '' "
         "ORDER BY priority, id"
     ))
-    presets = [
-        {
+    presets = []
+    for item in items:
+        entry = {
             "id": item["slug"],
             "name": item["name"],
             "description": item["description"],
@@ -279,8 +289,9 @@ def catalog(conn: sqlite3.Connection, now: int | None = None) -> dict:
             "source": item["source_value"] or "manual",
             "fetched": int(item["fetched_at"] or 0),
         }
-        for item in items
-    ]
+        if item["slug"] in ICONS:
+            entry["icon"] = ICONS[item["slug"]]
+        presets.append(entry)
     source_rows = [item for item in items if item["source_kind"]]
     stale = any(
         not item["fetched_at"] or now - int(item["fetched_at"]) > STALE_AFTER

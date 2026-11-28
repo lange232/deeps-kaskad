@@ -3030,6 +3030,7 @@ class PresetsApiTests(PanelTestCase):
         self.assertEqual([p["id"] for p in body["presets"]], ["telegram"])
         self.assertFalse(body["stale"])
         self.assertTrue(body["version"])
+        self.assertTrue(body["presets"][0]["icon"].startswith("/static/presets/"))
         self.assertEqual(headers["Authorization"][:7], "Bearer ")
         self.assertIn("etag", response.headers)
         self.assertEqual(response.headers["cache-control"], "no-cache")
@@ -3059,6 +3060,32 @@ class PresetsApiTests(PanelTestCase):
         response = self.client.get("/api/me/presets", headers=headers)
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["presets"], [])
+
+
+class PresetIconTests(PanelTestCase):
+    def test_the_icon_is_served_with_cache_headers(self):
+        path = presets.ICONS["telegram"]
+        response = self.client.get(path)
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("image/svg+xml", response.headers["content-type"])
+        self.assertIn("immutable", response.headers["cache-control"])
+        self.assertIn("max-age=31536000", response.headers["cache-control"])
+        self.assertIn("etag", response.headers)
+        again = self.client.get(
+            path, headers={"If-None-Match": response.headers["etag"]}
+        )
+        self.assertEqual(again.status_code, 304)
+
+    def test_icons_stay_public_with_the_anonymous_login_page(self):
+        with app.db() as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO settings (key, value) "
+                "VALUES ('login_anonymous', '1')"
+            )
+        icon = self.client.get(presets.ICONS["telegram"])
+        self.assertEqual(icon.status_code, 200)
+        # Everything else under /static still disappears.
+        self.assertEqual(self.client.get("/static/theme.css").status_code, 404)
 
 
 class PresetAdminTests(PanelTestCase):

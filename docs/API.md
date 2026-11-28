@@ -455,7 +455,8 @@ preset is older than a day.
       "description": "Official Telegram IPv4 ranges.",
       "cidrs": ["91.105.192.0/23", "91.108.4.0/22"],
       "source": "lord-alfred/ipranges",
-      "fetched": 1795800000
+      "fetched": 1795800000,
+      "icon": "/static/presets/telegram-6a604913.svg"
     }
   ]
 }
@@ -538,6 +539,11 @@ and `enabled`.
 | `cidrs` | string[] | IPv4 prefixes; `0.0.0.0/0` never appears |
 | `source` | string | Where the ranges come from |
 | `fetched` | int | Unix time of the fetch that produced this entry |
+| `icon` | string, optional | Built-in presets only: an absolute path under `/static/presets/`, versioned by content. Custom presets have no icon and the client shows a generic one |
+
+Preset icons are public: they are served with `Cache-Control: public,
+max-age=31536000, immutable` and an `ETag`. The path never changes without the
+file changing.
 
 ### Traffic point
 

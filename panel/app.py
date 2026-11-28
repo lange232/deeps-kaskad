@@ -243,7 +243,10 @@ async def hide_static_when_anonymous(request, call_next):
     reason to fetch the panel's stylesheets; after signing in the browser
     sends the session cookie with every asset request.
     """
-    if request.url.path.startswith("/static/"):
+    if request.url.path.startswith("/static/") \
+            and not request.url.path.startswith("/static/presets/"):
+        # Route preset icons stay public: the mobile client fetches them with
+        # its bearer token, and a 404 here would leave it without an icon.
         try:
             anonymous = setting("login_anonymous") == "1"
             if anonymous:
@@ -1303,6 +1306,10 @@ async def headers(request: Request, call_next):
     response.headers["Referrer-Policy"] = "no-referrer"
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["Strict-Transport-Security"] = "max-age=31536000"
+    if request.url.path.startswith("/static/presets/"):
+        # The file name carries a content hash, so the URL never changes
+        # without changing the file: it is safe to cache it forever.
+        response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
     return response
 
 
