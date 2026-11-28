@@ -186,6 +186,7 @@
 
 - name: Public TLS certificate
   ansible.builtin.include_tasks: tls.yml
+  tags: [tls]
   when: kaskad_tls_mode == 'letsencrypt'
 
 - name: Current certificate SAN
