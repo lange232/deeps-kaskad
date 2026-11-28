@@ -225,6 +225,7 @@
                 {% if c.internet %}<span class="oc-badge oc-badge--subtle">internet</span>{% endif %}
                 {% for name in c.exits %}<span class="oc-badge oc-badge--subtle">{{ name }}</span>{% endfor %}
                 {% if not c.internet and not c.exits %}<span class="oc-badge oc-badge--danger">no access</span>{% endif %}
+                {% if c.socks %}<span class="oc-badge oc-badge--info" title="SOCKS5 proxy enabled">socks</span>{% endif %}
               </div>
             </td>
           </tr>

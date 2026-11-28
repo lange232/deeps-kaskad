@@ -46,6 +46,7 @@
             {% if c.internet %}<span class="oc-badge oc-badge--subtle">internet</span>{% endif %}
             {% if c.exits %}<span class="oc-badge oc-badge--subtle">{{ c.exits | length }} {{ 'subnet' if c.exits | length == 1 else 'subnets' }}</span>{% endif %}
             {% if not c.internet and not c.exits %}<span class="oc-badge oc-badge--danger">no access</span>{% endif %}
+            {% if c.socks %}<span class="oc-badge oc-badge--info" title="SOCKS5 proxy enabled">socks</span>{% endif %}
           </div>
         </td>
       </tr>

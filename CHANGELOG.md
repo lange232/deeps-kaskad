@@ -13,7 +13,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   tunnel client. It accepts TCP `CONNECT` (IPv4 and domain names), follows the
   configuration's exit and failover, resolves DNS through that exit, and is
   reachable only from `awg0`. The port is configurable with
-  `kaskad_socks_port`.
+  `kaskad_socks_port`, and every configuration list marks the ones that have
+  it switched on.
 
 ### Fixed
 

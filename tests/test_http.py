@@ -3428,6 +3428,18 @@ class SocksToggleTests(PanelTestCase):
         self.assertIn("err=", response.headers["location"])
 
 
+    def test_the_lists_mark_configurations_with_the_proxy(self):
+        aid, cid = self.seed_client()
+        with app.db() as conn:
+            conn.execute("UPDATE clients SET socks = 1 WHERE id = ?", (cid,))
+        self.login_admin()
+        marker = 'title="SOCKS5 proxy enabled">socks'
+        self.assertIn(marker, self.client.get("/configs").text)
+        self.assertIn(marker, self.client.get(f"/accounts/{aid}").text)
+        self.login("c1@example.com", USER_PASSWORD)
+        self.assertIn(marker, self.client.get("/me").text)
+
+
 class MobileApiTests(PanelTestCase):
     def api_login(self, email="c1@example.com", password=USER_PASSWORD):
         response = self.client.post("/api/login", data={
