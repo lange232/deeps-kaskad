@@ -17,6 +17,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Switching the SOCKS5 proxy on or off now re-applies routing, so its `fwmark`
+  rule appears immediately instead of only at the next panel start. The proxy
+  refuses a connection when the rule is missing, rather than falling back to
+  the host's default route.
 - The panel's unit did not allow writing to `/run/kaskad`, so its routing
   apply could not take the lock and failed; changes made in the panel (deleted
   configurations, subnets, the SOCKS mark) were left for the failover daemon

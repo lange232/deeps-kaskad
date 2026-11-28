@@ -17,6 +17,7 @@ import os
 import socket
 import sqlite3
 import struct
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -107,6 +108,29 @@ def client_table(conn: sqlite3.Connection, ip: str) -> int:
 
 def mark_for(table: int) -> int:
     return routing.SOCKS_MARK_BASE + table
+
+
+def mark_rule(rule_output: str, mark: int) -> bool:
+    """True when `ip rule show` has our fwmark rule for this mark."""
+    wanted = f"0x{mark:x}"
+    for line in rule_output.splitlines():
+        tokens = line.split()
+        if "fwmark" in tokens:
+            index = tokens.index("fwmark")
+            if index + 1 < len(tokens) and tokens[index + 1] == wanted:
+                return True
+    return False
+
+
+def mark_rule_present(mark: int) -> bool:
+    """Fail closed: without the rule a marked socket would use the host route."""
+    try:
+        result = subprocess.run(
+            ["ip", "rule", "show"], capture_output=True, text=True, timeout=3
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return result.returncode == 0 and mark_rule(result.stdout, mark)
 
 
 def socks_reply(code: int) -> bytes:
@@ -304,6 +328,9 @@ class Proxy:
             return None
         iface = current_exit(load_status(), source)
         if not iface:
+            self.deny(writer, REPLY_NOT_ALLOWED)
+            return None
+        if not mark_rule_present(mark_for(table)):
             self.deny(writer, REPLY_NOT_ALLOWED)
             return None
 

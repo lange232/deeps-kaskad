@@ -61,6 +61,17 @@ class DnsTests(unittest.TestCase):
         self.assertEqual(socks.parse_dns_response(header + question, 2), "")
 
 
+class MarkRuleTests(unittest.TestCase):
+    def test_the_rule_is_recognised(self):
+        output = "18000:\tfrom all fwmark 0x4b03f1 lookup 1009\n"
+        self.assertTrue(socks.mark_rule(output, 0x4b03F1))
+        self.assertFalse(socks.mark_rule(output, 0x4B03F2))
+
+    def test_other_rules_do_not_match(self):
+        output = "19000:\tfrom 10.80.0.2 iif awg0 lookup 1009\n"
+        self.assertFalse(socks.mark_rule(output, 0x4B03F1))
+
+
 class ReplyTests(unittest.TestCase):
     def test_a_success_reply(self):
         self.assertEqual(socks.socks_reply(socks.REPLY_OK),

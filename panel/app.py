@@ -2831,6 +2831,7 @@ def toggle_config_socks(request: Request, cid: int, csrf_token: str = Form(...))
         conn.execute("UPDATE clients SET socks = ? WHERE id = ?",
                      (0 if row["socks"] else 1, cid))
     audit("config_socks", f"{row['name']} -> {0 if row['socks'] else 1}")
+    apply_routing()
     return RedirectResponse(f"/configs/{cid}", status_code=303)
 
 
@@ -4286,6 +4287,7 @@ def me_config_socks(request: Request, cid: int, csrf_token: str = Form(...)):
         conn.execute("UPDATE clients SET socks = ? WHERE id = ?",
                      (0 if cl["socks"] else 1, cid))
     audit("user_config_socks", f"{account['email']} {cl['name']}")
+    apply_routing()
     return RedirectResponse(f"/me/configs/{cid}", status_code=303)
 
 
