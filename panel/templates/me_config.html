@@ -158,6 +158,28 @@
   </div>
 
   <section>
+    <h2 class="oc-section__title">SOCKS5 proxy</h2>
+    <div class="oc-panel" style="padding:16px">
+      <div class="actions">
+        <span class="oc-mono">{{ socks_endpoint }}</span>
+        {% if cl.socks %}
+        <span class="oc-badge oc-badge--success">on</span>
+        {% else %}
+        <span class="oc-badge oc-badge--subtle">off</span>
+        {% endif %}
+        <form method="post" action="/me/configs/{{ cl.id }}/socks" style="margin:0">
+          <input type="hidden" name="csrf_token" value="{{ csrf }}">
+          <button class="oc-btn oc-btn--outline oc-btn--sm">{{ 'disable' if cl.socks else 'enable' }}</button>
+        </form>
+      </div>
+      <p class="oc-hint" style="margin:8px 0 0">
+        TCP only. Connect from inside the tunnel; the proxy follows this
+        configuration's exit and failover.
+      </p>
+    </div>
+  </section>
+
+  <section>
     <h2 class="oc-section__title">Manage configuration</h2>
     <div class="oc-panel" style="padding:16px">
       {% if cl.device_id %}<p class="oc-muted">Device ID · <span class="oc-mono">{{ cl.device_id }}</span></p>{% endif %}

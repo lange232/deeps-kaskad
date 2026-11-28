@@ -1,0 +1,18 @@
+# {{ ansible_managed }}
+[Unit]
+Description=kaskad SOCKS5 proxy for tunnel clients
+After=network-online.target awg-quick@awg0.service kaskad-panel.service
+Wants=network-online.target awg-quick@awg0.service
+
+[Service]
+Type=simple
+User=root
+Environment=KASKAD_CONFIG=/etc/kaskad/panel.json
+Environment=KASKAD_DB=/var/lib/kaskad/panel.db
+Environment=KASKAD_RUN_DIR=/run/kaskad
+ExecStart=/opt/kaskad/venv/bin/python /opt/kaskad/app/socks.py
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

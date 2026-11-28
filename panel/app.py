@@ -122,6 +122,8 @@ AUDIT_LABELS = {
     "config_key_reissued": "Configuration key reissued",
     "config_exit_order": "Configuration exit order changed",
     "config_exit_order_reset": "Configuration exit order reset",
+    "config_socks": "Configuration SOCKS proxy changed",
+    "user_config_socks": "Configuration SOCKS proxy changed by the account",
     "account_created": "Account created",
     "account_exits": "Account exit access changed",
     "account_exit_order": "Account default exit order changed",
@@ -311,7 +313,8 @@ def init_db() -> None:
                 enabled INTEGER NOT NULL DEFAULT 1,
                 created_at TEXT NOT NULL,
                 internet INTEGER NOT NULL DEFAULT 1,
-                table_num INTEGER NOT NULL DEFAULT 0
+                table_num INTEGER NOT NULL DEFAULT 0,
+                socks INTEGER NOT NULL DEFAULT 0
             );
             -- The account is the email. It owns configurations and the access
             -- to exits; a configuration only keeps its own order.
@@ -438,6 +441,10 @@ def migrate(conn: sqlite3.Connection, existing: set[str]) -> None:
         conn.execute(
             "ALTER TABLE clients ADD COLUMN pinned_iface TEXT NOT NULL DEFAULT ''"
         )
+    # The SOCKS5 proxy is opt-in per configuration: the client asks for it on
+    # its own page, and the proxy checks this flag on every connection.
+    if "socks" not in cols:
+        conn.execute("ALTER TABLE clients ADD COLUMN socks INTEGER NOT NULL DEFAULT 0")
     conn.execute(
         "CREATE UNIQUE INDEX IF NOT EXISTS clients_device ON clients "
         "(account_id, device_id) WHERE device_id IS NOT NULL"
@@ -1723,6 +1730,12 @@ def config_online(handshake, now: int) -> bool:
     return bool(handshake) and now - handshake < ONLINE_WINDOW
 
 
+def socks_endpoint() -> str:
+    """Where the SOCKS5 proxy listens, as shown on the configuration pages."""
+    socks = cfg().get("socks") or {}
+    return f"{socks.get('host', '10.80.0.1')}:{int(socks.get('port', 1080))}"
+
+
 def config_view(cl, live: dict, assigned=None, now: int | None = None) -> dict:
     st = live.get(cl["public_key"], {})
     if assigned is None:
@@ -1741,6 +1754,7 @@ def config_view(cl, live: dict, assigned=None, now: int | None = None) -> dict:
         "remote_ip": remote_ip(st.get("endpoint", "")),
         "handshake": handshake,
         "online": config_online(handshake, now),
+        "socks": bool(cl["socks"]) if "socks" in cl.keys() else False,
         "rx": st.get("rx", 0),
         "tx": st.get("tx", 0),
     }
@@ -2749,6 +2763,7 @@ def config_page(
         conf=conf, routing_fresh=routing_fresh,
         accounts=accounts,
         routed_choices=routed_choices,
+        socks_endpoint=socks_endpoint(),
     )
 
 
@@ -2801,6 +2816,21 @@ def toggle_config(request: Request, cid: int, csrf_token: str = Form(...)):
         )
     audit("config_toggle", f"{row['name']} -> {0 if row['enabled'] else 1}")
     apply_routing()
+    return RedirectResponse(f"/configs/{cid}", status_code=303)
+
+
+@app.post("/configs/{cid}/socks")
+def toggle_config_socks(request: Request, cid: int, csrf_token: str = Form(...)):
+    token = require_admin(request)
+    if not hmac.compare_digest(csrf_token, csrf(token)):
+        raise HTTPException(status_code=400, detail="csrf")
+    with db() as conn:
+        row = conn.execute("SELECT * FROM clients WHERE id = ?", (cid,)).fetchone()
+        if not row:
+            raise HTTPException(status_code=404)
+        conn.execute("UPDATE clients SET socks = ? WHERE id = ?",
+                     (0 if row["socks"] else 1, cid))
+    audit("config_socks", f"{row['name']} -> {0 if row['socks'] else 1}")
     return RedirectResponse(f"/configs/{cid}", status_code=303)
 
 
@@ -4028,6 +4058,7 @@ def me_config_page(
         routing_fresh=routing_fresh,
         **traffic_context(cid, period),
         routed_choices=routed_choices,
+        socks_endpoint=socks_endpoint(),
     )
 
 
@@ -4242,6 +4273,19 @@ def me_config_toggle(request: Request, cid: int, csrf_token: str = Form(...)):
         )
     audit("user_config_toggle", f"{account['email']} {cl['name']}")
     apply_routing()
+    return RedirectResponse(f"/me/configs/{cid}", status_code=303)
+
+
+@app.post("/me/configs/{cid}/socks")
+def me_config_socks(request: Request, cid: int, csrf_token: str = Form(...)):
+    token, account = require_user(request)
+    if not hmac.compare_digest(csrf_token, csrf(token)):
+        raise HTTPException(status_code=400, detail="csrf")
+    cl = user_config(account, cid)
+    with db() as conn:
+        conn.execute("UPDATE clients SET socks = ? WHERE id = ?",
+                     (0 if cl["socks"] else 1, cid))
+    audit("user_config_socks", f"{account['email']} {cl['name']}")
     return RedirectResponse(f"/me/configs/{cid}", status_code=303)
 
 

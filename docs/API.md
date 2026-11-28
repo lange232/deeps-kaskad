@@ -522,6 +522,7 @@ Returned by `/api/login`, `/api/me` and `/api/me/configs`.
 | `ip` | string | Tunnel address without the prefix length |
 | `enabled` | bool | Peer enabled on the server |
 | `internet` | bool | The account grants at least one internet exit |
+| `socks` | bool | The SOCKS5 proxy is switched on for this configuration |
 | `exits` | string[] | Names of the routed subnets this configuration uses |
 | `remote_ip` | string | Peer address as the host sees it; empty until first connect |
 | `handshake` | int | Unix time of the last handshake; `0` for never |

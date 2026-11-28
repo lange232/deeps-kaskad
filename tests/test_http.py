@@ -3357,6 +3357,59 @@ class PresetAdminTests(PanelTestCase):
         self.assertIn("ok=", response.headers["location"])
 
 
+class SocksToggleTests(PanelTestCase):
+    def test_the_administrator_can_enable_it(self):
+        aid, cid = self.seed_client()
+        self.login_admin()
+        response = self.client.post(f"/configs/{cid}/socks", data={
+            "csrf_token": self.csrf(f"/configs/{cid}"),
+        })
+        self.assertEqual(response.status_code, 303)
+        with app.db() as conn:
+            self.assertEqual(conn.execute(
+                "SELECT socks FROM clients WHERE id = ?", (cid,)).fetchone()[0], 1)
+        page = self.client.get(f"/configs/{cid}").text
+        self.assertIn("SOCKS5 proxy", page)
+        self.assertIn("10.80.0.1:1080", page)
+
+    def test_the_account_can_enable_it(self):
+        aid, cid = self.seed_client()
+        self.login("c1@example.com", USER_PASSWORD)
+        response = self.client.post(f"/me/configs/{cid}/socks", data={
+            "csrf_token": self.csrf(f"/me/configs/{cid}"),
+        })
+        self.assertEqual(response.status_code, 303)
+        with app.db() as conn:
+            self.assertEqual(conn.execute(
+                "SELECT socks FROM clients WHERE id = ?", (cid,)).fetchone()[0], 1)
+        self.assertIn("SOCKS5 proxy",
+                      self.client.get(f"/me/configs/{cid}").text)
+
+    def test_a_foreign_configuration_cannot_be_toggled(self):
+        aid, cid = self.seed_client()
+        aid2, cid2 = self.seed_client(name="c2", ip="10.80.0.9",
+                                      email="c2@example.com")
+        self.login("c1@example.com", USER_PASSWORD)
+        response = self.client.post(f"/me/configs/{cid2}/socks", data={
+            "csrf_token": self.csrf(f"/me/configs/{cid}"),
+        })
+        self.assertEqual(response.status_code, 404)
+        with app.db() as conn:
+            self.assertEqual(conn.execute(
+                "SELECT socks FROM clients WHERE id = ?", (cid2,)).fetchone()[0], 0)
+
+    def test_the_configuration_object_reports_the_proxy(self):
+        aid, cid = self.seed_client()
+        with app.db() as conn:
+            conn.execute("UPDATE clients SET socks = 1 WHERE id = ?", (cid,))
+        response = self.client.post("/api/login", data={
+            "email": "c1@example.com", "password": USER_PASSWORD,
+        })
+        headers = {"Authorization": "Bearer " + response.json()["token"]}
+        config = self.client.get("/api/me", headers=headers).json()["client"]
+        self.assertTrue(config["socks"])
+
+
 class MobileApiTests(PanelTestCase):
     def api_login(self, email="c1@example.com", password=USER_PASSWORD):
         response = self.client.post("/api/login", data={

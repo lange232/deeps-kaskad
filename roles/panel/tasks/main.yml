@@ -402,6 +402,22 @@
   failed_when: false
   when: not ansible_check_mode
 
+- name: SOCKS proxy unit
+  ansible.builtin.template:
+    src: kaskad-socks.service.j2
+    dest: /etc/systemd/system/kaskad-socks.service
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: SOCKS proxy started
+  ansible.builtin.systemd:
+    name: kaskad-socks
+    enabled: true
+    state: started
+    daemon_reload: true
+  when: not ansible_check_mode
+
 - name: Apply pending restarts before the first backup
   tags: [code, panel]
   # Handlers run at the end of the play by default, which would make the first

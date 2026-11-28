@@ -8,6 +8,7 @@ set -euo pipefail
 CLIENTS={{ kaskad_clients_net }}
 AWG0=awg0
 PANEL_PORT={{ kaskad_panel_port }}
+SOCKS_PORT={{ kaskad_socks_port }}
 EXPOSE={{ kaskad_panel_expose }}
 
 # ensure <table> <chain> <rule...> — insert at the top if not present.
@@ -42,6 +43,10 @@ up() {
 
     ensure filter INPUT -p udp --dport {{ kaskad_awg0_port }} -j ACCEPT
     ensure filter INPUT -p tcp --dport "$PANEL_PORT" -j ACCEPT
+    # The proxy only answers tunnel clients; everything else is dropped here
+    # rather than relying on the INPUT policy of the host.
+    ensure filter INPUT -i "$AWG0" -p tcp --dport "$SOCKS_PORT" -j ACCEPT
+    ensure filter INPUT ! -i "$AWG0" -p tcp --dport "$SOCKS_PORT" -j DROP
 
     if [ "$EXPOSE" = "clients" ]; then
         ensure filter INPUT ! -i "$AWG0" -p tcp --dport "$PANEL_PORT" -j DROP
@@ -68,6 +73,8 @@ down() {
     del filter INPUT -p udp --dport {{ kaskad_awg0_port }} -j ACCEPT
     del filter INPUT -p tcp --dport "$PANEL_PORT" -j ACCEPT
     del filter INPUT ! -i "$AWG0" -p tcp --dport "$PANEL_PORT" -j DROP
+    del filter INPUT -i "$AWG0" -p tcp --dport "$SOCKS_PORT" -j ACCEPT
+    del filter INPUT ! -i "$AWG0" -p tcp --dport "$SOCKS_PORT" -j DROP
     del mangle FORWARD -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu
     # Keep KASKAD-NAT intact: the panel owns its contents, and a restart of
     # this unit must not wipe NAT until the next routing apply.

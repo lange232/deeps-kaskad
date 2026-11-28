@@ -11,6 +11,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- A configuration can switch on a SOCKS5 proxy at `10.80.0.1:1080` for its own
+  tunnel client. It accepts TCP `CONNECT` (IPv4 and domain names), follows the
+  configuration's exit and failover, resolves DNS through that exit, and is
+  reachable only from `awg0`. The port is configurable with
+  `kaskad_socks_port`.
 - `GET /api/me/presets` publishes curated route presets (Telegram, Claude,
   Cloudflare) for the client's own split tunneling. The admin page `/presets`
   switches individual presets on or off, adds custom ones from a manual CIDR
