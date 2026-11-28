@@ -127,6 +127,7 @@
   notify:
     - Restart panel
     - Restart failover
+    - Restart SOCKS proxy
 
 - name: Panel archive on the host
   tags: [code, panel]
