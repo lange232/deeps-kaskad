@@ -298,11 +298,11 @@ class Proxy:
 
         head = await read_exact(reader, 4)
         if head[0] != 5 or head[2] != 0:
-            self.deny(writer, REPLY_FAILURE)
+            self.refuse(writer, source, REPLY_FAILURE, "bad request")
             return None
         command, atyp = head[1], head[3]
         if command != 1:
-            self.deny(writer, REPLY_COMMAND)
+            self.refuse(writer, source, REPLY_COMMAND, "command not supported")
             return None
         if atyp == 1:
             dest = str(ipaddress.IPv4Address(await read_exact(reader, 4)))
@@ -310,45 +310,46 @@ class Proxy:
             length = (await read_exact(reader, 1))[0]
             name = (await read_exact(reader, length)).decode("ascii", "ignore")
             if not name:
-                self.deny(writer, REPLY_HOST)
+                self.refuse(writer, source, REPLY_HOST, "empty name")
                 return None
             dest = ""
         elif atyp == 4:
-            self.deny(writer, REPLY_ATYP)
+            self.refuse(writer, source, REPLY_ATYP, "IPv6 is not supported")
             return None
         else:
-            self.deny(writer, REPLY_ATYP)
+            self.refuse(writer, source, REPLY_ATYP, "address type not supported")
             return None
         port = struct.unpack(">H", await read_exact(reader, 2))[0]
 
         with sqlite3.connect(DB_PATH, timeout=5) as conn:
             table = client_table(conn, source)
         if not table:
-            self.deny(writer, REPLY_NOT_ALLOWED)
+            self.refuse(writer, source, REPLY_NOT_ALLOWED, "configuration is not allowed")
             return None
         iface = current_exit(load_status(), source)
         if not iface:
-            self.deny(writer, REPLY_NOT_ALLOWED)
+            self.refuse(writer, source, REPLY_NOT_ALLOWED, "no internet exit")
             return None
         if not mark_rule_present(mark_for(table)):
-            self.deny(writer, REPLY_NOT_ALLOWED)
+            self.refuse(writer, source, REPLY_NOT_ALLOWED, "mark rule is missing")
             return None
 
         if not dest:
             dest = await resolve(name, table, self.dns_server)
             if not dest:
-                self.deny(writer, REPLY_HOST)
+                self.refuse(writer, source, REPLY_HOST, "cannot resolve the name")
                 return None
         address = ipaddress.IPv4Address(dest)
         if not destination_allowed(address, self.clients_net):
-            self.deny(writer, REPLY_NOT_ALLOWED)
+            self.refuse(writer, source, REPLY_NOT_ALLOWED, "destination is not allowed")
             return None
 
         try:
             sock = await connect_exit(dest, port, table)
         except (asyncio.TimeoutError, OSError):
-            self.deny(writer, REPLY_HOST)
+            self.refuse(writer, source, REPLY_HOST, "cannot connect")
             return None
+        print(f"socks: {source} connected via {iface}", flush=True)
         writer.write(socks_reply(REPLY_OK))
         await writer.drain()
         remote_reader, remote_writer = await asyncio.open_connection(sock=sock)
@@ -358,8 +359,8 @@ class Proxy:
         )
         return remote_writer
 
-    @staticmethod
-    def deny(writer, code: int) -> None:
+    def refuse(self, writer, source: str, code: int, reason: str) -> None:
+        print(f"socks: {source} refused {code}: {reason}", flush=True)
         try:
             writer.write(socks_reply(code))
         except OSError:

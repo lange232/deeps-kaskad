@@ -17,6 +17,14 @@
   tags: [always]
   when: not ansible_check_mode
 
+- name: Restart SOCKS proxy
+  ansible.builtin.systemd:
+    name: kaskad-socks
+    state: restarted
+    daemon_reload: true
+  tags: [always]
+  when: not ansible_check_mode
+
 - name: Restart fail2ban
   ansible.builtin.service:
     name: fail2ban
