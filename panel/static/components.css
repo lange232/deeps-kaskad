@@ -168,6 +168,11 @@
   .side a {
     min-height: 40px;
   }
+
+  .theme-toggle {
+    width: 36px;
+    height: 36px;
+  }
 }
 
 .oc-btn > * {
@@ -331,10 +336,17 @@
   color: var(--ui-icon-base);
 }
 
+/* Theme switch: only the icon of the theme it switches to is shown. */
+.theme-toggle__sun,
+.theme-toggle__moon { display: inline-flex; }
+[data-theme="dark"] .theme-toggle__moon { display: none; }
+[data-theme="light"] .theme-toggle__sun { display: none; }
+
 .oc-icon-btn:focus-visible {
   outline: 2px solid var(--ui-border-focus);
   outline-offset: 1px;
 }
+
 
 /* ─────────────────────────────── Fields ─────────────────────────────── */
 

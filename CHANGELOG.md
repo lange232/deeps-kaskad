@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- The theme switch in the top bar is a sun/moon icon button instead of the
+  words "light theme"/"dark theme"; its label for screen readers still names
+  the theme it switches to.
+
 ## [0.5.4] - 2026-11-28
 
 ### Fixed

@@ -1,4 +1,5 @@
 <!doctype html>
+{% from "_icons.html" import sun, moon %}
 <html lang="en" data-theme="dark">
 <head>
 <meta charset="utf-8">
@@ -485,7 +486,11 @@
   <div class="oc-topbar__center">{% block topbar_title %}{% endblock %}</div>
   <div class="oc-topbar__right">
     {% block topbar %}{% endblock %}
-    <button class="oc-btn oc-btn--ghost-muted oc-btn--sm" id="theme-toggle" type="button">light theme</button>
+    <button class="oc-icon-btn theme-toggle" id="theme-toggle" type="button"
+            aria-label="switch to light theme" title="switch to light theme">
+      <span class="theme-toggle__sun">{{ sun() }}</span>
+      <span class="theme-toggle__moon">{{ moon() }}</span>
+    </button>
     {% if not hide_nav %}
     <form method="post" action="/logout" style="margin:0">
       <button class="oc-btn oc-btn--ghost oc-btn--sm">sign out</button>
@@ -570,7 +575,11 @@
 
   const themeBtn = document.getElementById('theme-toggle');
   const syncTheme = () => {
-    themeBtn.textContent = root.dataset.theme === 'light' ? 'dark theme' : 'light theme';
+    // The icon shows the theme the click switches to.
+    const label = root.dataset.theme === 'light'
+      ? 'switch to dark theme' : 'switch to light theme';
+    themeBtn.title = label;
+    themeBtn.setAttribute('aria-label', label);
   };
   themeBtn.addEventListener('click', () => {
     root.dataset.theme = root.dataset.theme === 'light' ? 'dark' : 'light';

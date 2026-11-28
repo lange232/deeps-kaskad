@@ -358,6 +358,13 @@ class SessionTests(PanelTestCase):
         self.assertEqual(response.headers.get("strict-transport-security"),
                          "max-age=31536000")
 
+    def test_the_theme_switch_is_an_icon(self):
+        self.login_admin()
+        page = self.client.get("/configs").text
+        self.assertIn('id="theme-toggle"', page)
+        self.assertIn('aria-label="switch to light theme"', page)
+        self.assertNotIn(">light theme<", page)
+
     def test_healthz_is_public(self):
         fresh = {"ts": int(time.time())}
         with mock.patch.object(app, "read_status", return_value=fresh):
