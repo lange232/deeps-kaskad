@@ -75,6 +75,8 @@ reveal whether the account exists or is disabled.
 | GET | `/api/me/subnets` | Subnets granted to the account and their choice |
 | POST | `/api/me/subnets` | Switch subnets on or off for a configuration |
 | GET | `/api/me/presets` | Route presets for the client's own split tunneling |
+| POST | `/api/me/presets` | Add a personal route preset |
+| DELETE | `/api/me/presets/{id}` | Delete one of your own presets |
 | GET | `/api/android` | Public: Android client version, digest and download URL |
 | GET | `/download/windows` | Public: Windows client MSI |
 
@@ -466,6 +468,42 @@ preset is older than a day.
 Errors: `401` without a token. An empty `presets` array is a normal answer:
 the administrator switched every preset off.
 
+A signed-in account also receives its own presets, after the global ones. They
+carry no `icon`/`icon_png`; the client shows a generic icon.
+
+### POST /api/me/presets
+
+Adds a personal preset, visible only to this account.
+
+| Field | Required | Notes |
+|---|---|---|
+| `name` | yes | Up to 64 characters |
+| `description` | no | Up to 240 characters |
+| `cidrs` | yes | IPv4 prefixes, one per line or comma-separated; `0.0.0.0/0` is refused |
+
+```json
+{
+  "id": "u4-my-services",
+  "name": "My services",
+  "description": "",
+  "cidrs": ["10.90.0.0/24"],
+  "source": "manual",
+  "fetched": 0
+}
+```
+
+Errors: `400` for invalid input, `409` when the account already has
+20 personal presets.
+
+### DELETE /api/me/presets/{id}
+
+Deletes one of the account's own presets. Global presets and presets of other
+accounts answer `404`.
+
+```json
+{"ok": true, "deleted": "u4-my-services"}
+```
+
 ---
 
 ## Data objects
@@ -542,6 +580,9 @@ and `enabled`.
 | `fetched` | int | Unix time of the fetch that produced this entry |
 | `icon` | string, optional | Built-in presets only: an absolute path under `/static/presets/`, versioned by content. Custom presets have no icon and the client shows a generic one |
 | `icon_png` | string, optional | The same artwork as a 128×128 PNG for clients that cannot render SVG (the Windows UI uses GDI+). Present wherever `icon` is |
+
+Personal presets answer without `icon`/`icon_png`; their `source` is `manual`
+and `fetched` is `0`.
 
 Preset icons are public: they are served with `Cache-Control: public,
 max-age=31536000, immutable` and an `ETag`. The path never changes without the

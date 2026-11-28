@@ -1,0 +1,81 @@
+{% extends "base.html" %}
+{% block title %}my presets — deeps kaskad{% endblock %}
+{% block topbar %}<a class="oc-mono topbar-link" href="/me">{{ email }}</a>{% endblock %}
+{% block body %}
+{% if err %}<div class="oc-alert oc-alert--danger" style="margin-bottom:16px"><span class="oc-dot" style="margin-top:7px"></span><div class="oc-alert__body">{{ err }}</div></div>{% endif %}
+{% if ok %}<div class="oc-alert oc-alert--success" style="margin-bottom:16px"><span class="oc-dot" style="margin-top:7px"></span><div class="oc-alert__body">{{ ok }}</div></div>{% endif %}
+
+<div class="stack">
+  <section>
+    <div class="toolbar">
+      <h2 class="oc-section__title" style="margin:0">my presets</h2>
+      <span class="oc-num oc-muted">{{ presets | length }} / {{ limit }}</span>
+    </div>
+    <p class="oc-hint" style="margin:0 0 12px">
+      Personal route sets for split tunneling. They are visible only to your
+      account, reach your app through <code>/api/me/presets</code> and are
+      applied by the client — the panel does not route them.
+    </p>
+
+    {% if presets %}
+    <div class="oc-panel table-scroll">
+      <table class="oc-table me-presets-table">
+        <thead><tr><th>Preset</th><th>Prefixes</th><th></th></tr></thead>
+        <tbody>
+        {% for p in presets %}
+          <tr>
+            <td>
+              <strong>{{ p.name }}</strong>
+              {% if p.description %}<div class="cell-sub">{{ p.description }}</div>{% endif %}
+              <details style="margin-top:4px">
+                <summary class="cell-sub oc-mono" style="cursor:pointer">{{ p.cidrs | replace(',', ', ') }}</summary>
+              </details>
+            </td>
+            <td class="oc-num">{{ (p.cidrs.split(',') | select | list | length) if p.cidrs else 0 }}</td>
+            <td>
+              <form method="post" action="/me/presets/{{ p.id }}/delete" style="margin:0"
+                    data-confirm="Delete preset “{{ p.name }}”?">
+                <input type="hidden" name="csrf_token" value="{{ csrf }}">
+                <button class="oc-btn oc-btn--ghost-danger oc-btn--sm">delete</button>
+              </form>
+            </td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+    <div class="oc-empty">no personal presets yet — add one below.</div>
+    {% endif %}
+  </section>
+
+  {% if presets | length < limit %}
+  <section>
+    <h2 class="oc-section__title">new preset</h2>
+    <div class="oc-panel" style="padding:16px; max-width:780px">
+      <form method="post" action="/me/presets/new">
+        <input type="hidden" name="csrf_token" value="{{ csrf }}">
+        <div class="form-grid">
+          <label class="oc-field">
+            <span class="oc-field__label">name</span>
+            <input class="oc-input" type="text" name="name" maxlength="64" required
+                   placeholder="My services">
+          </label>
+          <label class="oc-field">
+            <span class="oc-field__label">description</span>
+            <input class="oc-input" type="text" name="description" maxlength="240">
+          </label>
+          <label class="oc-field full">
+            <span class="oc-field__label">CIDRs</span>
+            <textarea class="oc-textarea" name="cidrs" spellcheck="false" required
+                      placeholder="91.108.4.0/22, 149.154.160.0/20"></textarea>
+            <span class="oc-hint">one per line or comma-separated; IPv4 only, 0.0.0.0/0 is refused</span>
+          </label>
+        </div>
+        <button class="oc-btn oc-btn--neutral" style="margin-top:12px">add preset</button>
+      </form>
+    </div>
+  </section>
+  {% endif %}
+</div>
+{% endblock %}

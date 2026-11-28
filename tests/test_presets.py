@@ -216,6 +216,51 @@ class DatabaseTests(unittest.TestCase):
             height = int.from_bytes(header[20:24], "big")
             self.assertEqual((width, height), (128, 128), path)
 
+    def test_account_presets_are_private(self):
+        presets.refresh(self.conn, self.fetch)
+        self.conn.execute(
+            "INSERT INTO route_presets (slug, name, kind, cidrs, enabled, "
+            "priority, created_at, account_id) VALUES "
+            "('u7-mine', 'Mine', 'custom', '10.90.0.0/24', 1, 100, 'now', 7), "
+            "('u8-other', 'Other', 'custom', '10.91.0.0/24', 1, 100, 'now', 8)")
+        own = {p["id"] for p in presets.catalog(self.conn, 7)["presets"]}
+        other = {p["id"] for p in presets.catalog(self.conn, 8)["presets"]}
+        global_only = {p["id"] for p in presets.catalog(self.conn)["presets"]}
+        self.assertIn("telegram", own)
+        self.assertIn("u7-mine", own)
+        self.assertNotIn("u8-other", own)
+        self.assertIn("u8-other", other)
+        self.assertNotIn("u7-mine", other)
+        self.assertEqual(global_only, {"telegram", "claude", "cloudflare"})
+        self.assertEqual(presets.account_count(self.conn, 7), 1)
+
+    def test_an_old_table_gets_the_account_column(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            conn = sqlite3.connect(Path(tmp) / "old.sqlite")
+            conn.executescript("""
+                CREATE TABLE route_presets (
+                    id INTEGER PRIMARY KEY,
+                    slug TEXT NOT NULL UNIQUE,
+                    name TEXT NOT NULL,
+                    description TEXT NOT NULL DEFAULT '',
+                    kind TEXT NOT NULL DEFAULT 'custom',
+                    source_kind TEXT NOT NULL DEFAULT '',
+                    source_value TEXT NOT NULL DEFAULT '',
+                    cidrs TEXT NOT NULL DEFAULT '',
+                    enabled INTEGER NOT NULL DEFAULT 1,
+                    priority INTEGER NOT NULL DEFAULT 0,
+                    fetched_at INTEGER NOT NULL DEFAULT 0,
+                    last_error TEXT NOT NULL DEFAULT '',
+                    created_at TEXT NOT NULL
+                );
+            """)
+            presets.ensure_schema(conn)
+            columns = {row[1] for row in conn.execute(
+                "PRAGMA table_info(route_presets)")}
+            self.assertIn("account_id", columns)
+            self.assertEqual(len(presets.rows(conn)), 3)
+            conn.close()
+
     def test_an_old_catalogue_is_stale(self):
         presets.refresh(self.conn, self.fetch)
         old = int(time.time()) - presets.STALE_AFTER - 60

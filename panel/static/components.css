@@ -1471,6 +1471,11 @@
 .presets-table th:nth-child(6) { width: 18%; }
 .presets-table td { vertical-align: top; }
 .presets-table .cell-sub { overflow-wrap: anywhere; }
+/* The cabinet list is narrower: a name, a count and one action. */
+.me-presets-table { table-layout: fixed; }
+.me-presets-table th:first-child { width: 76%; }
+.me-presets-table th:nth-child(2) { width: 10%; }
+.me-presets-table th:last-child { width: 14%; }
 /* The cabinet list: the access column has a fixed share, so its badges can
    never narrow the configuration line. */
 .me-configs { table-layout: fixed; }

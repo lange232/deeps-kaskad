@@ -434,8 +434,8 @@ reissue, link to the account, internet order, disable, delete.
 
 Pages: `/`, `/exits`, `/accounts`, `/configs`, `/presets`, `/journal`, `/settings`, plus
 `/accounts/new`, `/accounts/{id}`, `/configs/new`, `/configs/{id}` and the
-cabinet under `/me`, `/me/configs/new`, `/me/configs/{id}`, `/me/checks` and
-`/me/account`
+cabinet under `/me`, `/me/configs/new`, `/me/configs/{id}`, `/me/presets`,
+`/me/checks` and `/me/account`
 (password and sessions). Both the admin and cabinet configuration pages draw the traffic history for 1h, 6h, 24h, 7d, 30d or 90d
 (`?range=`), with the downloaded and uploaded totals and the peak rate; the
 chart draws a line and a filled area per direction, leaving missing time
@@ -518,6 +518,10 @@ GET  /api/me/presets              curated route presets (Telegram, Claude, Cloud
                                     list of IPv4 CIDRs, refreshed from public sources
                                     and served with an ETag. Only presets the admin
                                     enabled are listed; the panel does not route them
+POST /api/me/presets              name, description, cidrs -> adds a personal preset,
+                                    visible only to this account (up to 20)
+DELETE /api/me/presets/{id}       deletes one of your own presets; global presets
+                                    answer 404
 GET  /api/me/configs/{id}/traffic?hours=24
                                     traffic history: {config_id, step_seconds, points};
                                     points are {ts, rx, tx} deltas in ascending order,

@@ -3724,6 +3724,73 @@ def me_page(request: Request, err: str | None = None, ok: str | None = None):
     )
 
 
+@app.get("/me/presets", response_class=HTMLResponse)
+def me_presets_page(request: Request, err: str | None = None, ok: str | None = None):
+    token, account = require_user(request)
+    with db() as conn:
+        items = presets.rows(conn, int(account["id"]))
+    return render_page(
+        request, "me_presets.html", "me-presets", role="user",
+        csrf=csrf(token), err=err, ok=ok, presets=items,
+        email=account["email"],
+        limit=presets.MAX_ACCOUNT_PRESETS,
+    )
+
+
+@app.post("/me/presets/new")
+def me_create_preset(
+    request: Request,
+    name: str = Form(""),
+    description: str = Form(""),
+    cidrs: str = Form(""),
+    csrf_token: str = Form(...),
+):
+    token, account = require_user(request)
+    if not hmac.compare_digest(csrf_token, csrf(token)):
+        raise HTTPException(status_code=400, detail="csrf")
+
+    def fail(message: str):
+        return RedirectResponse("/me/presets?err=" + quote(message), status_code=303)
+
+    values, error = _preset_fields(name, description, cidrs, "", "")
+    if error:
+        return fail(error)
+    with db() as conn:
+        if presets.account_count(conn, int(account["id"])) >= presets.MAX_ACCOUNT_PRESETS:
+            return fail(f"at most {presets.MAX_ACCOUNT_PRESETS} personal presets")
+        base = f"u{account['id']}-" + presets.slugify(values["name"])
+        slug = presets.unique_slug(conn, base)
+        conn.execute(
+            "INSERT INTO route_presets (slug, name, description, kind, "
+            "cidrs, enabled, priority, created_at, account_id) "
+            "VALUES (?, ?, ?, 'custom', ?, 1, 100, ?, ?)",
+            (slug, values["name"], values["description"], values["cidrs"],
+             datetime.now(timezone.utc).isoformat(timespec="seconds"),
+             int(account["id"])),
+        )
+    audit("preset_create", f"{account['email']} {values['name']}")
+    return RedirectResponse("/me/presets?ok=" + quote("preset added"),
+                            status_code=303)
+
+
+@app.post("/me/presets/{pid}/delete")
+def me_delete_preset(request: Request, pid: int, csrf_token: str = Form(...)):
+    token, account = require_user(request)
+    if not hmac.compare_digest(csrf_token, csrf(token)):
+        raise HTTPException(status_code=400, detail="csrf")
+    with db() as conn:
+        found = conn.execute(
+            "SELECT id FROM route_presets WHERE id = ? AND account_id = ?",
+            (pid, int(account["id"])),
+        ).fetchone()
+        if not found:
+            raise HTTPException(status_code=404)
+        conn.execute("DELETE FROM route_presets WHERE id = ?", (pid,))
+    audit("preset_delete", f"{account['email']} #{pid}")
+    return RedirectResponse("/me/presets?ok=" + quote("preset deleted"),
+                            status_code=303)
+
+
 @app.get("/me/account", response_class=HTMLResponse)
 def me_account(request: Request, err: str | None = None, ok: str | None = None):
     token, account = require_user(request)
@@ -4751,14 +4818,69 @@ def api_presets(request: Request):
     The panel only serves the enabled catalogue; it does not put these
     prefixes into any configuration or routing table.
     """
-    api_user(request)
+    _, account = api_user(request)
     with db() as conn:
-        body = presets.catalog(conn)
+        body = presets.catalog(conn, int(account["id"]))
     tag = presets.etag(body)
     headers = {"ETag": f'"{tag}"', "Cache-Control": "no-cache"}
     if presets.etag_matches(request.headers.get("if-none-match"), tag):
         return Response(status_code=304, headers=headers)
     return JSONResponse(body, headers=headers)
+
+
+@app.post("/api/me/presets")
+def api_create_preset(
+    request: Request,
+    name: str = Form(""),
+    description: str = Form(""),
+    cidrs: str = Form(""),
+):
+    """Adds a personal preset; it is visible only to this account."""
+    _, account = api_user(request)
+    values, error = _preset_fields(name, description, cidrs, "", "")
+    if error:
+        raise HTTPException(status_code=400, detail=error)
+    with db() as conn:
+        if presets.account_count(conn, int(account["id"])) >= presets.MAX_ACCOUNT_PRESETS:
+            raise HTTPException(
+                status_code=409,
+                detail=f"at most {presets.MAX_ACCOUNT_PRESETS} personal presets",
+            )
+        base = f"u{account['id']}-" + presets.slugify(values["name"])
+        slug = presets.unique_slug(conn, base)
+        conn.execute(
+            "INSERT INTO route_presets (slug, name, description, kind, "
+            "cidrs, enabled, priority, created_at, account_id) "
+            "VALUES (?, ?, ?, 'custom', ?, 1, 100, ?, ?)",
+            (slug, values["name"], values["description"], values["cidrs"],
+             datetime.now(timezone.utc).isoformat(timespec="seconds"),
+             int(account["id"])),
+        )
+    audit("preset_create", f"{account['email']} {values['name']} via=api")
+    return {
+        "id": slug,
+        "name": values["name"],
+        "description": values["description"],
+        "cidrs": presets.cidr_list(values["cidrs"]),
+        "source": "manual",
+        "fetched": 0,
+    }
+
+
+@app.delete("/api/me/presets/{preset_id}")
+def api_delete_preset(request: Request, preset_id: str):
+    """Deletes one of this account's own presets; global ones are untouchable."""
+    _, account = api_user(request)
+    with db() as conn:
+        found = conn.execute(
+            "SELECT id FROM route_presets WHERE slug = ? AND account_id = ?",
+            (preset_id, int(account["id"])),
+        ).fetchone()
+        if not found:
+            raise HTTPException(status_code=404, detail="preset not found")
+        conn.execute("DELETE FROM route_presets WHERE id = ?", (found["id"],))
+    audit("preset_delete", f"{account['email']} {preset_id} via=api")
+    return {"ok": True, "deleted": preset_id}
 
 
 @app.get("/api/me/subnets")

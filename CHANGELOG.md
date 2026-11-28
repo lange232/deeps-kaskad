@@ -17,6 +17,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Built-in presets carry a content-versioned icon under `/static/presets/`,
   served publicly with a long immutable cache; the same artwork is available as
   a 128×128 PNG for clients that cannot render SVG.
+- An account can keep up to twenty personal presets: `POST /api/me/presets`
+  adds one from a manual CIDR list, `DELETE /api/me/presets/{id}` removes it,
+  and the cabinet page `/me/presets` does the same in the browser. They are
+  visible only to that account and never become global.
 
 ### Changed
 

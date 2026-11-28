@@ -522,7 +522,7 @@
   {% endif %}
   <main class="main">
     {% if role == 'user' %}
-    <nav class="cab-nav" aria-label="Cabinet"><a href="/me" {% if nav == 'me' %}aria-current="page"{% endif %}>My configurations</a><a href="/me/checks" {% if nav == 'checks' %}aria-current="page"{% endif %}>Checks</a><a href="/me/account" {% if nav == 'account' %}aria-current="page"{% endif %}>Account</a></nav>
+    <nav class="cab-nav" aria-label="Cabinet"><a href="/me" {% if nav == 'me' %}aria-current="page"{% endif %}>My configurations</a><a href="/me/presets" {% if nav == 'me-presets' %}aria-current="page"{% endif %}>Presets</a><a href="/me/checks" {% if nav == 'checks' %}aria-current="page"{% endif %}>Checks</a><a href="/me/account" {% if nav == 'account' %}aria-current="page"{% endif %}>Account</a></nav>
     {% endif %}
     {% if not hide_nav and nav != 'overview' %}
     <div id="live-stale" class="oc-muted" role="status">{{ 'Stale · exit status unavailable' if routing_fresh is defined and not routing_fresh }}</div>

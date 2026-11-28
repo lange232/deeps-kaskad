@@ -41,9 +41,14 @@ CREATE TABLE IF NOT EXISTS route_presets (
     priority INTEGER NOT NULL DEFAULT 0,
     fetched_at INTEGER NOT NULL DEFAULT 0,
     last_error TEXT NOT NULL DEFAULT '',
-    created_at TEXT NOT NULL
+    created_at TEXT NOT NULL,
+    account_id INTEGER
 );
 """
+
+# An account may keep a small personal catalogue; the limit keeps the answer
+# (and the client's cache) bounded.
+MAX_ACCOUNT_PRESETS = 20
 
 # Cloudflare covers Discord, OpenCode and many other sites that share its
 # edge, so they do not get separate entries. Anthropic has its own network.
@@ -98,8 +103,11 @@ ICON_PNGS = {
 
 
 def ensure_schema(conn: sqlite3.Connection) -> None:
-    """Creates the table and fills the built-in entries exactly once."""
+    """Creates the table, adds account scope and fills the built-in entries."""
     conn.executescript(SCHEMA)
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(route_presets)")}
+    if "account_id" not in columns:
+        conn.execute("ALTER TABLE route_presets ADD COLUMN account_id INTEGER")
     created = datetime.now(timezone.utc).isoformat(timespec="seconds")
     for preset in DEFAULT_PRESETS:
         conn.execute(
@@ -124,10 +132,23 @@ def _one(conn: sqlite3.Connection, sql: str, params=()) -> dict | None:
     return fetched[0] if fetched else None
 
 
-def rows(conn: sqlite3.Connection) -> list[dict]:
+def rows(conn: sqlite3.Connection, account_id: int | None = None) -> list[dict]:
+    """Global presets by default, or one account's own entries."""
+    if account_id is None:
+        return _dicts(conn.execute(
+            "SELECT * FROM route_presets WHERE account_id IS NULL "
+            "ORDER BY priority, id"
+        ))
     return _dicts(conn.execute(
-        "SELECT * FROM route_presets ORDER BY priority, id"
+        "SELECT * FROM route_presets WHERE account_id = ? "
+        "ORDER BY priority, id", (account_id,)
     ))
+
+
+def account_count(conn: sqlite3.Connection, account_id: int) -> int:
+    return conn.execute(
+        "SELECT count(*) FROM route_presets WHERE account_id = ?", (account_id,)
+    ).fetchone()[0]
 
 
 def row(conn: sqlite3.Connection, preset_id: int) -> dict | None:
@@ -279,13 +300,24 @@ def fetch_source(kind: str, value: str, fetcher=fetch) -> list[str]:
     return cidrs
 
 
-def catalog(conn: sqlite3.Connection, now: int | None = None) -> dict:
-    """The API payload: enabled entries with fetched prefixes."""
+def catalog(conn: sqlite3.Connection, account_id: int | None = None,
+            now: int | None = None) -> dict:
+    """The API payload: enabled entries with fetched prefixes.
+
+    A signed-in account also gets its own presets, after the global ones.
+    """
     now = int(time.time()) if now is None else now
-    items = _dicts(conn.execute(
-        "SELECT * FROM route_presets WHERE enabled = 1 AND cidrs <> '' "
-        "ORDER BY priority, id"
-    ))
+    if account_id is None:
+        items = _dicts(conn.execute(
+            "SELECT * FROM route_presets WHERE enabled = 1 AND cidrs <> '' "
+            "AND account_id IS NULL ORDER BY priority, id"
+        ))
+    else:
+        items = _dicts(conn.execute(
+            "SELECT * FROM route_presets WHERE enabled = 1 AND cidrs <> '' "
+            "AND (account_id IS NULL OR account_id = ?) "
+            "ORDER BY priority, id", (account_id,)
+        ))
     presets = []
     for item in items:
         entry = {

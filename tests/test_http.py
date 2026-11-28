@@ -2999,9 +2999,9 @@ class CabinetTrafficTests(PanelTestCase):
 
 
 class PresetsApiTests(PanelTestCase):
-    def api_login(self):
+    def api_login(self, email="c1@example.com"):
         response = self.client.post("/api/login", data={
-            "email": "c1@example.com", "password": USER_PASSWORD,
+            "email": email, "password": USER_PASSWORD,
         })
         self.assertEqual(response.status_code, 200, response.text)
         return {"Authorization": "Bearer " + response.json()["token"]}
@@ -3062,6 +3062,80 @@ class PresetsApiTests(PanelTestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["presets"], [])
 
+    def create_personal(self, headers, name="Mine", cidrs="10.90.0.0/24"):
+        return self.client.post("/api/me/presets", data={
+            "name": name, "description": "d", "cidrs": cidrs,
+        }, headers=headers)
+
+    def test_a_personal_preset_is_private_to_its_account(self):
+        self.seed_client()
+        self.fill("telegram")
+        headers = self.api_login()
+        created = self.create_personal(headers)
+        self.assertEqual(created.status_code, 200, created.text)
+        preset = created.json()
+        self.assertTrue(preset["id"].startswith("u1-"))
+        self.assertNotIn("icon", preset)
+        self.assertNotIn("icon_png", preset)
+        mine = {p["id"] for p in self.client.get(
+            "/api/me/presets", headers=headers).json()["presets"]}
+        self.assertIn("telegram", mine)
+        self.assertIn(preset["id"], mine)
+
+        self.seed_client(name="c2", ip="10.80.0.9", email="c2@example.com")
+        headers2 = self.api_login("c2@example.com")
+        theirs = {p["id"] for p in self.client.get(
+            "/api/me/presets", headers=headers2).json()["presets"]}
+        self.assertNotIn(preset["id"], theirs)
+        self.assertIn("telegram", theirs)
+
+    def test_a_personal_preset_can_be_deleted(self):
+        self.seed_client()
+        headers = self.api_login()
+        preset = self.create_personal(headers).json()
+        response = self.client.delete(f"/api/me/presets/{preset['id']}",
+                                      headers=headers)
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(self.client.get(
+            "/api/me/presets", headers=headers).json()["presets"], [])
+
+    def test_global_and_foreign_presets_cannot_be_deleted(self):
+        self.seed_client()
+        self.fill("telegram")
+        headers = self.api_login()
+        self.assertEqual(
+            self.client.delete("/api/me/presets/telegram", headers=headers).status_code,
+            404,
+        )
+        self.seed_client(name="c2", ip="10.80.0.9", email="c2@example.com")
+        headers2 = self.api_login("c2@example.com")
+        foreign = self.create_personal(headers2, name="Theirs").json()
+        self.assertEqual(
+            self.client.delete(f"/api/me/presets/{foreign['id']}",
+                               headers=headers).status_code,
+            404,
+        )
+
+    def test_the_personal_limit_is_enforced(self):
+        self.seed_client()
+        headers = self.api_login()
+        with app.db() as conn:
+            for index in range(presets.MAX_ACCOUNT_PRESETS):
+                conn.execute(
+                    "INSERT INTO route_presets (slug, name, kind, cidrs, "
+                    "enabled, priority, created_at, account_id) VALUES "
+                    "(?, ?, 'custom', '10.90.0.0/24', 1, 100, 'now', 1)",
+                    (f"u1-fill-{index}", f"fill {index}"),
+                )
+        response = self.create_personal(headers, name="One too many")
+        self.assertEqual(response.status_code, 409)
+
+    def test_a_default_route_is_refused(self):
+        self.seed_client()
+        headers = self.api_login()
+        response = self.create_personal(headers, cidrs="0.0.0.0/0")
+        self.assertEqual(response.status_code, 400)
+
 
 class PresetIconTests(PanelTestCase):
     def test_the_icon_is_served_with_cache_headers(self):
@@ -3100,6 +3174,52 @@ class PresetIconTests(PanelTestCase):
         self.assertEqual(self.client.get("/static/theme.css").status_code, 404)
 
 
+class CabinetPresetsTests(PanelTestCase):
+    def test_the_page_needs_login(self):
+        response = self.client.get("/me/presets")
+        self.assertEqual(response.status_code, 303)
+        self.assertEqual(response.headers["location"], "/login")
+
+    def test_a_preset_is_created_and_deleted(self):
+        aid, cid = self.seed_client()
+        self.login("c1@example.com", USER_PASSWORD)
+        self.assertEqual(self.client.get("/me/presets").status_code, 200)
+        csrf = self.csrf("/me/presets")
+        created = self.client.post("/me/presets/new", data={
+            "name": "My services", "description": "d",
+            "cidrs": "10.90.0.0/24", "csrf_token": csrf,
+        })
+        self.assertEqual(created.status_code, 303)
+        with app.db() as conn:
+            row = conn.execute(
+                "SELECT * FROM route_presets WHERE slug LIKE 'u1-%'"
+            ).fetchone()
+        self.assertEqual(row["account_id"], aid)
+        self.assertIn("My services", self.client.get("/me/presets").text)
+        deleted = self.client.post(f"/me/presets/{row['id']}/delete", data={
+            "csrf_token": csrf,
+        })
+        self.assertEqual(deleted.status_code, 303)
+        with app.db() as conn:
+            self.assertEqual(conn.execute(
+                "SELECT count(*) FROM route_presets WHERE id = ?", (row["id"],)
+            ).fetchone()[0], 0)
+
+    def test_a_foreign_preset_cannot_be_deleted(self):
+        self.seed_client()
+        with app.db() as conn:
+            pid = conn.execute(
+                "INSERT INTO route_presets (slug, name, kind, cidrs, enabled, "
+                "priority, created_at, account_id) VALUES "
+                "('u2-x', 'X', 'custom', '10.9.0.0/24', 1, 100, 'now', 2)"
+            ).lastrowid
+        self.login("c1@example.com", USER_PASSWORD)
+        response = self.client.post(f"/me/presets/{pid}/delete", data={
+            "csrf_token": self.csrf("/me/presets"),
+        })
+        self.assertEqual(response.status_code, 404)
+
+
 class PresetAdminTests(PanelTestCase):
     def api_token(self, email="c1@example.com"):
         response = self.client.post("/api/login", data={
@@ -3118,6 +3238,19 @@ class PresetAdminTests(PanelTestCase):
         self.assertIn("Telegram", page)
         self.assertIn("refresh now", page)
         self.assertIn("/api/me/presets", page)
+
+    def test_account_presets_are_not_in_the_global_catalogue(self):
+        self.seed_client()
+        with app.db() as conn:
+            conn.execute(
+                "INSERT INTO route_presets (slug, name, kind, cidrs, enabled, "
+                "priority, created_at, account_id) VALUES "
+                "('u1-personal', 'Personal route set', 'custom', "
+                "'10.9.0.0/24', 1, 100, 'now', 1)"
+            )
+        self.login_admin()
+        page = self.client.get("/presets").text
+        self.assertNotIn("Personal route set", page)
 
     def test_a_custom_preset_is_created_and_served(self):
         self.login_admin()
