@@ -88,6 +88,13 @@ ICONS = {
     "claude": "/static/presets/claude-1f5ad7ab.svg",
     "cloudflare": "/static/presets/cloudflare-172d7e14.svg",
 }
+# The Windows client draws with GDI+, which cannot render SVG: it asks for a
+# PNG of the same artwork and falls back to the SVG only for the web UI.
+ICON_PNGS = {
+    "telegram": "/static/presets/telegram-d88c6300.png",
+    "claude": "/static/presets/claude-79c089e1.png",
+    "cloudflare": "/static/presets/cloudflare-852769ca.png",
+}
 
 
 def ensure_schema(conn: sqlite3.Connection) -> None:
@@ -291,6 +298,7 @@ def catalog(conn: sqlite3.Connection, now: int | None = None) -> dict:
         }
         if item["slug"] in ICONS:
             entry["icon"] = ICONS[item["slug"]]
+            entry["icon_png"] = ICON_PNGS[item["slug"]]
         presets.append(entry)
     source_rows = [item for item in items if item["source_kind"]]
     stale = any(

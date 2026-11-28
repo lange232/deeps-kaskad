@@ -456,7 +456,8 @@ preset is older than a day.
       "cidrs": ["91.105.192.0/23", "91.108.4.0/22"],
       "source": "lord-alfred/ipranges",
       "fetched": 1795800000,
-      "icon": "/static/presets/telegram-6a604913.svg"
+      "icon": "/static/presets/telegram-6a604913.svg",
+      "icon_png": "/static/presets/telegram-d88c6300.png"
     }
   ]
 }
@@ -540,6 +541,7 @@ and `enabled`.
 | `source` | string | Where the ranges come from |
 | `fetched` | int | Unix time of the fetch that produced this entry |
 | `icon` | string, optional | Built-in presets only: an absolute path under `/static/presets/`, versioned by content. Custom presets have no icon and the client shows a generic one |
+| `icon_png` | string, optional | The same artwork as a 128×128 PNG for clients that cannot render SVG (the Windows UI uses GDI+). Present wherever `icon` is |
 
 Preset icons are public: they are served with `Cache-Control: public,
 max-age=31536000, immutable` and an `ETag`. The path never changes without the

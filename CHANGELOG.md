@@ -15,7 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   list or an external URL/ASN, and refreshes the sourced entries; the API
   serves the enabled ones with an ETag and the panel never routes them.
   Built-in presets carry a content-versioned icon under `/static/presets/`,
-  served publicly with a long immutable cache.
+  served publicly with a long immutable cache; the same artwork is available as
+  a 128×128 PNG for clients that cannot render SVG.
 
 ### Changed
 

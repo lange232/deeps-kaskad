@@ -195,7 +195,10 @@ class DatabaseTests(unittest.TestCase):
         for slug in ("telegram", "claude", "cloudflare"):
             self.assertTrue(by_id[slug]["icon"].startswith("/static/presets/"))
             self.assertTrue(by_id[slug]["icon"].endswith(".svg"))
+            self.assertTrue(by_id[slug]["icon_png"].startswith("/static/presets/"))
+            self.assertTrue(by_id[slug]["icon_png"].endswith(".png"))
         self.assertNotIn("icon", by_id["mine"])
+        self.assertNotIn("icon_png", by_id["mine"])
 
     def test_icon_files_exist_and_are_small(self):
         static = Path(__file__).resolve().parents[1] / "panel" / "static"
@@ -203,6 +206,15 @@ class DatabaseTests(unittest.TestCase):
             path = static / icon.removeprefix("/static/")
             self.assertTrue(path.is_file(), path)
             self.assertLessEqual(path.stat().st_size, 64 * 1024, path)
+        for icon in presets.ICON_PNGS.values():
+            path = static / icon.removeprefix("/static/")
+            self.assertTrue(path.is_file(), path)
+            self.assertLessEqual(path.stat().st_size, 256 * 1024, path)
+            # PNG IHDR: width and height are big-endian at bytes 16 and 20.
+            header = path.read_bytes()[:24]
+            width = int.from_bytes(header[16:20], "big")
+            height = int.from_bytes(header[20:24], "big")
+            self.assertEqual((width, height), (128, 128), path)
 
     def test_an_old_catalogue_is_stale(self):
         presets.refresh(self.conn, self.fetch)

@@ -3031,6 +3031,7 @@ class PresetsApiTests(PanelTestCase):
         self.assertFalse(body["stale"])
         self.assertTrue(body["version"])
         self.assertTrue(body["presets"][0]["icon"].startswith("/static/presets/"))
+        self.assertTrue(body["presets"][0]["icon_png"].endswith(".png"))
         self.assertEqual(headers["Authorization"][:7], "Bearer ")
         self.assertIn("etag", response.headers)
         self.assertEqual(response.headers["cache-control"], "no-cache")
@@ -3071,6 +3072,17 @@ class PresetIconTests(PanelTestCase):
         self.assertIn("immutable", response.headers["cache-control"])
         self.assertIn("max-age=31536000", response.headers["cache-control"])
         self.assertIn("etag", response.headers)
+        again = self.client.get(
+            path, headers={"If-None-Match": response.headers["etag"]}
+        )
+        self.assertEqual(again.status_code, 304)
+
+    def test_the_png_icon_is_served_with_cache_headers(self):
+        path = presets.ICON_PNGS["claude"]
+        response = self.client.get(path)
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("image/png", response.headers["content-type"])
+        self.assertIn("immutable", response.headers["cache-control"])
         again = self.client.get(
             path, headers={"If-None-Match": response.headers["etag"]}
         )
