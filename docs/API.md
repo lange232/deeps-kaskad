@@ -522,6 +522,7 @@ Returned by `/api/login`, `/api/me` and `/api/me/configs`.
 | `ip` | string | Tunnel address without the prefix length |
 | `enabled` | bool | Peer enabled on the server |
 | `internet` | bool | The account grants at least one internet exit |
+| `gateway` | string | The S1 address inside the client network, for split-tunnel routing; empty if the panel has no address configured |
 | `socks` | bool | The SOCKS5 proxy is switched on for this configuration |
 | `exits` | string[] | Names of the routed subnets this configuration uses |
 | `remote_ip` | string | Peer address as the host sees it; empty until first connect |
@@ -543,6 +544,7 @@ Returned as `config` by `POST /api/me/configs`:
 | `name` | string |
 | `device_id` | string |
 | `ip` | string |
+| `gateway` | string |
 | `internet` | bool |
 | `enabled` | bool |
 

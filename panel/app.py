@@ -1404,12 +1404,18 @@ def drop_traffic(conn, cid: int) -> None:
     conn.execute("DELETE FROM traffic_state WHERE client_id = ?", (cid,))
 
 
+def tunnel_gateway() -> str:
+    """The S1 address inside the client network, as the panel knows it."""
+    return cfg().get("address", "")
+
+
 def created_config_view(cl) -> dict:
     return {
         "id": cl["id"],
         "name": cl["name"],
         "device_id": (cl["device_id"] if "device_id" in cl.keys() else "") or "",
         "ip": cl["ip"],
+        "gateway": tunnel_gateway(),
         "internet": config_has_internet(cl),
         "enabled": bool(cl["enabled"]),
     }
@@ -1751,6 +1757,7 @@ def config_view(cl, live: dict, assigned=None, now: int | None = None) -> dict:
         "enabled": bool(cl["enabled"]),
         "internet": config_has_internet(cl),
         "exits": [e["name"] for e in assigned],
+        "gateway": tunnel_gateway(),
         "remote_ip": remote_ip(st.get("endpoint", "")),
         "handshake": handshake,
         "online": config_online(handshake, now),

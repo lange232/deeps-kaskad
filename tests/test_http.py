@@ -3454,6 +3454,15 @@ class MobileApiTests(PanelTestCase):
         self.assertEqual(payload["client"]["id"], cid)
         self.assertEqual([c["id"] for c in payload["configs"]], [cid])
 
+    def test_the_configuration_carries_the_tunnel_gateway(self):
+        self.seed_client()
+        headers, payload = self.api_login()
+        self.assertEqual(payload["client"]["gateway"], "10.80.0.1")
+        created = self.client.post("/api/me/configs", data={
+            "name": "new-one"}, headers=headers)
+        self.assertEqual(created.status_code, 200, created.text)
+        self.assertEqual(created.json()["config"]["gateway"], "10.80.0.1")
+
     def test_exits_api_says_unknown_when_the_daemon_is_silent(self):
         aid, cid = self.seed_client()
         self.grant(aid, cid, self.seed_exit("first", "awg1"))

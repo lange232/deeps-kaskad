@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- The configuration object in the API carries `gateway`, the S1 address inside
+  the client network, so a split-tunnel client does not have to guess it from
+  the client mask. It is empty when the panel has no address configured.
+
 ## [0.5.6] - 2026-11-28
 
 ### Added
