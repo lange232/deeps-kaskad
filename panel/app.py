@@ -37,7 +37,7 @@ from pathlib import Path
 
 from urllib.parse import quote, urlparse
 
-from fastapi import FastAPI, Form, HTTPException, Query, Request
+from fastapi import FastAPI, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import (
@@ -83,6 +83,10 @@ RESOLVE_TIMEOUT = 3
 # Forms are a few kilobytes at most. FastAPI parses a form fully before the
 # handler runs, so an unbounded body on the public login is a memory DoS.
 MAX_BODY_BYTES = 64 * 1024
+# The two preset forms carry an icon upload; everything else keeps the small
+# limit.
+MAX_UPLOAD_BYTES = 320 * 1024
+UPLOAD_PATH = re.compile(r"^/(?:me/)?presets(?:/|$)")
 
 
 def human_ts(value) -> str:
@@ -160,6 +164,11 @@ templates = Jinja2Templates(directory=str(BASE / "templates"))
 templates.env.filters["ts"] = human_ts
 templates.env.filters["audit_label"] = audit_label
 templates.env.filters["cidr_lines"] = lambda value: (value or "").replace(",", "\n")
+# Lists show the artwork of built-in presets too, which lives in the repository
+# rather than in the row.
+templates.env.filters["preset_icon"] = lambda item: (
+    item["icon"] or presets.ICONS.get(item["slug"], "")
+)
 app = FastAPI(title="panel", docs_url=None, redoc_url=None, openapi_url=None)
 app.mount("/static", StaticFiles(directory=str(BASE / "static")), name="static")
 # Trailing-slash redirects are a framework fingerprint and buy nothing: the
@@ -212,10 +221,12 @@ class LimitBodyMiddleware:
         if scope["type"] != "http":
             await self.app(scope, receive, send)
             return
+        limit = (MAX_UPLOAD_BYTES if UPLOAD_PATH.match(scope.get("path", ""))
+                 else MAX_BODY_BYTES)
         length = next(
             (v for k, v in scope.get("headers", []) if k == b"content-length"), None
         )
-        if length and length.isdigit() and int(length) > MAX_BODY_BYTES:
+        if length and length.isdigit() and int(length) > limit:
             await JSONResponse(
                 {"detail": "request body too large"}, status_code=413
             )(scope, receive, send)
@@ -227,7 +238,7 @@ class LimitBodyMiddleware:
             message = await receive()
             if message["type"] == "http.request":
                 received += len(message.get("body", b""))
-                if received > MAX_BODY_BYTES:
+                if received > limit:
                     raise HTTPException(status_code=413, detail="request body too large")
             return message
 
@@ -1321,6 +1332,33 @@ async def headers(request: Request, call_next):
 
 
 # ---------------------------------------------------------------- routes
+
+@app.get("/preset-icons/{name}")
+def preset_icon(request: Request, name: str):
+    """Uploaded preset artwork, public like the built-in icons."""
+    if not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,63}\.(png|svg)", name):
+        raise HTTPException(status_code=404)
+    with db() as conn:
+        found = presets.icon(conn, name)
+    if not found:
+        raise HTTPException(status_code=404)
+    digest = name.rsplit("-", 1)[-1].split(".")[0]
+    headers = {
+        "Cache-Control": "public, max-age=31536000, immutable",
+        "ETag": f'"{digest}"',
+    }
+    if presets.etag_matches(request.headers.get("if-none-match"), digest):
+        return Response(status_code=304, headers=headers)
+    if found["content_type"] == "image/svg+xml":
+        # An uploaded SVG is untrusted: opened directly in a tab it must not
+        # run script with the panel's origin.
+        headers["Content-Security-Policy"] = (
+            "default-src 'none'; style-src 'unsafe-inline'; sandbox"
+        )
+    return Response(
+        bytes(found["data"]), media_type=found["content_type"], headers=headers
+    )
+
 
 def exits_rows():
     with db() as conn:
@@ -3794,6 +3832,7 @@ def me_create_preset(
     name: str = Form(""),
     description: str = Form(""),
     cidrs: str = Form(""),
+    icon: UploadFile | None = File(None),
     csrf_token: str = Form(...),
 ):
     token, account = require_user(request)
@@ -3809,12 +3848,15 @@ def me_create_preset(
     errors = _personal_errors(values)
     if errors:
         return fail("; ".join(errors))
+    icon_data, icon_error = _read_icon(icon)
+    if icon_error:
+        return fail(icon_error)
     with db() as conn:
         if presets.account_count(conn, int(account["id"])) >= presets.MAX_ACCOUNT_PRESETS:
             return fail(f"at most {presets.MAX_ACCOUNT_PRESETS} personal presets")
         base = f"u{account['id']}-" + presets.slugify(values["name"])
         slug = presets.unique_slug(conn, base)
-        conn.execute(
+        cur = conn.execute(
             "INSERT INTO route_presets (slug, name, description, kind, "
             "cidrs, enabled, priority, created_at, account_id) "
             "VALUES (?, ?, ?, 'custom', ?, 1, 100, ?, ?)",
@@ -3822,8 +3864,85 @@ def me_create_preset(
              datetime.now(timezone.utc).isoformat(timespec="seconds"),
              int(account["id"])),
         )
+        if icon_data:
+            artwork, artwork_png = presets.save_icon(conn, slug, icon_data)
+            conn.execute(
+                "UPDATE route_presets SET icon = ?, icon_png = ? WHERE id = ?",
+                (artwork, artwork_png, cur.lastrowid),
+            )
     audit("preset_create", f"{account['email']} {values['name']}")
     return RedirectResponse("/me/presets?ok=" + quote("preset added"),
+                            status_code=303)
+
+
+@app.get("/me/presets/{pid}", response_class=HTMLResponse)
+def me_preset_page(request: Request, pid: int, err: str | None = None):
+    token, account = require_user(request)
+    with db() as conn:
+        item = presets.row(conn, pid)
+    if not item or item["account_id"] != int(account["id"]):
+        raise HTTPException(status_code=404)
+    return render_page(
+        request, "me_preset_edit.html", "me-presets", role="user",
+        csrf=csrf(token), err=err, preset=item, email=account["email"],
+    )
+
+
+@app.post("/me/presets/{pid}/edit")
+def me_edit_preset(
+    request: Request,
+    pid: int,
+    name: str = Form(""),
+    description: str = Form(""),
+    cidrs: str = Form(""),
+    icon: UploadFile | None = File(None),
+    remove_icon: str = Form(""),
+    csrf_token: str = Form(...),
+):
+    token, account = require_user(request)
+    if not hmac.compare_digest(csrf_token, csrf(token)):
+        raise HTTPException(status_code=400, detail="csrf")
+    with db() as conn:
+        item = presets.row(conn, pid)
+    if not item or item["account_id"] != int(account["id"]):
+        raise HTTPException(status_code=404)
+    values, error = _preset_fields(name, description, cidrs, "", "")
+    if error:
+        return RedirectResponse(f"/me/presets/{pid}?err=" + quote(error),
+                                status_code=303)
+    errors = _personal_errors(values)
+    if errors:
+        return RedirectResponse(
+            f"/me/presets/{pid}?err=" + quote("; ".join(errors)),
+            status_code=303,
+        )
+    icon_data, icon_error = _read_icon(icon)
+    if icon_error:
+        return RedirectResponse(f"/me/presets/{pid}?err=" + quote(icon_error),
+                                status_code=303)
+    old_icon, old_png = item["icon"], item["icon_png"]
+    with db() as conn:
+        conn.execute(
+            "UPDATE route_presets SET name = ?, description = ?, cidrs = ? "
+            "WHERE id = ?",
+            (values["name"], values["description"], values["cidrs"], pid),
+        )
+        if icon_data:
+            artwork, artwork_png = presets.save_icon(conn, item["slug"],
+                                                     icon_data)
+            conn.execute(
+                "UPDATE route_presets SET icon = ?, icon_png = ? WHERE id = ?",
+                (artwork, artwork_png, pid),
+            )
+            presets.drop_icons(conn, old_icon, old_png)
+        elif remove_icon:
+            conn.execute(
+                "UPDATE route_presets SET icon = '', icon_png = '' WHERE id = ?",
+                (pid,),
+            )
+            presets.drop_icons(conn, old_icon, old_png)
+    audit("preset_edit", f"{account['email']} {values['name']}")
+    return RedirectResponse("/me/presets?ok=" + quote("preset updated"),
                             status_code=303)
 
 
@@ -3834,12 +3953,14 @@ def me_delete_preset(request: Request, pid: int, csrf_token: str = Form(...)):
         raise HTTPException(status_code=400, detail="csrf")
     with db() as conn:
         found = conn.execute(
-            "SELECT id FROM route_presets WHERE id = ? AND account_id = ?",
+            "SELECT id, icon, icon_png FROM route_presets "
+            "WHERE id = ? AND account_id = ?",
             (pid, int(account["id"])),
         ).fetchone()
         if not found:
             raise HTTPException(status_code=404)
         conn.execute("DELETE FROM route_presets WHERE id = ?", (pid,))
+        presets.drop_icons(conn, found["icon"], found["icon_png"])
     audit("preset_delete", f"{account['email']} #{pid}")
     return RedirectResponse("/me/presets?ok=" + quote("preset deleted"),
                             status_code=303)
@@ -5157,6 +5278,17 @@ def _personal_errors(values: dict) -> list[str]:
     )
 
 
+def _read_icon(icon: UploadFile | None) -> tuple[bytes | None, str | None]:
+    """The uploaded image, or an error message for the redirect."""
+    if icon is None or not icon.filename:
+        return None, None
+    data = icon.file.read(presets.ICON_MAX_BYTES + 1)
+    error = presets.validate_icon(data)
+    if error:
+        return None, error
+    return data, None
+
+
 @app.get("/presets", response_class=HTMLResponse)
 def presets_page(request: Request, err: str | None = None, ok: str | None = None):
     token = require_admin(request)
@@ -5175,9 +5307,9 @@ def preset_page(request: Request, pid: int, err: str | None = None):
         item = presets.row(conn, pid)
     if not item:
         raise HTTPException(status_code=404)
-    if item["kind"] != "custom" or item["account_id"] is not None:
+    if item["account_id"] is not None:
         return RedirectResponse(
-            "/presets?err=" + quote("built-in presets can only be switched on or off"),
+            "/presets?err=" + quote("personal presets are edited by their account"),
             status_code=303,
         )
     return render_page(
@@ -5194,6 +5326,7 @@ def create_preset(
     cidrs: str = Form(""),
     source_kind: str = Form(""),
     source_value: str = Form(""),
+    icon: UploadFile | None = File(None),
     csrf_token: str = Form(...),
 ):
     token = require_admin(request)
@@ -5203,9 +5336,13 @@ def create_preset(
                                    source_kind, source_value)
     if error:
         return RedirectResponse("/presets?err=" + quote(error), status_code=303)
+    icon_data, icon_error = _read_icon(icon)
+    if icon_error:
+        return RedirectResponse("/presets?err=" + quote(icon_error),
+                                status_code=303)
     with db() as conn:
         slug = presets.unique_slug(conn, presets.slugify(values["name"]))
-        conn.execute(
+        cur = conn.execute(
             "INSERT INTO route_presets (slug, name, description, kind, "
             "source_kind, source_value, cidrs, enabled, priority, created_at) "
             "VALUES (?, ?, ?, 'custom', ?, ?, ?, 1, 100, ?)",
@@ -5213,6 +5350,12 @@ def create_preset(
              values["source_kind"], values["source_value"], values["cidrs"],
              datetime.now(timezone.utc).isoformat(timespec="seconds")),
         )
+        if icon_data:
+            artwork, artwork_png = presets.save_icon(conn, slug, icon_data)
+            conn.execute(
+                "UPDATE route_presets SET icon = ?, icon_png = ? WHERE id = ?",
+                (artwork, artwork_png, cur.lastrowid),
+            )
     audit("preset_create", values["name"])
     return RedirectResponse("/presets?ok=" + quote("preset created"),
                             status_code=303)
@@ -5227,6 +5370,8 @@ def edit_preset(
     cidrs: str = Form(""),
     source_kind: str = Form(""),
     source_value: str = Form(""),
+    icon: UploadFile | None = File(None),
+    remove_icon: str = Form(""),
     csrf_token: str = Form(...),
 ):
     token = require_admin(request)
@@ -5236,9 +5381,9 @@ def edit_preset(
         item = presets.row(conn, pid)
     if not item:
         raise HTTPException(status_code=404)
-    if item["kind"] != "custom":
+    if item["account_id"] is not None:
         return RedirectResponse(
-            "/presets?err=" + quote("built-in presets can only be switched on or off"),
+            "/presets?err=" + quote("personal presets are edited by their account"),
             status_code=303,
         )
     values, error = _preset_fields(name, description, cidrs,
@@ -5246,6 +5391,11 @@ def edit_preset(
     if error:
         return RedirectResponse(f"/presets/{pid}?err=" + quote(error),
                                 status_code=303)
+    icon_data, icon_error = _read_icon(icon)
+    if icon_error:
+        return RedirectResponse(f"/presets/{pid}?err=" + quote(icon_error),
+                                status_code=303)
+    old_icon, old_png = item["icon"], item["icon_png"]
     source_changed = (values["source_kind"] != item["source_kind"]
                       or values["source_value"] != item["source_value"])
     with db() as conn:
@@ -5265,6 +5415,20 @@ def edit_preset(
                 "WHERE id = ?",
                 (values["name"], values["description"], values["cidrs"], pid),
             )
+        if icon_data:
+            artwork, artwork_png = presets.save_icon(conn, item["slug"],
+                                                     icon_data)
+            conn.execute(
+                "UPDATE route_presets SET icon = ?, icon_png = ? WHERE id = ?",
+                (artwork, artwork_png, pid),
+            )
+            presets.drop_icons(conn, old_icon, old_png)
+        elif remove_icon:
+            conn.execute(
+                "UPDATE route_presets SET icon = '', icon_png = '' WHERE id = ?",
+                (pid,),
+            )
+            presets.drop_icons(conn, old_icon, old_png)
     audit("preset_edit", values["name"])
     return RedirectResponse("/presets?ok=" + quote("preset updated"),
                             status_code=303)
@@ -5300,6 +5464,7 @@ def delete_preset(request: Request, pid: int, csrf_token: str = Form(...)):
                 status_code=303,
             )
         conn.execute("DELETE FROM route_presets WHERE id = ?", (pid,))
+        presets.drop_icons(conn, item["icon"], item["icon_png"])
     audit("preset_delete", item["slug"])
     return RedirectResponse("/presets?ok=" + quote("preset deleted"),
                             status_code=303)

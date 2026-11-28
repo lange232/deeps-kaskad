@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% block title %}edit {{ preset.name }} — deeps kaskad{% endblock %}
+{% block topbar %}<a class="oc-mono topbar-link" href="/me">{{ email }}</a>{% endblock %}
+{% block body %}
+<div class="crumbs"><a href="/me/presets">My presets</a><span>/</span><span>{{ preset.name }}</span></div>
+
+{% if err %}<div class="oc-alert oc-alert--danger" style="margin-bottom:16px"><span class="oc-dot" style="margin-top:7px"></span><div class="oc-alert__body">{{ err }}</div></div>{% endif %}
+
+<div class="oc-panel" style="padding:16px; max-width:780px">
+  <form method="post" action="/me/presets/{{ preset.id }}/edit"
+        enctype="multipart/form-data">
+    <input type="hidden" name="csrf_token" value="{{ csrf }}">
+    <div class="form-grid">
+      <label class="oc-field">
+        <span class="oc-field__label">name</span>
+        <input class="oc-input" type="text" name="name" maxlength="64" required
+               value="{{ preset.name }}">
+      </label>
+      <label class="oc-field">
+        <span class="oc-field__label">description</span>
+        <input class="oc-input" type="text" name="description" maxlength="240"
+               value="{{ preset.description }}">
+      </label>
+      <label class="oc-field full">
+        <span class="oc-field__label">CIDRs</span>
+        <textarea class="oc-textarea" name="cidrs" spellcheck="false" required>{{ preset.cidrs | cidr_lines }}</textarea>
+        <span class="oc-hint">one per line or comma-separated; IPv4 only, 0.0.0.0/0 is refused</span>
+      </label>
+      {% include "_preset_icon.html" %}
+    </div>
+    <div class="actions" style="margin-top:12px">
+      <button class="oc-btn oc-btn--neutral">save preset</button>
+      <a class="oc-btn oc-btn--ghost" href="/me/presets">back</a>
+    </div>
+  </form>
+</div>
+{% endblock %}

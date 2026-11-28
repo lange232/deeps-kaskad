@@ -27,6 +27,10 @@
           <tr>
             <td>
               <div class="exit-cell">
+                {% if p | preset_icon %}
+                <img src="{{ p | preset_icon }}" alt="" width="28" height="28"
+                     style="width:28px; height:28px; object-fit:contain; border-radius:6px; background:var(--ui-bg-layer-2)">
+                {% endif %}
                 <span class="exit-cell__name">
                   {{ p.name }}
                   <span class="oc-badge oc-badge--subtle">{{ p.kind }}</span>
@@ -53,8 +57,8 @@
                   <input type="hidden" name="csrf_token" value="{{ csrf }}">
                   <button class="oc-btn oc-btn--outline oc-btn--sm">{{ 'disable' if p.enabled else 'enable' }}</button>
                 </form>
-                {% if p.kind == 'custom' %}
                 <a class="oc-btn oc-btn--ghost oc-btn--sm" href="/presets/{{ p.id }}">edit</a>
+                {% if p.kind == 'custom' %}
                 <form method="post" action="/presets/{{ p.id }}/delete" style="margin:0"
                       data-confirm="Delete preset “{{ p.name }}”?">
                   <input type="hidden" name="csrf_token" value="{{ csrf }}">
@@ -76,7 +80,7 @@
   <section>
     <h2 class="oc-section__title">new preset</h2>
     <div class="oc-panel" style="padding:16px; max-width:780px">
-      <form method="post" action="/presets/new">
+      <form method="post" action="/presets/new" enctype="multipart/form-data">
         <input type="hidden" name="csrf_token" value="{{ csrf }}">
         <div class="form-grid">
           <label class="oc-field">
@@ -110,6 +114,7 @@
                       placeholder="91.108.4.0/22, 149.154.160.0/20"></textarea>
             <span class="oc-hint">one per line or comma-separated; IPv4 only, 0.0.0.0/0 is refused</span>
           </label>
+          {% include "_preset_icon.html" %}
         </div>
         <button class="oc-btn oc-btn--neutral" style="margin-top:12px">create preset</button>
       </form>

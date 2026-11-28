@@ -43,13 +43,30 @@ CREATE TABLE IF NOT EXISTS route_presets (
     fetched_at INTEGER NOT NULL DEFAULT 0,
     last_error TEXT NOT NULL DEFAULT '',
     created_at TEXT NOT NULL,
-    account_id INTEGER
+    account_id INTEGER,
+    icon TEXT NOT NULL DEFAULT '',
+    icon_png TEXT NOT NULL DEFAULT ''
+);
+"""
+
+# Uploaded artwork lives next to the presets table, not in the repository: the
+# file name carries the content hash, so the public URL is immutable.
+ICON_SCHEMA = """
+CREATE TABLE IF NOT EXISTS preset_icons (
+    name TEXT PRIMARY KEY,
+    content_type TEXT NOT NULL,
+    data BLOB NOT NULL,
+    created_at TEXT NOT NULL
 );
 """
 
 # An account may keep a small personal catalogue; the limit keeps the answer
 # (and the client's cache) bounded.
 MAX_ACCOUNT_PRESETS = 20
+
+# Uploaded icons are small pictures, not photos: a single file must stay well
+# below the database page cache's comfort zone.
+ICON_MAX_BYTES = 256 * 1024
 
 # Cloudflare covers Discord, OpenCode and many other sites that share its
 # edge, so they do not get separate entries. Anthropic has its own network.
@@ -117,9 +134,18 @@ ICON_PNGS = {
 def ensure_schema(conn: sqlite3.Connection) -> None:
     """Creates the table, adds account scope and fills the built-in entries."""
     conn.executescript(SCHEMA)
+    conn.executescript(ICON_SCHEMA)
     columns = {row[1] for row in conn.execute("PRAGMA table_info(route_presets)")}
     if "account_id" not in columns:
         conn.execute("ALTER TABLE route_presets ADD COLUMN account_id INTEGER")
+    if "icon" not in columns:
+        conn.execute(
+            "ALTER TABLE route_presets ADD COLUMN icon TEXT NOT NULL DEFAULT ''"
+        )
+    if "icon_png" not in columns:
+        conn.execute(
+            "ALTER TABLE route_presets ADD COLUMN icon_png TEXT NOT NULL DEFAULT ''"
+        )
     created = datetime.now(timezone.utc).isoformat(timespec="seconds")
     for preset in DEFAULT_PRESETS:
         conn.execute(
@@ -137,6 +163,67 @@ def _dicts(cursor) -> list[dict]:
     """Rows as dicts without depending on the connection's row factory."""
     names = [column[0] for column in cursor.description]
     return [dict(zip(names, values)) for values in cursor.fetchall()]
+
+
+def icon_type(data: bytes) -> str:
+    """The content type of an uploaded icon, or an empty string."""
+    if data.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "image/png"
+    # The root element may follow an XML declaration and comments; the first
+    # kilobyte is enough to find it.
+    if b"<svg" in data[:1024].lower():
+        return "image/svg+xml"
+    return ""
+
+
+def validate_icon(data: bytes) -> str | None:
+    if not data:
+        return "the icon file is empty"
+    if len(data) > ICON_MAX_BYTES:
+        return f"the icon is larger than {ICON_MAX_BYTES // 1024} KB"
+    if not icon_type(data):
+        return "the icon must be a PNG or an SVG image"
+    return None
+
+
+def save_icon(conn: sqlite3.Connection, slug: str,
+              data: bytes) -> tuple[str, str]:
+    """Stores an uploaded icon and returns the (icon, icon_png) URLs.
+
+    The name carries a slice of the content hash, so a replaced picture gets a
+    new URL and clients never keep the old artwork. Only PNG uploads can serve
+    the Windows client, which cannot draw SVG.
+    """
+    kind = icon_type(data)
+    extension = "png" if kind == "image/png" else "svg"
+    digest = hashlib.sha256(data).hexdigest()[:8]
+    name = f"{slug}-{digest}.{extension}"
+    conn.execute(
+        "INSERT OR REPLACE INTO preset_icons (name, content_type, data, "
+        "created_at) VALUES (?, ?, ?, ?)",
+        (name, kind, sqlite3.Binary(data),
+         datetime.now(timezone.utc).isoformat(timespec="seconds")),
+    )
+    url = f"/preset-icons/{name}"
+    return url, (url if extension == "png" else "")
+
+
+def icon(conn: sqlite3.Connection, name: str) -> dict | None:
+    return _one(conn, "SELECT * FROM preset_icons WHERE name = ?", (name,))
+
+
+def drop_icons(conn: sqlite3.Connection, *urls: str) -> None:
+    """Removes uploaded artwork that no preset points to any more."""
+    for url in urls:
+        if not url:
+            continue
+        name = url.rsplit("/", 1)[-1]
+        still_used = conn.execute(
+            "SELECT 1 FROM route_presets WHERE icon = ? OR icon_png = ?",
+            (url, url),
+        ).fetchone()
+        if not still_used:
+            conn.execute("DELETE FROM preset_icons WHERE name = ?", (name,))
 
 
 def _one(conn: sqlite3.Connection, sql: str, params=()) -> dict | None:
@@ -374,7 +461,11 @@ def catalog(conn: sqlite3.Connection, account_id: int | None = None,
             "source": item["source_value"] or "manual",
             "fetched": int(item["fetched_at"] or 0),
         }
-        if item["slug"] in ICONS:
+        if item["icon"]:
+            entry["icon"] = item["icon"]
+            if item["icon_png"]:
+                entry["icon_png"] = item["icon_png"]
+        elif item["slug"] in ICONS:
             entry["icon"] = ICONS[item["slug"]]
             entry["icon_png"] = ICON_PNGS[item["slug"]]
         presets.append(entry)

@@ -42,6 +42,13 @@ ADMIN_PASSWORD = "admin-password-123"
 USER_PASSWORD = "client-password-123"
 SECRET = "test-session-secret"
 
+# A valid 1x1 PNG: enough to pass the magic-byte check the panel makes.
+PNG_ICON = (
+    b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01"
+    b"\x08\x06\x00\x00\x00\x1f\x15\xc4\x89\x00\x00\x00\nIDATx\x9cc\x00"
+    b"\x01\x00\x00\x05\x00\x01\r\n-\xb4\x00\x00\x00\x00IEND\xaeB`\x82"
+)
+
 
 @unittest.skipUnless(app, "fastapi is not installed")
 class PanelTestCase(unittest.TestCase):
@@ -3227,6 +3234,89 @@ class CabinetPresetsTests(PanelTestCase):
         })
         self.assertEqual(response.status_code, 404)
 
+    def test_a_personal_preset_is_edited_with_an_icon(self):
+        aid, cid = self.seed_client()
+        self.seed_client(name="c2", ip="10.80.0.9", email="c2@example.com")
+        self.login("c1@example.com", USER_PASSWORD)
+        csrf = self.csrf("/me/presets")
+        self.client.post("/me/presets/new", data={
+            "name": "Mine", "cidrs": "10.90.0.0/24", "csrf_token": csrf,
+        })
+        with app.db() as conn:
+            pid = conn.execute(
+                "SELECT id FROM route_presets WHERE account_id = ?", (aid,)
+            ).fetchone()[0]
+        page = self.client.get(f"/me/presets/{pid}")
+        self.assertEqual(page.status_code, 200, page.text)
+        self.assertIn("Mine", page.text)
+        response = self.client.post(
+            f"/me/presets/{pid}/edit",
+            data={
+                "name": "Mine v2", "description": "updated",
+                "cidrs": "10.90.0.0/24, 10.91.0.0/24",
+                "csrf_token": self.csrf(f"/me/presets/{pid}"),
+            },
+            files={"icon": ("mine.png", PNG_ICON, "image/png")},
+        )
+        self.assertEqual(response.status_code, 303)
+        with app.db() as conn:
+            row = conn.execute("SELECT * FROM route_presets WHERE id = ?",
+                               (pid,)).fetchone()
+        self.assertEqual(row["name"], "Mine v2")
+        self.assertEqual(row["description"], "updated")
+        self.assertTrue(row["icon"].startswith("/preset-icons/"))
+        self.assertEqual(self.client.get(row["icon"]).status_code, 200)
+        headers = {"Authorization": "Bearer " + self.client.post(
+            "/api/login", data={"email": "c1@example.com",
+                                "password": USER_PASSWORD},
+        ).json()["token"]}
+        entry = self.client.get(
+            "/api/me/presets", headers=headers).json()["presets"][0]
+        self.assertEqual(entry["icon"], row["icon"])
+        self.assertEqual(entry["icon_png"], row["icon"])
+
+    def test_a_foreign_preset_cannot_be_edited(self):
+        self.seed_client()
+        with app.db() as conn:
+            pid = conn.execute(
+                "INSERT INTO route_presets (slug, name, kind, cidrs, enabled, "
+                "priority, created_at, account_id) VALUES "
+                "('u2-x', 'X', 'custom', '10.9.0.0/24', 1, 100, 'now', 2)"
+            ).lastrowid
+        self.login("c1@example.com", USER_PASSWORD)
+        csrf = self.csrf("/me/presets")
+        self.assertEqual(self.client.get(f"/me/presets/{pid}").status_code, 404)
+        response = self.client.post(f"/me/presets/{pid}/edit", data={
+            "name": "Hijacked", "cidrs": "10.9.0.0/24", "csrf_token": csrf,
+        })
+        self.assertEqual(response.status_code, 404)
+        with app.db() as conn:
+            self.assertEqual(conn.execute(
+                "SELECT name FROM route_presets WHERE id = ?", (pid,)
+            ).fetchone()[0], "X")
+
+    def test_a_personal_preset_refuses_the_tunnel_network(self):
+        aid, cid = self.seed_client()
+        self.login("c1@example.com", USER_PASSWORD)
+        csrf = self.csrf("/me/presets")
+        self.client.post("/me/presets/new", data={
+            "name": "Mine", "cidrs": "10.90.0.0/24", "csrf_token": csrf,
+        })
+        with app.db() as conn:
+            pid = conn.execute(
+                "SELECT id FROM route_presets WHERE account_id = ?", (aid,)
+            ).fetchone()[0]
+        response = self.client.post(f"/me/presets/{pid}/edit", data={
+            "name": "Mine", "cidrs": "10.80.0.0/24",
+            "csrf_token": self.csrf(f"/me/presets/{pid}"),
+        })
+        self.assertEqual(response.status_code, 303)
+        self.assertIn("err=", response.headers["location"])
+        with app.db() as conn:
+            self.assertEqual(conn.execute(
+                "SELECT cidrs FROM route_presets WHERE id = ?", (pid,)
+            ).fetchone()[0], "10.90.0.0/24")
+
 
 class PresetAdminTests(PanelTestCase):
     def api_token(self, email="c1@example.com"):
@@ -3318,6 +3408,151 @@ class PresetAdminTests(PanelTestCase):
             "csrf_token": self.csrf("/presets"),
         })
         self.assertEqual(response.status_code, 303)
+
+    def test_a_builtin_preset_can_be_edited(self):
+        self.login_admin()
+        with app.db() as conn:
+            pid = conn.execute(
+                "SELECT id FROM route_presets WHERE slug = 'telegram'"
+            ).fetchone()[0]
+        page = self.client.get(f"/presets/{pid}")
+        self.assertEqual(page.status_code, 200, page.text)
+        self.assertIn("edit telegram", page.text.lower())
+        response = self.client.post(f"/presets/{pid}/edit", data={
+            "name": "Telegram (edited)", "description": "mine",
+            "cidrs": "91.108.4.0/22", "source_kind": "cidr-text",
+            "source_value": presets.DEFAULT_PRESETS[0]["source_value"],
+            "csrf_token": self.csrf(f"/presets/{pid}"),
+        })
+        self.assertEqual(response.status_code, 303)
+        with app.db() as conn:
+            row = conn.execute("SELECT * FROM route_presets WHERE id = ?",
+                               (pid,)).fetchone()
+        self.assertEqual(row["name"], "Telegram (edited)")
+        self.assertEqual(row["kind"], "builtin")
+        self.assertEqual(row["cidrs"], "91.108.4.0/22")
+
+    def test_an_uploaded_icon_is_served_and_catalogued(self):
+        self.seed_client()
+        self.login_admin()
+        with app.db() as conn:
+            pid = conn.execute(
+                "SELECT id FROM route_presets WHERE slug = 'telegram'"
+            ).fetchone()[0]
+            conn.execute(
+                "UPDATE route_presets SET cidrs = '91.108.4.0/22', "
+                "fetched_at = ? WHERE id = ?", (int(time.time()), pid),
+            )
+        response = self.client.post(
+            f"/presets/{pid}/edit",
+            data={
+                "name": "Telegram", "description": "d",
+                "cidrs": "91.108.4.0/22", "source_kind": "cidr-text",
+                "source_value": presets.DEFAULT_PRESETS[0]["source_value"],
+                "csrf_token": self.csrf(f"/presets/{pid}"),
+            },
+            files={"icon": ("tg.png", PNG_ICON, "image/png")},
+        )
+        self.assertEqual(response.status_code, 303)
+        with app.db() as conn:
+            row = conn.execute("SELECT * FROM route_presets WHERE id = ?",
+                               (pid,)).fetchone()
+        self.assertTrue(row["icon"].startswith("/preset-icons/"), row["icon"])
+        self.assertEqual(row["icon_png"], row["icon"])
+        icon = self.client.get(row["icon"])
+        self.assertEqual(icon.status_code, 200)
+        self.assertEqual(icon.headers["content-type"], "image/png")
+        self.assertIn("immutable", icon.headers["cache-control"])
+        again = self.client.get(
+            row["icon"], headers={"If-None-Match": icon.headers["etag"]})
+        self.assertEqual(again.status_code, 304)
+        headers = self.api_token()
+        entry = self.client.get(
+            "/api/me/presets", headers=headers).json()["presets"][0]
+        self.assertEqual(entry["icon"], row["icon"])
+        self.assertEqual(entry["icon_png"], row["icon"])
+
+    def test_an_icon_can_be_removed(self):
+        self.login_admin()
+        with app.db() as conn:
+            pid = conn.execute(
+                "SELECT id FROM route_presets WHERE slug = 'telegram'"
+            ).fetchone()[0]
+        self.client.post(
+            f"/presets/{pid}/edit",
+            data={
+                "name": "Telegram", "description": "d",
+                "cidrs": "91.108.4.0/22", "csrf_token": self.csrf("/presets"),
+            },
+            files={"icon": ("tg.png", PNG_ICON, "image/png")},
+        )
+        with app.db() as conn:
+            url = conn.execute("SELECT icon FROM route_presets WHERE id = ?",
+                               (pid,)).fetchone()[0]
+        self.client.post(f"/presets/{pid}/edit", data={
+            "name": "Telegram", "cidrs": "91.108.4.0/22",
+            "remove_icon": "1", "csrf_token": self.csrf(f"/presets/{pid}"),
+        })
+        with app.db() as conn:
+            row = conn.execute("SELECT * FROM route_presets WHERE id = ?",
+                               (pid,)).fetchone()
+            self.assertFalse(row["icon"])
+            self.assertEqual(conn.execute(
+                "SELECT count(*) FROM preset_icons").fetchone()[0], 0)
+        self.assertEqual(self.client.get(url).status_code, 404)
+
+    def test_a_large_icon_fits_the_upload_limit(self):
+        self.login_admin()
+        with app.db() as conn:
+            pid = conn.execute(
+                "SELECT id FROM route_presets WHERE slug = 'telegram'"
+            ).fetchone()[0]
+        icon = PNG_ICON + b"\x00" * (100 * 1024)
+        response = self.client.post(
+            f"/presets/{pid}/edit",
+            data={
+                "name": "Telegram", "cidrs": "91.108.4.0/22",
+                "csrf_token": self.csrf(f"/presets/{pid}"),
+            },
+            files={"icon": ("big.png", icon, "image/png")},
+        )
+        self.assertEqual(response.status_code, 303)
+        self.assertNotIn("err=", response.headers["location"])
+
+    def test_an_oversized_icon_is_refused_by_the_form(self):
+        self.login_admin()
+        with app.db() as conn:
+            pid = conn.execute(
+                "SELECT id FROM route_presets WHERE slug = 'telegram'"
+            ).fetchone()[0]
+        icon = PNG_ICON + b"\x00" * (presets.ICON_MAX_BYTES + 1)
+        response = self.client.post(
+            f"/presets/{pid}/edit",
+            data={
+                "name": "Telegram", "cidrs": "91.108.4.0/22",
+                "csrf_token": self.csrf(f"/presets/{pid}"),
+            },
+            files={"icon": ("huge.png", icon, "image/png")},
+        )
+        self.assertEqual(response.status_code, 303)
+        self.assertIn("err=", response.headers["location"])
+
+    def test_a_file_that_is_not_an_image_is_refused(self):
+        self.login_admin()
+        with app.db() as conn:
+            pid = conn.execute(
+                "SELECT id FROM route_presets WHERE slug = 'telegram'"
+            ).fetchone()[0]
+        response = self.client.post(
+            f"/presets/{pid}/edit",
+            data={
+                "name": "Telegram", "cidrs": "91.108.4.0/22",
+                "csrf_token": self.csrf(f"/presets/{pid}"),
+            },
+            files={"icon": ("x.png", b"not an image", "image/png")},
+        )
+        self.assertEqual(response.status_code, 303)
+        self.assertIn("err=", response.headers["location"])
         self.assertIn("err=", response.headers["location"])
         with app.db() as conn:
             self.assertEqual(conn.execute(

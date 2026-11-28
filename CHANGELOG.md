@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.8] - 2026-11-28
+
+### Added
+
+- Presets can be edited in the panel: built-in entries (name, description,
+  source, list) and personal ones in the cabinet, both through a dedicated edit
+  page. Each preset can also carry an uploaded icon (PNG or SVG, up to
+  256 KB), served from `/preset-icons/` under a content-hashed, cacheable URL.
+
 ## [0.5.7] - 2026-11-28
 
 ### Added

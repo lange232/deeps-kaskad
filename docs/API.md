@@ -469,7 +469,8 @@ Errors: `401` without a token. An empty `presets` array is a normal answer:
 the administrator switched every preset off.
 
 A signed-in account also receives its own presets, after the global ones. They
-carry no `icon`/`icon_png`; the client shows a generic icon.
+carry uploaded artwork like any other preset; without it the client shows a
+generic icon.
 
 ### POST /api/me/presets
 
@@ -582,15 +583,15 @@ and `enabled`.
 | `cidrs` | string[] | IPv4 prefixes; `0.0.0.0/0` never appears |
 | `source` | string | Where the ranges come from |
 | `fetched` | int | Unix time of the fetch that produced this entry |
-| `icon` | string, optional | Built-in presets only: an absolute path under `/static/presets/`, versioned by content. Custom presets have no icon and the client shows a generic one |
-| `icon_png` | string, optional | The same artwork as a 128×128 PNG for clients that cannot render SVG (the Windows UI uses GDI+). Present wherever `icon` is |
+| `icon` | string, optional | An absolute path: a built-in icon under `/static/presets/`, or uploaded artwork under `/preset-icons/`, versioned by content. Presets without artwork have no icon and the client shows a generic one |
+| `icon_png` | string, optional | The same artwork as a PNG for clients that cannot render SVG (the Windows UI uses GDI+). Built-in presets carry both renditions; an uploaded SVG has no PNG one |
 
-Personal presets answer without `icon`/`icon_png`; their `source` is `manual`
-and `fetched` is `0`.
+Personal presets have `source` `manual` and `fetched` `0`.
 
 Preset icons are public: they are served with `Cache-Control: public,
 max-age=31536000, immutable` and an `ETag`. The path never changes without the
-file changing.
+file changing. Uploaded SVG answers with a sandboxing
+`Content-Security-Policy`, because it is user-provided.
 
 ### Traffic point
 

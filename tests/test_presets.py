@@ -13,6 +13,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "panel"))
 
 import presets  # noqa: E402
 
+# A valid 1x1 PNG: enough to pass the magic-byte check the panel makes.
+PNG_BYTES = (
+    b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01"
+    b"\x08\x06\x00\x00\x00\x1f\x15\xc4\x89\x00\x00\x00\nIDATx\x9cc\x00"
+    b"\x01\x00\x00\x05\x00\x01\r\n-\xb4\x00\x00\x00\x00IEND\xaeB`\x82"
+)
+
 
 class CidrTextTests(unittest.TestCase):
     def test_parses_lines_and_skips_noise(self):
@@ -260,7 +267,57 @@ class DatabaseTests(unittest.TestCase):
         self.assertEqual(global_only, {"telegram", "claude", "cloudflare"})
         self.assertEqual(presets.account_count(self.conn, 7), 1)
 
-    def test_an_old_table_gets_the_account_column(self):
+    def test_an_uploaded_icon_replaces_the_builtin_one(self):
+        presets.refresh(self.conn, self.fetch)
+        pid = self.conn.execute(
+            "SELECT id FROM route_presets WHERE slug = 'telegram'"
+        ).fetchone()[0]
+        url, url_png = presets.save_icon(self.conn, "telegram", PNG_BYTES)
+        self.assertTrue(url.startswith("/preset-icons/telegram-"))
+        self.assertTrue(url.endswith(".png"))
+        self.assertEqual(url_png, url)
+        self.conn.execute(
+            "UPDATE route_presets SET icon = ?, icon_png = ? WHERE id = ?",
+            (url, url_png, pid),
+        )
+        entry = presets.catalog(self.conn)["presets"][0]
+        self.assertEqual(entry["icon"], url)
+        self.assertEqual(entry["icon_png"], url)
+        stored = presets.icon(self.conn, url.rsplit("/", 1)[-1])
+        self.assertEqual(stored["content_type"], "image/png")
+        self.assertEqual(bytes(stored["data"]), PNG_BYTES)
+
+    def test_an_svg_icon_has_no_png_rendition(self):
+        url, url_png = presets.save_icon(
+            self.conn, "mine", b'<?xml version="1.0"?><svg xmlns="http://www.w3.org/2000/svg"/>'
+        )
+        self.assertTrue(url.endswith(".svg"))
+        self.assertEqual(url_png, "")
+        entry = presets.icon(self.conn, url.rsplit("/", 1)[-1])
+        self.assertEqual(entry["content_type"], "image/svg+xml")
+
+    def test_a_replaced_icon_is_dropped_when_unused(self):
+        first, _ = presets.save_icon(self.conn, "mine", PNG_BYTES)
+        second, _ = presets.save_icon(self.conn, "mine", PNG_BYTES + b"\x00")
+        self.conn.execute(
+            "INSERT INTO route_presets (slug, name, kind, cidrs, enabled, "
+            "priority, created_at, icon, icon_png) "
+            "VALUES ('mine', 'Mine', 'custom', '10.90.0.0/24', 1, 1, 'now', ?, ?)",
+            (second, second),
+        )
+        presets.drop_icons(self.conn, first)
+        self.assertIsNone(presets.icon(self.conn, first.rsplit("/", 1)[-1]))
+        self.assertIsNotNone(presets.icon(self.conn, second.rsplit("/", 1)[-1]))
+
+    def test_icon_validation(self):
+        self.assertIsNone(presets.validate_icon(PNG_BYTES))
+        self.assertIsNone(presets.validate_icon(b"<svg></svg>"))
+        self.assertIn("empty", presets.validate_icon(b""))
+        self.assertIn("PNG or an SVG", presets.validate_icon(b"GIF89a"))
+        self.assertIn("larger", presets.validate_icon(
+            PNG_BYTES + b"\x00" * presets.ICON_MAX_BYTES))
+
+    def test_an_old_table_gets_the_icon_columns(self):
         with tempfile.TemporaryDirectory() as tmp:
             conn = sqlite3.connect(Path(tmp) / "old.sqlite")
             conn.executescript("""
@@ -284,6 +341,8 @@ class DatabaseTests(unittest.TestCase):
             columns = {row[1] for row in conn.execute(
                 "PRAGMA table_info(route_presets)")}
             self.assertIn("account_id", columns)
+            self.assertIn("icon", columns)
+            self.assertIn("icon_png", columns)
             self.assertEqual(len(presets.rows(conn)), 3)
             conn.close()
 

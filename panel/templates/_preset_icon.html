@@ -1,0 +1,32 @@
+{% if preset is defined and (preset | preset_icon) %}
+<div class="oc-field full">
+  <span class="oc-field__label">icon</span>
+  <div style="display:flex; gap:12px; align-items:center; flex-wrap:wrap">
+    <img src="{{ preset | preset_icon }}" alt="" width="32" height="32"
+         style="width:32px; height:32px; object-fit:contain; border-radius:6px; background:var(--ui-bg-layer-2)">
+    <input class="oc-input" type="file" name="icon" accept="image/png,image/svg+xml">
+    {% if preset.icon %}
+    <label style="display:flex; gap:6px; align-items:center">
+      <input type="checkbox" name="remove_icon" value="1">
+      <span class="cell-sub" style="margin:0">remove</span>
+    </label>
+    {% endif %}
+  </div>
+  <span class="oc-hint">
+    PNG or SVG, up to 256 KB. PNG works everywhere; the Windows client cannot
+    draw SVG and shows a generic icon for it. The new file replaces the current
+    icon under a new URL, so clients pick it up on their next catalogue fetch.
+    {% if not preset.icon %}This is the built-in artwork; uploading a file
+    replaces it for every client.{% endif %}
+  </span>
+</div>
+{% else %}
+<div class="oc-field full">
+  <span class="oc-field__label">icon (optional)</span>
+  <input class="oc-input" type="file" name="icon" accept="image/png,image/svg+xml">
+  <span class="oc-hint">
+    PNG or SVG, up to 256 KB. PNG works everywhere; the Windows client cannot
+    draw SVG and shows a generic icon for it.
+  </span>
+</div>
+{% endif %}

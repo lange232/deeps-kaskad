@@ -7,7 +7,8 @@
 {% if err %}<div class="oc-alert oc-alert--danger" style="margin-bottom:16px"><span class="oc-dot" style="margin-top:7px"></span><div class="oc-alert__body">{{ err }}</div></div>{% endif %}
 
 <div class="oc-panel" style="padding:16px; max-width:780px">
-  <form method="post" action="/presets/{{ preset.id }}/edit">
+  <form method="post" action="/presets/{{ preset.id }}/edit"
+        enctype="multipart/form-data">
     <input type="hidden" name="csrf_token" value="{{ csrf }}">
     <div class="form-grid">
       <label class="oc-field">
@@ -42,6 +43,7 @@
           Changing the source clears this list until the next refresh; manual presets use it as is.
         </span>
       </label>
+      {% include "_preset_icon.html" %}
     </div>
     <div class="actions" style="margin-top:12px">
       <button class="oc-btn oc-btn--neutral">save preset</button>
