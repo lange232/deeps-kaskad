@@ -106,6 +106,11 @@ AUDIT_LABELS = {
     "exit_auto": "Automatic global routing restored",
     "exit_failover": "Global exit switched automatically",
     "exit_imported": "Exit imported",
+    "preset_create": "Route preset created",
+    "preset_edit": "Route preset updated",
+    "preset_delete": "Route preset deleted",
+    "preset_toggle": "Route preset distribution changed",
+    "presets_refresh": "Route presets refreshed",
     "client_imported": "Configuration imported",
     "config_added": "Configuration added",
     "config_renamed": "Configuration renamed",
@@ -152,6 +157,7 @@ def audit_label(action: str) -> str:
 templates = Jinja2Templates(directory=str(BASE / "templates"))
 templates.env.filters["ts"] = human_ts
 templates.env.filters["audit_label"] = audit_label
+templates.env.filters["cidr_lines"] = lambda value: (value or "").replace(",", "\n")
 app = FastAPI(title="panel", docs_url=None, redoc_url=None, openapi_url=None)
 app.mount("/static", StaticFiles(directory=str(BASE / "static")), name="static")
 # Trailing-slash redirects are a framework fingerprint and buy nothing: the
@@ -388,6 +394,7 @@ def init_db() -> None:
         # The sampler shares the definition: it can fire while the panel is
         # restarting and must not depend on this process having run yet.
         conn.executescript(traffic.SCHEMA)
+        presets.ensure_schema(conn)
         migrate(conn, existing)
 
 
@@ -4734,16 +4741,12 @@ def api_exits_pin(
 def api_presets(request: Request):
     """Route presets the client applies on its own.
 
-    The panel only serves the cached catalogue; it does not put these
+    The panel only serves the enabled catalogue; it does not put these
     prefixes into any configuration or routing table.
     """
     api_user(request)
-    catalog = presets.load_cache()
-    if not catalog:
-        raise HTTPException(
-            status_code=503, detail="route presets are not available yet"
-        )
-    body = presets.catalog_payload(catalog)
+    with db() as conn:
+        body = presets.catalog(conn)
     tag = presets.etag(body)
     headers = {"ETag": f'"{tag}"', "Cache-Control": "no-cache"}
     if presets.etag_matches(request.headers.get("if-none-match"), tag):
@@ -4903,6 +4906,197 @@ def status_json(request: Request, overview: bool = False):
             for v in views
         },
     }
+
+
+# ---------------------------------------------------------------- presets
+
+def _preset_fields(name: str, description: str, cidrs: str,
+                   source_kind: str, source_value: str):
+    """Normalized form fields, or an error message for the redirect."""
+    name = (name or "").strip()
+    description = (description or "").strip()
+    source_kind = (source_kind or "").strip()
+    source_value = (source_value or "").strip()
+    if not name:
+        return None, "name is required"
+    if len(name) > 64:
+        return None, "name: up to 64 characters"
+    if len(description) > 240:
+        return None, "description: up to 240 characters"
+    error = presets.validate_source(source_kind, source_value)
+    if error:
+        return None, error
+    parsed = presets.parse_cidr_text(cidrs or "")
+    if not source_kind and not parsed:
+        return None, "add at least one IPv4 prefix, or choose a source"
+    if parsed:
+        errors = presets.validate_cidrs(parsed)
+        if errors:
+            return None, "; ".join(errors)
+    return {
+        "name": name,
+        "description": description,
+        "source_kind": source_kind,
+        "source_value": source_value,
+        "cidrs": ",".join(parsed),
+    }, None
+
+
+@app.get("/presets", response_class=HTMLResponse)
+def presets_page(request: Request, err: str | None = None, ok: str | None = None):
+    token = require_admin(request)
+    with db() as conn:
+        items = presets.rows(conn)
+    return render_page(
+        request, "presets.html", "presets",
+        csrf=csrf(token), err=err, ok=ok, presets=items, now=int(time.time()),
+    )
+
+
+@app.get("/presets/{pid}", response_class=HTMLResponse)
+def preset_page(request: Request, pid: int, err: str | None = None):
+    token = require_admin(request)
+    with db() as conn:
+        item = presets.row(conn, pid)
+    if not item:
+        raise HTTPException(status_code=404)
+    return render_page(
+        request, "preset_edit.html", "presets",
+        csrf=csrf(token), err=err, preset=item,
+    )
+
+
+@app.post("/presets/new")
+def create_preset(
+    request: Request,
+    name: str = Form(""),
+    description: str = Form(""),
+    cidrs: str = Form(""),
+    source_kind: str = Form(""),
+    source_value: str = Form(""),
+    csrf_token: str = Form(...),
+):
+    token = require_admin(request)
+    if not hmac.compare_digest(csrf_token, csrf(token)):
+        raise HTTPException(status_code=400, detail="csrf")
+    values, error = _preset_fields(name, description, cidrs,
+                                   source_kind, source_value)
+    if error:
+        return RedirectResponse("/presets?err=" + quote(error), status_code=303)
+    with db() as conn:
+        slug = presets.unique_slug(conn, presets.slugify(values["name"]))
+        conn.execute(
+            "INSERT INTO route_presets (slug, name, description, kind, "
+            "source_kind, source_value, cidrs, enabled, priority, created_at) "
+            "VALUES (?, ?, ?, 'custom', ?, ?, ?, 1, 100, ?)",
+            (slug, values["name"], values["description"],
+             values["source_kind"], values["source_value"], values["cidrs"],
+             datetime.now(timezone.utc).isoformat(timespec="seconds")),
+        )
+    audit("preset_create", values["name"])
+    return RedirectResponse("/presets?ok=" + quote("preset created"),
+                            status_code=303)
+
+
+@app.post("/presets/{pid}/edit")
+def edit_preset(
+    request: Request,
+    pid: int,
+    name: str = Form(""),
+    description: str = Form(""),
+    cidrs: str = Form(""),
+    source_kind: str = Form(""),
+    source_value: str = Form(""),
+    csrf_token: str = Form(...),
+):
+    token = require_admin(request)
+    if not hmac.compare_digest(csrf_token, csrf(token)):
+        raise HTTPException(status_code=400, detail="csrf")
+    with db() as conn:
+        item = presets.row(conn, pid)
+    if not item:
+        raise HTTPException(status_code=404)
+    if item["kind"] != "custom":
+        return RedirectResponse(
+            "/presets?err=" + quote("built-in presets can only be switched on or off"),
+            status_code=303,
+        )
+    values, error = _preset_fields(name, description, cidrs,
+                                   source_kind, source_value)
+    if error:
+        return RedirectResponse(f"/presets/{pid}?err=" + quote(error),
+                                status_code=303)
+    source_changed = (values["source_kind"] != item["source_kind"]
+                      or values["source_value"] != item["source_value"])
+    with db() as conn:
+        if source_changed:
+            # The old prefixes belong to the old source: drop them until the
+            # next refresh fills the new ones.
+            conn.execute(
+                "UPDATE route_presets SET name = ?, description = ?, "
+                "source_kind = ?, source_value = ?, cidrs = '', fetched_at = 0, "
+                "last_error = '' WHERE id = ?",
+                (values["name"], values["description"], values["source_kind"],
+                 values["source_value"], pid),
+            )
+        else:
+            conn.execute(
+                "UPDATE route_presets SET name = ?, description = ?, cidrs = ? "
+                "WHERE id = ?",
+                (values["name"], values["description"], values["cidrs"], pid),
+            )
+    audit("preset_edit", values["name"])
+    return RedirectResponse("/presets?ok=" + quote("preset updated"),
+                            status_code=303)
+
+
+@app.post("/presets/{pid}/toggle")
+def toggle_preset(request: Request, pid: int, csrf_token: str = Form(...)):
+    token = require_admin(request)
+    if not hmac.compare_digest(csrf_token, csrf(token)):
+        raise HTTPException(status_code=400, detail="csrf")
+    with db() as conn:
+        item = presets.row(conn, pid)
+        if not item:
+            raise HTTPException(status_code=404)
+        conn.execute("UPDATE route_presets SET enabled = ? WHERE id = ?",
+                     (0 if item["enabled"] else 1, pid))
+    audit("preset_toggle", f"{item['slug']} -> {1 - int(item['enabled'])}")
+    return RedirectResponse("/presets", status_code=303)
+
+
+@app.post("/presets/{pid}/delete")
+def delete_preset(request: Request, pid: int, csrf_token: str = Form(...)):
+    token = require_admin(request)
+    if not hmac.compare_digest(csrf_token, csrf(token)):
+        raise HTTPException(status_code=400, detail="csrf")
+    with db() as conn:
+        item = presets.row(conn, pid)
+        if not item:
+            raise HTTPException(status_code=404)
+        if item["kind"] != "custom":
+            return RedirectResponse(
+                "/presets?err=" + quote("built-in presets cannot be deleted"),
+                status_code=303,
+            )
+        conn.execute("DELETE FROM route_presets WHERE id = ?", (pid,))
+    audit("preset_delete", item["slug"])
+    return RedirectResponse("/presets?ok=" + quote("preset deleted"),
+                            status_code=303)
+
+
+@app.post("/presets/refresh")
+def refresh_presets(request: Request, csrf_token: str = Form(...)):
+    token = require_admin(request)
+    if not hmac.compare_digest(csrf_token, csrf(token)):
+        raise HTTPException(status_code=400, detail="csrf")
+    with db() as conn:
+        updated, failed, errors = presets.refresh(conn)
+    audit("presets_refresh", f"{updated} refreshed, {failed} failed")
+    message = f"{updated} refreshed"
+    if failed:
+        message += f", {failed} failed: " + "; ".join(errors)[:300]
+    return RedirectResponse("/presets?ok=" + quote(message), status_code=303)
 
 
 # ---------------------------------------------------------------- journal

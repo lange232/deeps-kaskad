@@ -432,7 +432,7 @@ page: grants, exit order with "apply to all", the configuration limit, login
 state, password reset, delete. On the configuration page: download, QR, key
 reissue, link to the account, internet order, disable, delete.
 
-Pages: `/`, `/exits`, `/accounts`, `/configs`, `/journal`, `/settings`, plus
+Pages: `/`, `/exits`, `/accounts`, `/configs`, `/presets`, `/journal`, `/settings`, plus
 `/accounts/new`, `/accounts/{id}`, `/configs/new`, `/configs/{id}` and the
 cabinet under `/me`, `/me/configs/new`, `/me/configs/{id}`, `/me/checks` and
 `/me/account`
@@ -515,8 +515,9 @@ POST /api/me/subnets              subnet_id (repeated) + config_id -> switches s
                                     any subset of the grants, an empty list turns all off
 GET  /api/me/presets              curated route presets (Telegram, Claude, Cloudflare)
                                     for the client's own split tunneling; each is a
-                                    list of IPv4 CIDRs, served from a cache with an
-                                    ETag. The panel does not route them itself
+                                    list of IPv4 CIDRs, refreshed from public sources
+                                    and served with an ETag. Only presets the admin
+                                    enabled are listed; the panel does not route them
 GET  /api/me/configs/{id}/traffic?hours=24
                                     traffic history: {config_id, step_seconds, points};
                                     points are {ts, rx, tx} deltas in ascending order,

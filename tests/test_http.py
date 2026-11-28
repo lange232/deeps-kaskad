@@ -3006,69 +3006,175 @@ class PresetsApiTests(PanelTestCase):
         self.assertEqual(response.status_code, 200, response.text)
         return {"Authorization": "Bearer " + response.json()["token"]}
 
-    def write_cache(self, path, generated=None):
-        now = int(time.time()) if generated is None else generated
-        presets.save_cache({
-            "version": "2026-11-28T00:00:00+00:00",
-            "generated": now,
-            "presets": [{
-                "id": "telegram", "name": "Telegram", "description": "d",
-                "cidrs": ["91.108.4.0/22"], "source": "test", "fetched": now,
-            }],
-        }, path)
+    def fill(self, slug="telegram", cidrs="91.108.4.0/22",
+             fetched=None, enabled=1):
+        now = int(time.time()) if fetched is None else fetched
+        with app.db() as conn:
+            conn.execute(
+                "UPDATE route_presets SET cidrs = ?, fetched_at = ?, enabled = ? "
+                "WHERE slug = ?", (cidrs, now, enabled, slug),
+            )
 
     def test_the_catalogue_needs_a_token(self):
         self.seed_client()
         self.assertEqual(self.client.get("/api/me/presets").status_code, 401)
 
-    def test_the_catalogue_is_served_from_the_cache(self):
+    def test_the_catalogue_serves_enabled_presets(self):
         self.seed_client()
         headers = self.api_login()
-        with tempfile.TemporaryDirectory() as tmp:
-            path = Path(tmp) / "presets.json"
-            self.write_cache(path)
-            with mock.patch.object(presets, "CACHE_PATH", path):
-                response = self.client.get("/api/me/presets", headers=headers)
+        self.fill("telegram")
+        self.fill("claude", cidrs="", enabled=0)
+        response = self.client.get("/api/me/presets", headers=headers)
         self.assertEqual(response.status_code, 200, response.text)
         body = response.json()
-        self.assertEqual(body["version"], "2026-11-28T00:00:00+00:00")
         self.assertEqual([p["id"] for p in body["presets"]], ["telegram"])
         self.assertFalse(body["stale"])
+        self.assertTrue(body["version"])
+        self.assertEqual(headers["Authorization"][:7], "Bearer ")
         self.assertIn("etag", response.headers)
         self.assertEqual(response.headers["cache-control"], "no-cache")
 
     def test_the_etag_short_circuits_the_body(self):
         self.seed_client()
         headers = self.api_login()
-        with tempfile.TemporaryDirectory() as tmp:
-            path = Path(tmp) / "presets.json"
-            self.write_cache(path)
-            with mock.patch.object(presets, "CACHE_PATH", path):
-                first = self.client.get("/api/me/presets", headers=headers)
-                second = self.client.get(
-                    "/api/me/presets",
-                    headers=dict(headers, **{"If-None-Match": first.headers["etag"]}),
-                )
+        self.fill("telegram")
+        first = self.client.get("/api/me/presets", headers=headers)
+        second = self.client.get(
+            "/api/me/presets",
+            headers=dict(headers, **{"If-None-Match": first.headers["etag"]}),
+        )
         self.assertEqual(second.status_code, 304)
         self.assertEqual(second.content, b"")
 
-    def test_an_old_cache_is_marked_stale(self):
+    def test_an_old_catalogue_is_marked_stale(self):
         self.seed_client()
         headers = self.api_login()
-        with tempfile.TemporaryDirectory() as tmp:
-            path = Path(tmp) / "presets.json"
-            self.write_cache(path, int(time.time()) - presets.STALE_AFTER - 60)
-            with mock.patch.object(presets, "CACHE_PATH", path):
-                response = self.client.get("/api/me/presets", headers=headers)
+        self.fill("telegram", fetched=int(time.time()) - presets.STALE_AFTER - 60)
+        response = self.client.get("/api/me/presets", headers=headers)
         self.assertTrue(response.json()["stale"])
 
-    def test_a_missing_cache_is_a_503(self):
+    def test_an_empty_catalogue_is_an_empty_list(self):
         self.seed_client()
         headers = self.api_login()
-        with tempfile.TemporaryDirectory() as tmp:
-            with mock.patch.object(presets, "CACHE_PATH", Path(tmp) / "none.json"):
-                response = self.client.get("/api/me/presets", headers=headers)
-        self.assertEqual(response.status_code, 503)
+        response = self.client.get("/api/me/presets", headers=headers)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["presets"], [])
+
+
+class PresetAdminTests(PanelTestCase):
+    def api_token(self, email="c1@example.com"):
+        response = self.client.post("/api/login", data={
+            "email": email, "password": USER_PASSWORD,
+        })
+        self.assertEqual(response.status_code, 200, response.text)
+        return {"Authorization": "Bearer " + response.json()["token"]}
+    def test_the_page_needs_an_administrator(self):
+        page = self.client.get("/presets")
+        self.assertEqual(page.status_code, 303)
+        self.assertEqual(page.headers["location"], "/login")
+
+    def test_the_page_lists_the_catalogue(self):
+        self.login_admin()
+        page = self.client.get("/presets").text
+        self.assertIn("Telegram", page)
+        self.assertIn("refresh now", page)
+        self.assertIn("/api/me/presets", page)
+
+    def test_a_custom_preset_is_created_and_served(self):
+        self.login_admin()
+        response = self.client.post("/presets/new", data={
+            "name": "My services", "description": "test",
+            "cidrs": "10.90.0.0/24, 10.91.0.0/24", "source_kind": "",
+            "source_value": "", "csrf_token": self.csrf("/presets"),
+        })
+        self.assertEqual(response.status_code, 303)
+        with app.db() as conn:
+            row = conn.execute(
+                "SELECT * FROM route_presets WHERE slug = 'my-services'"
+            ).fetchone()
+        self.assertEqual(row["kind"], "custom")
+        self.assertEqual(row["cidrs"], "10.90.0.0/24,10.91.0.0/24")
+
+    def test_a_default_route_is_refused(self):
+        self.login_admin()
+        response = self.client.post("/presets/new", data={
+            "name": "bad", "cidrs": "0.0.0.0/0",
+            "csrf_token": self.csrf("/presets"),
+        })
+        self.assertEqual(response.status_code, 303)
+        self.assertIn("err=", response.headers["location"])
+        with app.db() as conn:
+            self.assertEqual(conn.execute(
+                "SELECT count(*) FROM route_presets WHERE slug = 'bad'"
+            ).fetchone()[0], 0)
+
+    def test_toggling_a_preset_changes_the_api(self):
+        self.seed_client()
+        self.login_admin()
+        with app.db() as conn:
+            pid = conn.execute(
+                "SELECT id FROM route_presets WHERE slug = 'telegram'"
+            ).fetchone()[0]
+            conn.execute(
+                "UPDATE route_presets SET cidrs = '91.108.4.0/22', fetched_at = ? "
+                "WHERE id = ?", (int(time.time()), pid),
+            )
+        response = self.client.post(f"/presets/{pid}/toggle", data={
+            "csrf_token": self.csrf("/presets"),
+        })
+        self.assertEqual(response.status_code, 303)
+        headers = self.api_token()
+        self.assertEqual(
+            self.client.get("/api/me/presets", headers=headers).json()["presets"], []
+        )
+
+    def test_a_builtin_preset_cannot_be_deleted(self):
+        self.login_admin()
+        with app.db() as conn:
+            pid = conn.execute(
+                "SELECT id FROM route_presets WHERE slug = 'telegram'"
+            ).fetchone()[0]
+        response = self.client.post(f"/presets/{pid}/delete", data={
+            "csrf_token": self.csrf("/presets"),
+        })
+        self.assertEqual(response.status_code, 303)
+        self.assertIn("err=", response.headers["location"])
+        with app.db() as conn:
+            self.assertEqual(conn.execute(
+                "SELECT count(*) FROM route_presets WHERE id = ?", (pid,)
+            ).fetchone()[0], 1)
+
+    def test_a_custom_preset_can_be_deleted(self):
+        self.login_admin()
+        with app.db() as conn:
+            pid = conn.execute(
+                "INSERT INTO route_presets (slug, name, kind, cidrs, priority, "
+                "created_at) VALUES ('mine', 'Mine', 'custom', '10.90.0.0/24', 1, 'now')"
+            ).lastrowid
+        response = self.client.post(f"/presets/{pid}/delete", data={
+            "csrf_token": self.csrf("/presets"),
+        })
+        self.assertEqual(response.status_code, 303)
+        with app.db() as conn:
+            self.assertEqual(conn.execute(
+                "SELECT count(*) FROM route_presets WHERE id = ?", (pid,)
+            ).fetchone()[0], 0)
+
+    def test_csrf_is_required(self):
+        self.login_admin()
+        response = self.client.post("/presets/new", data={
+            "name": "x", "cidrs": "10.90.0.0/24", "csrf_token": "nope",
+        })
+        self.assertEqual(response.status_code, 400)
+
+    def test_refresh_now_reports_the_result(self):
+        self.login_admin()
+        with mock.patch.object(presets, "refresh", return_value=(2, 1, ["telegram: down"])):
+            response = self.client.post("/presets/refresh", data={
+                "csrf_token": self.csrf("/presets"),
+            })
+        self.assertEqual(response.status_code, 303)
+        self.assertIn("ok=", response.headers["location"])
 
 
 class MobileApiTests(PanelTestCase):

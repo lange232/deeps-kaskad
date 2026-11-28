@@ -434,8 +434,10 @@ Curated route presets for the client's own split tunneling: Telegram, Claude
 sites. The panel does not put these prefixes into any configuration or routing
 table — the app decides what to do with them.
 
-The catalogue is refreshed from public sources every six hours and served from
-a cache. `stale` is `true` when the cache is older than a day.
+Only presets the administrator enabled are listed; an empty `presets` array
+means everything is switched off. Sourced presets are refreshed from public
+sources every six hours. `stale` is `true` when the newest enabled sourced
+preset is older than a day.
 
 | Header | Notes |
 |---|---|
@@ -459,7 +461,8 @@ a cache. `stale` is `true` when the cache is older than a day.
 }
 ```
 
-Errors: `401` without a token; `503` while the cache has never been fetched.
+Errors: `401` without a token. An empty `presets` array is a normal answer:
+the administrator switched every preset off.
 
 ---
 

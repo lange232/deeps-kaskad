@@ -1,9 +1,9 @@
 """Route presets the mobile app applies on its own.
 
-The CIDR lists are not stored in the repository: this module only describes
-the public sources. Running it as a script refreshes the cache file from those
-sources; the API serves the cache and the panel never routes these prefixes
-itself.
+The catalogue lives in the panel database: built-in entries point at public
+sources and are refreshed by a timer, custom entries are maintained by the
+administrator. The API serves the enabled entries; the panel never routes
+these prefixes itself.
 """
 from __future__ import annotations
 
@@ -11,13 +11,15 @@ import hashlib
 import ipaddress
 import json
 import os
+import re
+import sqlite3
 import sys
 import time
 import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 
-CACHE_PATH = Path(os.environ.get("KASKAD_PRESETS", "/var/lib/kaskad/presets.json"))
+DB_PATH = Path(os.environ.get("KASKAD_DB", "/var/lib/kaskad/panel.db"))
 MAX_PREFIXES = 4096
 STALE_AFTER = 24 * 3600
 FETCH_TIMEOUT = 10
@@ -25,44 +27,99 @@ MAX_BYTES = 1 << 20
 RIPE_URL = "https://stat.ripe.net/data/announced-prefixes/data.json?resource=AS{asn}"
 IPRANGES = "https://raw.githubusercontent.com/lord-alfred/ipranges/main"
 
-# Sources only; the data itself is fetched to the cache. Cloudflare covers
-# Discord, OpenCode and many other sites that share its edge, so they do not
-# get separate entries. Anthropic has its own network, hence its own preset.
-PRESETS = (
+SCHEMA = """
+CREATE TABLE IF NOT EXISTS route_presets (
+    id INTEGER PRIMARY KEY,
+    slug TEXT NOT NULL UNIQUE,
+    name TEXT NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    kind TEXT NOT NULL DEFAULT 'custom',
+    source_kind TEXT NOT NULL DEFAULT '',
+    source_value TEXT NOT NULL DEFAULT '',
+    cidrs TEXT NOT NULL DEFAULT '',
+    enabled INTEGER NOT NULL DEFAULT 1,
+    priority INTEGER NOT NULL DEFAULT 0,
+    fetched_at INTEGER NOT NULL DEFAULT 0,
+    last_error TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL
+);
+"""
+
+# Cloudflare covers Discord, OpenCode and many other sites that share its
+# edge, so they do not get separate entries. Anthropic has its own network.
+DEFAULT_PRESETS = (
     {
-        "id": "telegram",
+        "slug": "telegram",
         "name": "Telegram",
         "description": "Official Telegram IPv4 ranges.",
-        "source": {
-            "kind": "cidr-text",
-            "url": f"{IPRANGES}/telegram/ipv4_merged.txt",
-            "label": "lord-alfred/ipranges",
-        },
+        "source_kind": "cidr-text",
+        "source_value": f"{IPRANGES}/telegram/ipv4_merged.txt",
+        "priority": 10,
     },
     {
-        "id": "claude",
+        "slug": "claude",
         "name": "Claude (Anthropic)",
         "description": "IPv4 prefixes announced by Anthropic's own network.",
-        "source": {
-            "kind": "ripe-asn",
-            "asn": 399358,
-            "label": "RIPEstat, AS399358",
-        },
+        "source_kind": "ripe-asn",
+        "source_value": "399358",
+        "priority": 20,
     },
     {
-        "id": "cloudflare",
+        "slug": "cloudflare",
         "name": "Cloudflare (Discord, OpenCode, other sites)",
         "description": (
             "Cloudflare edge ranges. Discord and OpenCode run through it, and "
             "so do many other sites: this preset is not limited to them."
         ),
-        "source": {
-            "kind": "cidr-text",
-            "url": f"{IPRANGES}/cloudflare/ipv4_merged.txt",
-            "label": "lord-alfred/ipranges",
-        },
+        "source_kind": "cidr-text",
+        "source_value": f"{IPRANGES}/cloudflare/ipv4_merged.txt",
+        "priority": 30,
     },
 )
+
+SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9-]{1,31}$")
+SOURCE_KINDS = ("", "cidr-text", "ripe-asn")
+
+
+def ensure_schema(conn: sqlite3.Connection) -> None:
+    """Creates the table and fills the built-in entries exactly once."""
+    conn.executescript(SCHEMA)
+    created = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    for preset in DEFAULT_PRESETS:
+        conn.execute(
+            "INSERT OR IGNORE INTO route_presets "
+            "(slug, name, description, kind, source_kind, source_value, "
+            " enabled, priority, created_at) "
+            "VALUES (?, ?, ?, 'builtin', ?, ?, 1, ?, ?)",
+            (preset["slug"], preset["name"], preset["description"],
+             preset["source_kind"], preset["source_value"],
+             preset["priority"], created),
+        )
+
+
+def _dicts(cursor) -> list[dict]:
+    """Rows as dicts without depending on the connection's row factory."""
+    names = [column[0] for column in cursor.description]
+    return [dict(zip(names, values)) for values in cursor.fetchall()]
+
+
+def _one(conn: sqlite3.Connection, sql: str, params=()) -> dict | None:
+    fetched = _dicts(conn.execute(sql, params))
+    return fetched[0] if fetched else None
+
+
+def rows(conn: sqlite3.Connection) -> list[dict]:
+    return _dicts(conn.execute(
+        "SELECT * FROM route_presets ORDER BY priority, id"
+    ))
+
+
+def row(conn: sqlite3.Connection, preset_id: int) -> dict | None:
+    return _one(conn, "SELECT * FROM route_presets WHERE id = ?", (preset_id,))
+
+
+def cidr_list(value: str) -> list[str]:
+    return [item.strip() for item in (value or "").split(",") if item.strip()]
 
 
 def collapse(networks) -> list[str]:
@@ -83,9 +140,9 @@ def _network(value) -> ipaddress.IPv4Network | None:
 
 
 def parse_cidr_text(text: str) -> list[str]:
-    """A plain list of CIDRs, one per line; comments and IPv6 are ignored."""
+    """A plain list of CIDRs, one per line or comma-separated."""
     networks = []
-    for raw in text.splitlines():
+    for raw in text.replace(",", "\n").splitlines():
         line = raw.split("#", 1)[0].strip()
         if not line:
             continue
@@ -111,7 +168,7 @@ def validate_cidrs(cidrs: list[str]) -> list[str]:
     """Errors for a preset's CIDR list; empty means it is usable."""
     errors: list[str] = []
     if not cidrs:
-        return ["the source returned no IPv4 prefixes"]
+        return ["the list has no IPv4 prefixes"]
     if len(cidrs) > MAX_PREFIXES:
         errors.append(f"more than {MAX_PREFIXES} prefixes")
     seen = set()
@@ -131,60 +188,35 @@ def validate_cidrs(cidrs: list[str]) -> list[str]:
     return errors
 
 
-def load_cache(path: Path | None = None) -> dict | None:
-    """The last fetched catalogue, or None when it is missing or broken."""
-    path = CACHE_PATH if path is None else path
-    try:
-        data = json.loads(path.read_text())
-    except (OSError, ValueError):
+def validate_source(kind: str, value: str) -> str | None:
+    if kind not in SOURCE_KINDS:
+        return "unknown source kind"
+    if not kind:
         return None
-    if not isinstance(data, dict) or not isinstance(data.get("presets"), list):
-        return None
-    return data
+    value = value.strip()
+    if not value:
+        return "the source needs a URL or an ASN"
+    if kind == "cidr-text" and not value.startswith("https://"):
+        return "the source URL must start with https://"
+    if kind == "ripe-asn" and not value.isdigit():
+        return "the ASN must be a number, without AS"
+    return None
 
 
-def save_cache(catalog: dict, path: Path | None = None) -> None:
-    """Atomic write: a reader never sees half a catalogue."""
-    path = CACHE_PATH if path is None else path
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(".tmp")
-    try:
-        with open(tmp, "w") as handle:
-            json.dump(catalog, handle, ensure_ascii=False)
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.chmod(tmp, 0o644)
-        tmp.replace(path)
-    finally:
-        tmp.unlink(missing_ok=True)
+def slugify(name: str) -> str:
+    base = re.sub(r"[^a-z0-9]+", "-", name.strip().lower()).strip("-")
+    return base[:32] or "custom"
 
 
-def catalog_payload(catalog: dict) -> dict:
-    """The response body: only the fields the client needs."""
-    return {
-        "version": catalog.get("version", ""),
-        "stale": is_stale(catalog),
-        "presets": [
-            {
-                "id": item.get("id", ""),
-                "name": item.get("name", ""),
-                "description": item.get("description", ""),
-                "cidrs": item.get("cidrs", []),
-                "source": item.get("source", ""),
-                "fetched": item.get("fetched", 0),
-            }
-            for item in catalog.get("presets", [])
-        ],
-    }
-
-
-def is_stale(catalog: dict, now: int | None = None) -> bool:
-    try:
-        generated = int(catalog.get("generated") or 0)
-    except (TypeError, ValueError):
-        return True
-    now = int(time.time()) if now is None else now
-    return generated <= 0 or now - generated > STALE_AFTER
+def unique_slug(conn: sqlite3.Connection, base: str) -> str:
+    base = base[:32] or "custom"
+    candidate, index = base, 2
+    while conn.execute("SELECT 1 FROM route_presets WHERE slug = ?",
+                       (candidate,)).fetchone():
+        suffix = f"-{index}"
+        candidate = base[:32 - len(suffix)] + suffix
+        index += 1
+    return candidate
 
 
 def etag(payload: dict) -> str:
@@ -217,51 +249,91 @@ def fetch(url: str, timeout: int = FETCH_TIMEOUT) -> str:
     return data.decode("utf-8", "replace")
 
 
-def _entry(preset: dict, now: int) -> dict:
-    source = preset["source"]
-    if source["kind"] == "cidr-text":
-        cidrs = parse_cidr_text(fetch(source["url"]))
-    elif source["kind"] == "ripe-asn":
-        payload = json.loads(fetch(RIPE_URL.format(asn=source["asn"])))
+def fetch_source(kind: str, value: str, fetcher=fetch) -> list[str]:
+    if kind == "cidr-text":
+        cidrs = parse_cidr_text(fetcher(value))
+    elif kind == "ripe-asn":
+        payload = json.loads(fetcher(RIPE_URL.format(asn=value.strip())))
         cidrs = parse_ripe_prefixes(payload)
     else:
-        raise RuntimeError(f"unknown source kind: {source['kind']}")
+        raise RuntimeError(f"unknown source kind: {kind}")
     errors = validate_cidrs(cidrs)
     if errors:
         raise RuntimeError("; ".join(errors))
-    return {
-        "id": preset["id"],
-        "name": preset["name"],
-        "description": preset["description"],
-        "cidrs": cidrs,
-        "source": source.get("label") or source.get("url", ""),
-        "fetched": now,
-    }
+    return cidrs
 
 
-def refresh() -> int:
-    """Fetches every preset, keeps the previous entry when one source fails."""
+def catalog(conn: sqlite3.Connection, now: int | None = None) -> dict:
+    """The API payload: enabled entries with fetched prefixes."""
+    now = int(time.time()) if now is None else now
+    items = _dicts(conn.execute(
+        "SELECT * FROM route_presets WHERE enabled = 1 AND cidrs <> '' "
+        "ORDER BY priority, id"
+    ))
+    presets = [
+        {
+            "id": item["slug"],
+            "name": item["name"],
+            "description": item["description"],
+            "cidrs": cidr_list(item["cidrs"]),
+            "source": item["source_value"] or "manual",
+            "fetched": int(item["fetched_at"] or 0),
+        }
+        for item in items
+    ]
+    source_rows = [item for item in items if item["source_kind"]]
+    stale = any(
+        not item["fetched_at"] or now - int(item["fetched_at"]) > STALE_AFTER
+        for item in source_rows
+    )
+    newest = max((int(item["fetched_at"] or 0) for item in items), default=0)
+    version = (
+        datetime.fromtimestamp(newest, timezone.utc).isoformat(timespec="seconds")
+        if newest else ""
+    )
+    return {"version": version, "stale": stale, "presets": presets}
+
+
+def refresh(conn: sqlite3.Connection, fetcher=fetch) -> tuple[int, int, list[str]]:
+    """Refreshes every sourced entry; failures keep the previous prefixes."""
     now = int(time.time())
-    previous = {item.get("id"): item
-                for item in (load_cache() or {}).get("presets", [])}
-    entries = []
-    failures = 0
-    for preset in PRESETS:
+    updated = failed = 0
+    errors: list[str] = []
+    for item in rows(conn):
+        if not item["source_kind"]:
+            continue
         try:
-            entries.append(_entry(preset, now))
-        except Exception as exc:  # a source is foreign input and can fail
-            failures += 1
-            print(f"presets: {preset['id']}: {exc}", file=sys.stderr, flush=True)
-            if preset["id"] in previous:
-                entries.append(previous[preset["id"]])
-    if not entries:
-        print("presets: no source could be refreshed", file=sys.stderr, flush=True)
-        return 1
-    version = datetime.now(timezone.utc).isoformat(timespec="seconds")
-    save_cache({"version": version, "generated": now, "presets": entries})
-    print(f"presets: {len(entries)} entries, {failures} source(s) failed")
+            cidrs = fetch_source(item["source_kind"], item["source_value"], fetcher)
+        except Exception as exc:
+            failed += 1
+            errors.append(f"{item['slug']}: {exc}")
+            conn.execute(
+                "UPDATE route_presets SET last_error = ? WHERE id = ?",
+                (str(exc)[:300], item["id"]),
+            )
+            continue
+        conn.execute(
+            "UPDATE route_presets SET cidrs = ?, fetched_at = ?, last_error = '' "
+            "WHERE id = ?",
+            (",".join(cidrs), now, item["id"]),
+        )
+        updated += 1
+    return updated, failed, errors
+
+
+def main() -> int:
+    conn = sqlite3.connect(DB_PATH, timeout=10)
+    try:
+        ensure_schema(conn)
+        updated, failed, errors = refresh(conn)
+        conn.commit()
+    finally:
+        conn.close()
+    for error in errors:
+        print(f"presets: {error}", file=sys.stderr, flush=True)
+    print(f"presets: {updated} refreshed, {failed} failed")
     return 0
 
 
 if __name__ == "__main__":
-    sys.exit(refresh())
+    sys.exit(main())

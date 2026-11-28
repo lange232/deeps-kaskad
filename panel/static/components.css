@@ -1460,6 +1460,17 @@
   line-height: 16px;
 }
 .console-table .cell-sub { line-height: 15px; }
+/* Admin preset catalogue: fixed columns, so a long source URL cannot push the
+   actions out of the panel. */
+.presets-table { table-layout: fixed; }
+.presets-table th:nth-child(1) { width: 23%; }
+.presets-table th:nth-child(2) { width: 28%; }
+.presets-table th:nth-child(3) { width: 8%; }
+.presets-table th:nth-child(4) { width: 11%; }
+.presets-table th:nth-child(5) { width: 12%; }
+.presets-table th:nth-child(6) { width: 18%; }
+.presets-table td { vertical-align: top; }
+.presets-table .cell-sub { overflow-wrap: anywhere; }
 /* The cabinet list: the access column has a fixed share, so its badges can
    never narrow the configuration line. */
 .me-configs { table-layout: fixed; }

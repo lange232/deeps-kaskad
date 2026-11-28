@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+{% block title %}edit {{ preset.name }} — deeps kaskad{% endblock %}
+{% block topbar_title %}<span class="oc-topbar__title">{{ preset.name }}</span>{% endblock %}
+{% block body %}
+<div class="crumbs"><a href="/presets">Presets</a><span>/</span><span>{{ preset.slug }}</span></div>
+
+{% if err %}<div class="oc-alert oc-alert--danger" style="margin-bottom:16px"><span class="oc-dot" style="margin-top:7px"></span><div class="oc-alert__body">{{ err }}</div></div>{% endif %}
+
+<div class="oc-panel" style="padding:16px; max-width:780px">
+  <form method="post" action="/presets/{{ preset.id }}/edit">
+    <input type="hidden" name="csrf_token" value="{{ csrf }}">
+    <div class="form-grid">
+      <label class="oc-field">
+        <span class="oc-field__label">name</span>
+        <input class="oc-input" type="text" name="name" maxlength="64" required
+               value="{{ preset.name }}">
+      </label>
+      <label class="oc-field">
+        <span class="oc-field__label">source</span>
+        <span class="oc-select-wrap">
+          <select class="oc-select" name="source_kind">
+            <option value="" {{ 'selected' if not preset.source_kind }}>manual CIDR list</option>
+            <option value="cidr-text" {{ 'selected' if preset.source_kind == 'cidr-text' }}>URL with CIDRs</option>
+            <option value="ripe-asn" {{ 'selected' if preset.source_kind == 'ripe-asn' }}>ASN (RIPEstat)</option>
+          </select>
+        </span>
+      </label>
+      <label class="oc-field">
+        <span class="oc-field__label">description</span>
+        <input class="oc-input" type="text" name="description" maxlength="240"
+               value="{{ preset.description }}">
+      </label>
+      <label class="oc-field">
+        <span class="oc-field__label">URL or ASN</span>
+        <input class="oc-input" type="text" name="source_value" spellcheck="false"
+               value="{{ preset.source_value }}" placeholder="https://… or 12345">
+      </label>
+      <label class="oc-field full">
+        <span class="oc-field__label">CIDRs</span>
+        <textarea class="oc-textarea" name="cidrs" spellcheck="false">{{ preset.cidrs | cidr_lines }}</textarea>
+        <span class="oc-hint">
+          Changing the source clears this list until the next refresh; manual presets use it as is.
+        </span>
+      </label>
+    </div>
+    <div class="actions" style="margin-top:12px">
+      <button class="oc-btn oc-btn--neutral">save preset</button>
+      <a class="oc-btn oc-btn--ghost" href="/presets">back</a>
+    </div>
+  </form>
+</div>
+{% endblock %}

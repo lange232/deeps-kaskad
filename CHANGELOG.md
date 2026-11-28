@@ -10,9 +10,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - `GET /api/me/presets` publishes curated route presets (Telegram, Claude,
-  Cloudflare) for the client's own split tunneling. The catalogue is refreshed
-  from public sources every six hours, served with an ETag, and the panel never
-  routes these prefixes itself.
+  Cloudflare) for the client's own split tunneling. The admin page `/presets`
+  switches individual presets on or off, adds custom ones from a manual CIDR
+  list or an external URL/ASN, and refreshes the sourced entries; the API
+  serves the enabled ones with an ETag and the panel never routes them.
 
 ### Changed
 
