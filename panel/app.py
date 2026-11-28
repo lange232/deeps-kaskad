@@ -2819,6 +2819,14 @@ def toggle_config(request: Request, cid: int, csrf_token: str = Form(...)):
     return RedirectResponse(f"/configs/{cid}", status_code=303)
 
 
+def _apply_routing_checked() -> list[str]:
+    """Routing errors for an action that must not claim success silently."""
+    try:
+        return routing.apply().get("errors", [])
+    except Exception as exc:  # the apply is foreign code and can fail
+        return [str(exc)]
+
+
 @app.post("/configs/{cid}/socks")
 def toggle_config_socks(request: Request, cid: int, csrf_token: str = Form(...)):
     token = require_admin(request)
@@ -2831,7 +2839,12 @@ def toggle_config_socks(request: Request, cid: int, csrf_token: str = Form(...))
         conn.execute("UPDATE clients SET socks = ? WHERE id = ?",
                      (0 if row["socks"] else 1, cid))
     audit("config_socks", f"{row['name']} -> {0 if row['socks'] else 1}")
-    apply_routing()
+    errors = _apply_routing_checked()
+    if errors:
+        return RedirectResponse(
+            f"/configs/{cid}?err=" + quote("routing: " + "; ".join(errors)),
+            status_code=303,
+        )
     return RedirectResponse(f"/configs/{cid}", status_code=303)
 
 
@@ -4287,7 +4300,12 @@ def me_config_socks(request: Request, cid: int, csrf_token: str = Form(...)):
         conn.execute("UPDATE clients SET socks = ? WHERE id = ?",
                      (0 if cl["socks"] else 1, cid))
     audit("user_config_socks", f"{account['email']} {cl['name']}")
-    apply_routing()
+    errors = _apply_routing_checked()
+    if errors:
+        return RedirectResponse(
+            f"/me/configs/{cid}?err=" + quote("routing: " + "; ".join(errors)),
+            status_code=303,
+        )
     return RedirectResponse(f"/me/configs/{cid}", status_code=303)
 
 

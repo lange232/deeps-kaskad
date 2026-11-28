@@ -35,6 +35,7 @@ STATUS_MAX_AGE = 60
 MAX_PER_CLIENT = 8
 MAX_TOTAL = 200
 CONNECT_TIMEOUT = 10
+HANDSHAKE_TIMEOUT = 10
 IDLE_TIMEOUT = 300
 DNS_TIMEOUT = 3
 DNS_FALLBACK = "1.1.1.1"
@@ -122,15 +123,29 @@ def mark_rule(rule_output: str, mark: int) -> bool:
     return False
 
 
-def mark_rule_present(mark: int) -> bool:
-    """Fail closed: without the rule a marked socket would use the host route."""
+_MARK_CACHE: dict[int, tuple[float, bool]] = {}
+MARK_CACHE_SECONDS = 5
+
+
+def mark_rule_present(mark: int, now: float | None = None) -> bool:
+    """Fail closed: without the rule a marked socket would use the host route.
+
+    The check runs `ip rule show`, which is too expensive for every browser
+    connection, so the answer is cached for a few seconds.
+    """
+    now = time.time() if now is None else now
+    cached = _MARK_CACHE.get(mark)
+    if cached is not None and now - cached[0] < MARK_CACHE_SECONDS:
+        return cached[1]
     try:
         result = subprocess.run(
             ["ip", "rule", "show"], capture_output=True, text=True, timeout=3
         )
+        present = result.returncode == 0 and mark_rule(result.stdout, mark)
     except (OSError, subprocess.TimeoutExpired):
-        return False
-    return result.returncode == 0 and mark_rule(result.stdout, mark)
+        present = False
+    _MARK_CACHE[mark] = (now, present)
+    return present
 
 
 def socks_reply(code: int) -> bytes:
@@ -228,8 +243,8 @@ async def connect_exit(dest: str, port: int, table: int):
 
 
 async def read_exact(reader: asyncio.StreamReader, size: int) -> bytes:
-    data = await reader.readexactly(size)
-    return data
+    """A client that stalls mid-handshake must not hold a slot."""
+    return await asyncio.wait_for(reader.readexactly(size), HANDSHAKE_TIMEOUT)
 
 
 async def pipe(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
@@ -353,10 +368,16 @@ class Proxy:
         writer.write(socks_reply(REPLY_OK))
         await writer.drain()
         remote_reader, remote_writer = await asyncio.open_connection(sock=sock)
-        await asyncio.gather(
-            pipe(reader, remote_writer),
-            pipe(remote_reader, writer),
-        )
+        # When one side closes, stop waiting on the other: an idle half-open
+        # connection must not hold the client's slot for the whole idle timeout.
+        tasks = [
+            asyncio.create_task(pipe(reader, remote_writer)),
+            asyncio.create_task(pipe(remote_reader, writer)),
+        ]
+        _, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+        for task in pending:
+            task.cancel()
+        await asyncio.gather(*pending, return_exceptions=True)
         return remote_writer
 
     def refuse(self, writer, source: str, code: int, reason: str) -> None:

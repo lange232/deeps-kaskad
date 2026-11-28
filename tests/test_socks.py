@@ -6,6 +6,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "panel"))
 
@@ -70,6 +71,27 @@ class MarkRuleTests(unittest.TestCase):
     def test_other_rules_do_not_match(self):
         output = "19000:\tfrom 10.80.0.2 iif awg0 lookup 1009\n"
         self.assertFalse(socks.mark_rule(output, 0x4B03F1))
+
+
+class MarkRulePresentTests(unittest.TestCase):
+    def setUp(self):
+        socks._MARK_CACHE.clear()
+
+    def test_the_answer_is_cached_for_a_few_seconds(self):
+        result = mock.Mock(
+            returncode=0,
+            stdout="18000:\tfrom all fwmark 0x4b03f1 lookup 1009\n",
+        )
+        with mock.patch.object(socks.subprocess, "run",
+                               return_value=result) as run:
+            self.assertTrue(socks.mark_rule_present(0x4B03F1, now=100.0))
+            self.assertTrue(socks.mark_rule_present(0x4B03F1, now=102.0))
+        self.assertEqual(run.call_count, 1)
+
+    def test_a_missing_rule_is_false(self):
+        result = mock.Mock(returncode=0, stdout="")
+        with mock.patch.object(socks.subprocess, "run", return_value=result):
+            self.assertFalse(socks.mark_rule_present(0x4B03F1, now=100.0))
 
 
 class ReplyTests(unittest.TestCase):

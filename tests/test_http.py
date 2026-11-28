@@ -3410,6 +3410,24 @@ class SocksToggleTests(PanelTestCase):
         self.assertTrue(config["socks"])
 
 
+    def test_the_toggle_reapplies_routing_and_reports_errors(self):
+        aid, cid = self.seed_client()
+        self.login_admin()
+        with mock.patch.object(app.routing, "apply",
+                               return_value={"errors": []} ) as apply:
+            response = self.client.post(f"/configs/{cid}/socks", data={
+                "csrf_token": self.csrf(f"/configs/{cid}"),
+            })
+        self.assertEqual(response.status_code, 303)
+        apply.assert_called_once()
+        with mock.patch.object(app.routing, "apply",
+                               return_value={"errors": ["boom"]}):
+            response = self.client.post(f"/configs/{cid}/socks", data={
+                "csrf_token": self.csrf(f"/configs/{cid}"),
+            })
+        self.assertIn("err=", response.headers["location"])
+
+
 class MobileApiTests(PanelTestCase):
     def api_login(self, email="c1@example.com", password=USER_PASSWORD):
         response = self.client.post("/api/login", data={

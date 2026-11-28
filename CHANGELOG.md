@@ -17,6 +17,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The fast deploy script restarts `kaskad-socks` as well, so new proxy code is
+  not left in a running old process.
+- A SOCKS relay stops as soon as either side closes instead of waiting for the
+  idle timeout, and a client that stalls mid-handshake is dropped.
+- Switching the proxy in the panel reports a routing error instead of claiming
+  success while the rule is missing, and the rule check is cached for a few
+  seconds.
 - Switching the SOCKS5 proxy on or off now re-applies routing, so its `fwmark`
   rule appears immediately instead of only at the next panel start. The proxy
   refuses a connection when the rule is missing, rather than falling back to

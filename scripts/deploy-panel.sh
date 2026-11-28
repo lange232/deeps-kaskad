@@ -41,6 +41,11 @@ ssh "${ssh_opts[@]}" "$user@$addr" "
   # not leave a stale number in the panel footer.
   sudo -n sed -i 's/\"version\": \"[^\"]*\"/\"version\": \"$version\"/' /etc/kaskad/panel.json
   sudo -n systemctl restart kaskad-panel kaskad-failover
+  # The SOCKS proxy is a separate long-running process: new code in app/ does
+  # not reach it until it restarts.
+  if [ -f /etc/systemd/system/kaskad-socks.service ]; then
+    sudo -n systemctl restart kaskad-socks
+  fi
   rm -f /tmp/kaskad-panel.tgz
   for unit in kaskad-panel kaskad-failover; do
     if ! systemctl is-active --quiet \"\$unit\"; then
@@ -48,6 +53,11 @@ ssh "${ssh_opts[@]}" "$user@$addr" "
       exit 1
     fi
   done
-  echo \"panel and failover are active\"
+  if [ -f /etc/systemd/system/kaskad-socks.service ] \
+      && ! systemctl is-active --quiet kaskad-socks; then
+    echo \"kaskad-socks did not start after the deploy\" >&2
+    exit 1
+  fi
+  echo \"panel, failover and socks are active\"
 "
 echo "done: $addr"
